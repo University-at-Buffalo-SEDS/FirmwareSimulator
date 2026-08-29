@@ -18,7 +18,7 @@ transport, then run the board layout and artifacts inside Docker:
 Use `./build.py test --all --release` to build and simulate release artifacts.
 `--full` remains a compatibility alias for `--all`.
 
-When the simulator source is checked out beside the firmware repositories, the bridge builds that source. Otherwise it pulls `ghcr.io/university-at-buffalo-seds/firmwaresimulator:<architecture>`. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a different published image.
+The board bridge first pulls `ghcr.io/university-at-buffalo-seds/firmwaresimulator:<architecture>`. If the registry is unavailable, it reuses a previously built local image or shallow-clones `FirmwareSimulator/main` and builds one. A sibling checkout is not selected implicitly. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a different published image, or set `SEDS_FIRMWARE_SIM_SOURCE` to explicitly build a particular local checkout.
 
 ## Container use
 
