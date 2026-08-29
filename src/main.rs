@@ -26,6 +26,11 @@ enum Command {
         #[arg(long, default_value_t = 0x5ed5)]
         seed: u64,
     },
+    /// Execute multiple firmware ELFs in one deterministic, linked avionics bay.
+    Bay {
+        #[arg(long)]
+        topology: PathBuf,
+    },
     SelfTest {
         #[arg(long)]
         arch: ArchitectureKind,
@@ -62,6 +67,10 @@ fn main() -> Result<()> {
         Command::SelfTest { arch } => {
             simulator::self_test(arch)?;
             println!("{arch} simulator self-test passed");
+        }
+        Command::Bay { topology } => {
+            let report = firmware_sim::bay::run(&topology)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }
     Ok(())

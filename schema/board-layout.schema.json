@@ -28,12 +28,23 @@
     },
     "artifacts": {
       "type": "object",
-      "required": ["firmware", "bootloader", "factory"],
+      "required": ["elf", "bootloader_elf", "firmware", "bootloader", "factory"],
       "properties": {
+        "elf": {"type": "string", "minLength": 1},
+        "bootloader_elf": {"type": "string", "minLength": 1},
         "firmware": {"type": "string", "minLength": 1},
         "bootloader": {"type": "string", "minLength": 1},
         "factory": {"type": "string", "minLength": 1},
         "ota": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "virtual_time_ms": {"type": "integer", "minimum": 1},
+        "trace": {"type": "boolean"},
+        "boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"}
       },
       "additionalProperties": false
     },

@@ -1,0 +1,17 @@
+{
+  "name": "full-avionics-bay",
+  "quantum_seconds": 0.0001,
+  "virtual_time_ms": 1000,
+  "nodes": [
+    {"name": "flight", "layout": "../FlightComputer26/sim/board.json", "firmware_root": "../FlightComputer26"},
+    {"name": "rf", "layout": "../RFBoard26/sim/board.json", "firmware_root": "../RFBoard26"},
+    {"name": "power", "layout": "../PowerBoard26/sim/board.json", "firmware_root": "../PowerBoard26"}
+  ],
+  "links": [
+    {"name": "avionics_can", "kind": "can", "endpoints": [
+      {"node": "flight", "peripheral": "fdcan1"},
+      {"node": "rf", "peripheral": "fdcan2"},
+      {"node": "power", "peripheral": "fdcan2"}
+    ]}
+  ]
+}

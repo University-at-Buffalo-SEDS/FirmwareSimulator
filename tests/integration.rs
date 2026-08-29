@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process};
 
 use firmware_sim::{layout::BoardLayout, simulator};
 use serde_json::json;
@@ -15,6 +15,21 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     fs::write(root.join("build/bootloader.bin"), vec![0x22; 1024]).unwrap();
     fs::write(root.join("build/factory.bin"), vec![0x33; 8192]).unwrap();
     fs::write(root.join("build/update.seds"), vec![0x44; 2048]).unwrap();
+    fs::write(
+        root.join("build/firmware.elf"),
+        vec![0x7f, b'E', b'L', b'F'],
+    )
+    .unwrap();
+    fs::write(
+        root.join("build/bootloader.elf"),
+        vec![0x7f, b'E', b'L', b'F'],
+    )
+    .unwrap();
+    let renode = root.join("renode-mock");
+    fs::write(&renode, "#!/bin/sh\nprintf 'SEDS_FIRMWARE_BOOT_REACHED\\nSEDS_FACTORY_BOOT_REACHED\\nSEDS_REG FIRMWARE_PC\\n0x08004101\\nSEDS_REG FACTORY_PC\\n0x08004101\\nSEDS_EXECUTION_COMPLETE\\n'\n").unwrap();
+    fs::set_permissions(&renode, fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("RENODE", &renode);
+    std::env::set_var("FIRMWARE_SIM_CONTAINER", "1");
     let layout_path: PathBuf = root.join("board.json");
     fs::write(
         &layout_path,
@@ -34,6 +49,8 @@ fn file_defined_board_and_firmware_run_end_to_end() {
                 "sedsnet_pool": 4096
             },
             "artifacts": {
+                "elf": "build/firmware.elf",
+                "bootloader_elf": "build/bootloader.elf",
                 "firmware": "build/firmware.img",
                 "bootloader": "build/bootloader.bin",
                 "factory": "build/factory.bin",
@@ -58,5 +75,8 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     assert_eq!(report.traffic.pool.bytes_in_use, 0);
     assert_ne!(report.update.original_sha256, report.update.updated_sha256);
     assert_eq!(report.ota_bytes, Some(2048));
+    assert!(report.execution.instruction_execution_observed);
+    std::env::remove_var("RENODE");
+    std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();
 }

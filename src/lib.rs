@@ -1,5 +1,7 @@
+pub mod bay;
 #[path = "../core/mod.rs"]
 pub mod core;
+pub mod execution;
 pub mod layout;
 #[path = "../peripherals/mod.rs"]
 pub mod peripherals;

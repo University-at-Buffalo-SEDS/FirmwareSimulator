@@ -1,6 +1,6 @@
 # Adding MCU architectures and HAL backends
 
-Architecture constants live in one file per family under `core/`: `stm32g4.rs`, `stm32h5.rs`, and `stm32u5.rs`. Shared partition validation and register serialization stay architecture-neutral.
+Architecture constants live in one file per family under `core/`, while executable MCU descriptions live under `renode/platforms/`. Shared partition validation and register serialization stay architecture-neutral.
 
 ## Add another STM32 family
 
@@ -9,6 +9,7 @@ Architecture constants live in one file per family under `core/`: `stm32g4.rs`, 
 3. Decide whether the core is M4, M33, or another profile and expose its additional fault/security registers in `core/debug.rs`.
 4. Add it to the JSON schema, Docker/CI architecture matrix, self-test matrix, and layout-validation tests.
 5. Create a real board layout from that board's BSP and run its full factory/OTA test.
+6. Add a Renode platform with the exact CMSIS memory map and enough modeled clock, flash, GPIO, DMA, timer, and communication behavior for the board to reach its configured boot-success symbol.
 
 ## Add a HAL backend
 
@@ -23,4 +24,4 @@ Keep vendor HAL emulation outside the generic device models. A backend should pr
 
 Start with the smallest HAL surface used by a board. Unknown register accesses must fail with the address, width, PC, and recent events instead of returning zero; that is what turns driver crashes into actionable diagnostics. Add contract tests for reset values, legal and illegal accesses, interrupt ordering, DMA completion, timeouts, and register snapshots before listing the backend as supported.
 
-An instruction backend such as Renode, QEMU, or Unicorn can be placed behind this contract. It must be pinned in Docker, deterministic under a seed, and tested independently for all supported cores before board CI relies on it.
+Renode 1.16.1 is the pinned instruction backend. New platforms must load without monitor errors in CI and must boot a real linked firmware ELF and exact factory image locally before being listed as supported. Keep the platform narrow and explicit; add real peripheral models rather than broad zero-returning MMIO ranges.

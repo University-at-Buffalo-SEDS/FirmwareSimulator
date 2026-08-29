@@ -1,5 +1,6 @@
 use crate::{
     core::{Architecture, ArchitectureKind, CrashDiagnostic},
+    execution::{self, ExecutionReport},
     layout::BoardLayout,
     peripherals::{self, DeviceReport},
     traffic::{self, TrafficReport},
@@ -20,6 +21,7 @@ pub struct SimulationReport {
     pub devices: Vec<DeviceReport>,
     pub traffic: TrafficReport,
     pub update: UpdateReport,
+    pub execution: ExecutionReport,
 }
 struct Images {
     firmware: Vec<u8>,
@@ -32,6 +34,10 @@ pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
     ensure!(!layout.name.is_empty(), "board name cannot be empty");
     Architecture::for_kind(layout.architecture).validate(&layout.memory)?;
     let images = load_images(layout, root)?;
+    ensure!(
+        root.join(&layout.artifacts.elf).is_file(),
+        "firmware ELF is missing"
+    );
     ensure!(
         images.bootloader.len() as u64 <= layout.memory.bootloader_size,
         "bootloader exceeds partition"
@@ -53,6 +59,7 @@ pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
 pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationReport> {
     validate(layout, root).context("artifact_validation")?;
     let images = load_images(layout, root).context("artifact_mapping")?;
+    let execution = execution::run(layout, root).context("instruction_execution")?;
     let devices = peripherals::exercise_all(&layout.peripherals, 1_000, seed)
         .context("peripheral_execution")?;
     let traffic = traffic::run(&layout.traffic, layout.memory.sedsnet_pool, seed)
@@ -79,6 +86,7 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
         devices,
         traffic,
         update,
+        execution,
     })
 }
 
@@ -87,6 +95,7 @@ pub fn diagnose(layout: &BoardLayout, seed: u64, error: &anyhow::Error) -> Crash
     let phase = [
         "artifact_validation",
         "artifact_mapping",
+        "instruction_execution",
         "peripheral_execution",
         "sedsnet_traffic",
         "ota_recovery",

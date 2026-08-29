@@ -13,6 +13,8 @@ pub struct BoardLayout {
     pub memory: MemoryLayout,
     pub artifacts: Artifacts,
     #[serde(default)]
+    pub execution: ExecutionConfig,
+    #[serde(default)]
     pub traffic: TrafficConfig,
     #[serde(default)]
     pub ota: OtaConfig,
@@ -50,11 +52,38 @@ pub struct MemoryLayout {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Artifacts {
+    pub elf: PathBuf,
+    pub bootloader_elf: PathBuf,
     pub firmware: PathBuf,
     pub bootloader: PathBuf,
     pub factory: PathBuf,
     #[serde(default)]
     pub ota: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ExecutionConfig {
+    #[serde(default = "default_virtual_time_ms")]
+    pub virtual_time_ms: u64,
+    #[serde(default)]
+    pub trace: bool,
+    #[serde(default = "default_boot_symbol")]
+    pub boot_success_symbol: String,
+}
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            virtual_time_ms: default_virtual_time_ms(),
+            trace: false,
+            boot_success_symbol: default_boot_symbol(),
+        }
+    }
+}
+fn default_boot_symbol() -> String {
+    "_tx_thread_schedule".into()
+}
+fn default_virtual_time_ms() -> u64 {
+    250
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -41,6 +41,18 @@ jobs:
         run: docker build --build-arg SIM_ARCH=${{ matrix.arch }} -t ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} .
       - name: Run packaged self-test
         run: docker run --rm ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} self-test --arch ${{ matrix.arch }}
+      - name: Validate Renode MCU platform
+        shell: bash
+        run: |
+          case "${{ matrix.arch }}" in
+            stm32g4) platform=stm32g491.repl ;;
+            stm32h5) platform=stm32h523.repl ;;
+            stm32u5) platform=stm32u585.repl ;;
+          esac
+          docker run --rm --entrypoint /usr/bin/renode \
+            ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} \
+            --disable-xwt --console --execute \
+            "mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/${platform}; quit"
       - name: Push image
         if: github.event_name == 'push'
         run: docker push ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }}

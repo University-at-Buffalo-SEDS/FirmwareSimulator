@@ -14,6 +14,8 @@
     "sedsnet_pool": 12288
   },
   "artifacts": {
+    "elf": "build/Release/board.elf",
+    "bootloader_elf": "build/Release/boardBootloader.elf",
     "firmware": "build/Release/board.bin",
     "bootloader": "build/Release/boardBootloader.bin",
     "factory": "build/Release/board.factory.bin"

@@ -49,7 +49,7 @@ fn fixed_pool_never_overcommits() {
 fn crash_snapshot_exposes_cortex_m_fault_state() {
     use firmware_sim::{
         core::CrashDiagnostic,
-        layout::{Artifacts, BoardLayout, OtaConfig},
+        layout::{Artifacts, BoardLayout, ExecutionConfig, OtaConfig},
         traffic::TrafficConfig,
     };
     let layout = BoardLayout {
@@ -71,11 +71,14 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
             sedsnet_pool: 1024,
         },
         artifacts: Artifacts {
+            elf: "firmware.elf".into(),
+            bootloader_elf: "bootloader.elf".into(),
             firmware: "firmware.bin".into(),
             bootloader: "boot.bin".into(),
             factory: "factory.bin".into(),
             ota: None,
         },
+        execution: ExecutionConfig::default(),
         traffic: TrafficConfig::default(),
         ota: OtaConfig::default(),
         peripherals: vec![],

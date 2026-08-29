@@ -1,0 +1,67 @@
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x80000
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1C000
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 170000000
+    IRQ -> cpu@0
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 170000000
+rcc: Python.PythonPeripheral @ sysbus 0x40021000
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit: regs = {}
+if request.IsWrite: regs[request.Offset] = request.Value
+elif request.IsRead:
+    v = regs.get(request.Offset, 0)
+    if request.Offset == 0: v |= 0x400 | ((1 << 25) if v & (1 << 24) else 0)
+    elif request.Offset == 8: v = (v & ~0xC) | ((v & 3) << 2)
+    elif request.Offset == 0x98 and v & 1: v |= 2
+    request.Value = v
+'''
+pwr: Memory.MappedMemory @ sysbus 0x40007000
+    size: 0x400
+flashController: Memory.MappedMemory @ sysbus 0x40022000
+    size: 0x400
+dma1: DMA.STM32G0DMA @ sysbus 0x40020000
+    numberOfChannels: 7
+dma2: DMA.STM32G0DMA @ sysbus 0x40020400
+    numberOfChannels: 5
+dmamux: Miscellaneous.STM32_DMAMUX @ sysbus 0x40020800
+    numberOfOutputRequestChannels: 16
+    numberOfRequestGeneratorChannels: 4
+fdcan1: CAN.MCAN @ sysbus 0x40006400
+    messageRAM: canMessageRAM
+fdcan2: CAN.MCAN @ sysbus 0x40006800
+    messageRAM: canMessageRAM
+canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000A400, +0x800>
+    size: 0x800
+uart4: UART.STM32F7_USART @ sysbus 0x40004C00
+    frequency: 170000000
+usart1: UART.STM32F7_USART @ sysbus 0x40013800
+    frequency: 170000000
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+spi2: SPI.STM32SPI @ sysbus 0x40003800
+timer1: Timers.STM32_Timer @ sysbus 0x40012C00
+    frequency: 170000000
+    initialLimit: 0xFFFF
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 170000000
+    initialLimit: 0xFFFFFFFF
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    frequency: 170000000
+    initialLimit: 0xFFFF
+adc: Memory.MappedMemory @ sysbus 0x50000000
+    size: 0x400
+usb: Memory.MappedMemory @ sysbus 0x40005C00
+    size: 0x400
+gpio: Memory.MappedMemory @ sysbus 0x48000000
+    size: 0x2000
+sysbus:
+    init:
+        Tag <0x40010000 0x400> "SYSCFG"

@@ -1,0 +1,57 @@
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x44000
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 250000000
+    IRQ -> cpu@0
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m33"
+    nvic: nvic
+    numberOfMPURegions: 16
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 250000000
+rcc: Python.PythonPeripheral @ sysbus 0x44020C00
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit: regs = {}
+if request.IsWrite: regs[request.Offset] = request.Value
+elif request.IsRead:
+    v = regs.get(request.Offset, 0)
+    if request.Offset == 0: v |= 5 | ((1 << 25) if v & (1 << 24) else 0)
+    elif request.Offset == 0x10: v = (v & ~0x38) | ((v & 7) << 3)
+    request.Value = v
+'''
+pwr: Python.PythonPeripheral @ sysbus 0x44020800
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit: regs = {}
+if request.IsWrite: regs[request.Offset] = request.Value
+elif request.IsRead: request.Value = regs.get(request.Offset, 0) | (1 << 13)
+'''
+flashController: Memory.MappedMemory @ sysbus 0x40022000
+    size: 0x400
+gpio: Memory.MappedMemory @ sysbus 0x42020000
+    size: 0x2000
+fdcan1: CAN.MCAN @ sysbus 0x4000A400
+    messageRAM: canMessageRAM
+canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
+    size: 0x2800
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    frequency: 250000000
+    initialLimit: 0xFFFF
+sdmmc: Memory.MappedMemory @ sysbus 0x46008000
+    size: 0x400
+usb: Memory.MappedMemory @ sysbus 0x40040000
+    size: 0x1000
+gpdma: Memory.MappedMemory @ sysbus 0x40020000
+    size: 0x1000
+cache: Memory.MappedMemory @ sysbus 0x40030400
+    size: 0x2000
+sysbus:
+    init:
+        Tag <0x44020000 0x400> "SYSCFG"
