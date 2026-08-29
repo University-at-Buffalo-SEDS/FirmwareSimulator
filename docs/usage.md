@@ -8,11 +8,15 @@ Run the board's existing unit tests:
 ./build.py test
 ```
 
-Build release firmware, bootloader, combined factory image, and `.seds` OTA transport, then run the board layout and artifacts inside Docker:
+Build debug firmware, bootloader, combined factory image, and `.seds` OTA
+transport, then run the board layout and artifacts inside Docker:
 
 ```sh
-./build.py test --full
+./build.py test --all
 ```
+
+Use `./build.py test --all --release` to build and simulate release artifacts.
+`--full` remains a compatibility alias for `--all`.
 
 When the simulator source is checked out beside the firmware repositories, the bridge builds that source. Otherwise it pulls `ghcr.io/university-at-buffalo-seds/firmwaresimulator:<architecture>`. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a different published image.
 

@@ -25,7 +25,7 @@ architecture combination is a configuration error.
 3. Add deterministic sampling in `sample`. Use the supplied seeded generator so CI failures reproduce.
 4. Treat expected timeout, busy, corrupt-data, and disconnected behavior as observable results. Do not panic for a device-level failure.
 5. Extend `schema/board-layout.schema.json` and add normal/fault/disconnect cases under `tests/`.
-6. Add the device to the consuming board's `sim/board.json` and run `./build.py test --full`.
+6. Add the device to the consuming board's `sim/board.json` and run `./build.py test --all`.
 
 Instruction-coupled models exercise the real firmware driver through emulated
 MMIO and wire transactions. The deterministic behavioral layer remains useful

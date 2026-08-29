@@ -414,12 +414,16 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
                 .trim()
                 .parse()
                 .with_context(|| format!("parsing probe marker {marker}"))?;
-            let value = lines
-                .get(index + 1)
-                .context("memory probe value is missing")?
-                .trim()
-                .strip_prefix("0x")
-                .context("memory probe value is not hexadecimal")?;
+            let value = lines[index + 1..]
+                .iter()
+                .take_while(|line| !line.contains("SEDS_PROBE "))
+                .map(|line| line.trim())
+                .find_map(|line| {
+                    let hex = line.strip_prefix("0x")?;
+                    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
+                        .then_some(hex)
+                })
+                .context("memory probe value is missing")?;
             indexed.push((sample, u32::from_str_radix(value, 16)?));
         }
         indexed.sort_unstable_by_key(|(sample, _)| *sample);
@@ -506,8 +510,8 @@ fn tail(value: &str, count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render_peripheral_overlay;
-    use crate::layout::BoardLayout;
+    use super::{parse_memory_profile, render_peripheral_overlay};
+    use crate::layout::{BoardLayout, MemoryProbe};
 
     fn layout(architecture: &str, peripherals: &str) -> BoardLayout {
         serde_json::from_str(&format!(
@@ -614,5 +618,23 @@ mod tests {
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("Storage.SedsStm32Sdmmc @ sysbus 0x420c8000"));
         assert!(overlay.contains("SedsStm32Sdmmc.cs"));
+    }
+
+    #[test]
+    fn memory_probe_parser_tolerates_asynchronous_renode_logs() {
+        let mut board = layout("stm32g4", "[]");
+        board.execution.memory_probes.push(MemoryProbe {
+            name: "pool".into(),
+            symbol: "pool_available".into(),
+            minimum: None,
+            maximum: None,
+            max_end_drop: None,
+        });
+        let report = parse_memory_profile(
+            &board,
+            "SEDS_PROBE pool 0\n[INFO] asynchronous peripheral message\n0x1234\n",
+        )
+        .unwrap();
+        assert_eq!(report[0].samples, vec![0x1234]);
     }
 }
