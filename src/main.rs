@@ -6,6 +6,9 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(about = "Deterministic STM32 firmware behavior and update simulator")]
 struct Cli {
+    /// Emit machine-readable JSON instead of the terminal report matrix.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -53,7 +56,8 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    match cli.command {
         Command::Validate {
             layout,
             firmware_root,
@@ -69,7 +73,8 @@ fn main() -> Result<()> {
         } => {
             let layout = BoardLayout::load(&layout)?;
             match simulator::run(&layout, &firmware_root, seed) {
-                Ok(report) => println!("{}", serde_json::to_string_pretty(&report)?),
+                Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),
+                Ok(report) => println!("{}", firmware_sim::report::simulation(&report)),
                 Err(error) => {
                     eprintln!(
                         "{}",
@@ -92,7 +97,8 @@ fn main() -> Result<()> {
             layout.execution.sample_count = sample_count;
             layout.traffic.iterations = traffic_iterations;
             match simulator::run(&layout, &firmware_root, seed) {
-                Ok(report) => println!("{}", serde_json::to_string_pretty(&report)?),
+                Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),
+                Ok(report) => println!("{}", firmware_sim::report::simulation(&report)),
                 Err(error) => {
                     eprintln!(
                         "{}",
@@ -108,7 +114,11 @@ fn main() -> Result<()> {
         }
         Command::Bay { topology } => {
             let report = firmware_sim::bay::run(&topology)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", firmware_sim::report::bay(&report));
+            }
         }
     }
     Ok(())

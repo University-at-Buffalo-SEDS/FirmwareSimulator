@@ -420,8 +420,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
                 .map(|line| line.trim())
                 .find_map(|line| {
                     let hex = line.strip_prefix("0x")?;
-                    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
-                        .then_some(hex)
+                    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
                 })
                 .context("memory probe value is missing")?;
             indexed.push((sample, u32::from_str_radix(value, 16)?));
