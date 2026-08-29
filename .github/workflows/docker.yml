@@ -53,7 +53,7 @@ jobs:
             stm32h5) platform=stm32h523.repl ;;
             stm32u5) platform=stm32u585.repl ;;
           esac
-          docker run --rm --entrypoint /usr/bin/renode \
+          docker run --rm --entrypoint /opt/renode/renode \
             ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} \
             --disable-xwt --console --execute \
             "mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/${platform}; quit"
