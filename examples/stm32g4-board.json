@@ -1,0 +1,30 @@
+{
+  "name": "example-g4",
+  "architecture": "stm32g4",
+  "memory": {
+    "flash_base": 134217728,
+    "flash_size": 524288,
+    "bootloader_size": 16384,
+    "slot_a_base": 134234112,
+    "slot_a_size": 475136,
+    "delta_base": 134709248,
+    "delta_size": 24576,
+    "erase_size": 2048,
+    "write_alignment": 8,
+    "sedsnet_pool": 12288
+  },
+  "artifacts": {
+    "firmware": "build/Release/board.bin",
+    "bootloader": "build/Release/boardBootloader.bin",
+    "factory": "build/Release/board.factory.bin"
+  },
+  "traffic": {"iterations": 10000, "max_payload": 128, "queue_depth": 0, "immediate_dispatch": true},
+  "ota": {"chunk_size": 512},
+  "peripherals": [
+    {"type": "imu", "name": "imu1"},
+    {"type": "barometer", "name": "baro1"},
+    {"type": "gps", "name": "gps1"},
+    {"type": "adc", "name": "adc1", "bits": 12, "channels": 8},
+    {"type": "pressure_transducer", "name": "pt1", "max_psi": 5000}
+  ]
+}

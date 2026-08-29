@@ -1,0 +1,74 @@
+use crate::{core::ArchitectureKind, peripherals::PeripheralSpec, traffic::TrafficConfig};
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BoardLayout {
+    pub name: String,
+    pub architecture: ArchitectureKind,
+    pub memory: MemoryLayout,
+    pub artifacts: Artifacts,
+    #[serde(default)]
+    pub traffic: TrafficConfig,
+    #[serde(default)]
+    pub ota: OtaConfig,
+    #[serde(default)]
+    pub peripherals: Vec<PeripheralSpec>,
+}
+impl BoardLayout {
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path).with_context(|| format!("reading layout {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing layout {}", path.display()))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryLayout {
+    pub flash_base: u64,
+    pub flash_size: u64,
+    #[serde(default)]
+    pub ram_size: Option<u64>,
+    pub bootloader_size: u64,
+    pub slot_a_base: u64,
+    pub slot_a_size: u64,
+    #[serde(default)]
+    pub slot_b_base: Option<u64>,
+    #[serde(default)]
+    pub slot_b_size: Option<u64>,
+    #[serde(default)]
+    pub delta_base: Option<u64>,
+    #[serde(default)]
+    pub delta_size: Option<u64>,
+    pub erase_size: u64,
+    pub write_alignment: u64,
+    pub sedsnet_pool: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Artifacts {
+    pub firmware: PathBuf,
+    pub bootloader: PathBuf,
+    pub factory: PathBuf,
+    #[serde(default)]
+    pub ota: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct OtaConfig {
+    #[serde(default = "default_chunk")]
+    pub chunk_size: usize,
+}
+impl Default for OtaConfig {
+    fn default() -> Self {
+        Self {
+            chunk_size: default_chunk(),
+        }
+    }
+}
+fn default_chunk() -> usize {
+    512
+}

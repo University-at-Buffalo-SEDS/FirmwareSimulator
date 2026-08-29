@@ -1,0 +1,3 @@
+pub const VECTOR_ALIGNMENT: u64 = 0x200;
+pub const DEFAULT_FLASH_SIZE: u64 = 512 * 1024;
+pub const DEFAULT_RAM_SIZE: u64 = 112 * 1024;

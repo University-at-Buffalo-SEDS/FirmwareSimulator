@@ -1,0 +1,46 @@
+name: Rust simulator and Docker images
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo test --locked --all-targets
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  image:
+    needs: rust-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [stm32g4, stm32h5, stm32u5]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        run: docker build --build-arg SIM_ARCH=${{ matrix.arch }} -t ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} .
+      - name: Run packaged self-test
+        run: docker run --rm ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} self-test --arch ${{ matrix.arch }}
+      - name: Push image
+        if: github.event_name == 'push'
+        run: docker push ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }}

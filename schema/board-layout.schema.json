@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SEDS firmware simulator board layout",
+  "type": "object",
+  "required": ["name", "architecture", "memory", "artifacts"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "architecture": {"enum": ["stm32g4", "stm32h5", "stm32u5"]},
+    "memory": {
+      "type": "object",
+      "required": ["flash_base", "flash_size", "bootloader_size", "slot_a_base", "slot_a_size", "erase_size", "write_alignment", "sedsnet_pool"],
+      "properties": {
+        "flash_base": {"type": "integer", "minimum": 0},
+        "flash_size": {"type": "integer", "minimum": 1},
+        "ram_size": {"type": "integer", "minimum": 1},
+        "bootloader_size": {"type": "integer", "minimum": 1},
+        "slot_a_base": {"type": "integer", "minimum": 0},
+        "slot_a_size": {"type": "integer", "minimum": 1},
+        "slot_b_base": {"type": "integer", "minimum": 0},
+        "slot_b_size": {"type": "integer", "minimum": 1},
+        "delta_base": {"type": "integer", "minimum": 0},
+        "delta_size": {"type": "integer", "minimum": 1},
+        "erase_size": {"type": "integer", "minimum": 1},
+        "write_alignment": {"type": "integer", "minimum": 1},
+        "sedsnet_pool": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["firmware", "bootloader", "factory"],
+      "properties": {
+        "firmware": {"type": "string", "minLength": 1},
+        "bootloader": {"type": "string", "minLength": 1},
+        "factory": {"type": "string", "minLength": 1},
+        "ota": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "traffic": {
+      "type": "object",
+      "properties": {
+        "iterations": {"type": "integer", "minimum": 1},
+        "max_payload": {"type": "integer", "minimum": 1},
+        "queue_depth": {"type": "integer", "minimum": 0},
+        "immediate_dispatch": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "ota": {
+      "type": "object",
+      "properties": {"chunk_size": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    },
+    "peripherals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "name"],
+        "properties": {
+          "type": {"enum": ["imu", "barometer", "gps", "adc", "pressure_transducer"]},
+          "name": {"type": "string", "minLength": 1},
+          "failure_every": {"type": "integer", "minimum": 1},
+          "disconnect_after": {"type": "integer", "minimum": 0},
+          "bits": {"type": "integer", "minimum": 1, "maximum": 16},
+          "channels": {"type": "integer", "minimum": 1},
+          "max_psi": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
