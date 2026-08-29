@@ -35,6 +35,8 @@ Multiple firmware images can execute together in a single synchronized Renode pr
 
 Images for all three architecture families are built and tested by GitHub Actions. Board repositories expose this through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts.
 
+The organization package administrator must make the `firmwaresimulator` container package public once in its GitHub package settings. GHCR preserves that visibility for later image versions; GitHub does not provide a supported REST endpoint for changing package visibility from the publishing workflow.
+
 ## Documentation
 
 - [Usage](docs/usage.md)
