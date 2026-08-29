@@ -16,7 +16,15 @@ if request.IsInit: regs = {}
 if request.IsWrite: regs[request.Offset] = request.Value
 elif request.IsRead:
     v = regs.get(request.Offset, 0)
-    if request.Offset == 0: v |= 0x500 | ((1 << 25) if v & (1 << 24) else 0)
+    if request.Offset == 0:
+        # Mirror oscillator enable bits into their corresponding ready bits.
+        v |= 0x500 | ((v & 0x05011101) << 1)
+    elif request.Offset == 0xf0:
+        # PLL1 enable/ready are adjacent in PLL1CFGR.
+        v |= (v & 0x04000000) << 1
+    elif request.Offset == 0x1c:
+        # Mirror the system-clock switch selection into the status field.
+        v = (v & ~0x0c) | ((v & 0x03) << 2)
     elif request.Offset == 0x10: v = (v & ~0x38) | ((v & 7) << 3)
     request.Value = v
 '''
@@ -26,7 +34,13 @@ pwr: Python.PythonPeripheral @ sysbus 0x46020800
     script: '''
 if request.IsInit: regs = {}
 if request.IsWrite: regs[request.Offset] = request.Value
-elif request.IsRead: request.Value = regs.get(request.Offset, 0) | (1 << 10)
+elif request.IsRead:
+    v = regs.get(request.Offset, 0) | (1 << 10)
+    # VOSR reports that Range 1 voltage scaling is ready. Without this,
+    # STM32U5 HAL_PWREx_ControlVoltageScaling times out during startup.
+    if request.Offset == 0x3c: v |= 0x30000
+    elif request.Offset == 0x0c: v |= 1 << 14
+    request.Value = v
 '''
 flashController: Memory.MappedMemory @ sysbus 0x40022000
     size: 0x400
@@ -45,16 +59,21 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 160000000
     initialLimit: 0xFFFF
-sdmmc: Memory.MappedMemory @ sysbus 0x420C8000
-    size: 0x400
-usb: Memory.MappedMemory @ sysbus 0x42040000
+usb: Python.PythonPeripheral @ sysbus 0x42040000
     size: 0x1000
+    initable: true
+    script: '''
+if request.IsInit: regs = {}
+if request.IsWrite:
+    # Core soft reset completes synchronously in the simulator.
+    regs[request.Offset] = request.Value & (~0x31 if request.Offset == 0x10 else 0xffffffff)
+elif request.IsRead:
+    v = regs.get(request.Offset, 0)
+    if request.Offset == 0x10: v |= 1 << 31
+    request.Value = v
+'''
 gpdma: Memory.MappedMemory @ sysbus 0x40020000
     size: 0x1000
-analog: Memory.MappedMemory @ sysbus 0x42028000
-    size: 0x400
-adc4: Memory.MappedMemory @ sysbus 0x46021000
-    size: 0x800
 cache: Memory.MappedMemory @ sysbus 0x40030400
     size: 0x2000
 sysbus:

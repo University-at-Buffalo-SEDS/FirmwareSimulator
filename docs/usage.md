@@ -30,13 +30,15 @@ docker run --rm -v /path/to/avionics:/avionics:ro \
   bay --topology /avionics/avionics-bay.json
 ```
 
-The seed makes traffic, sensor values, failures, and debug registers repeatable. Before execution, each loadable ELF segment is checked against the board's exact flash and RAM-bank map; Renode is then given only those physical regions. A successful run prints JSON containing artifact sizes, peripheral behavior (including an explicit `instruction_coupled` flag), real firmware memory probes, SEDSNet model pool high-water usage, allocation failures, remaining allocations, and OTA interruption results.
+The seed makes behavioral traffic, sensor values, failures, and debug registers repeatable. Before execution, each loadable ELF segment is checked against the board's exact flash and RAM-bank map; Renode is then given only those physical regions. A successful run prints JSON containing artifact sizes, peripheral behavior (including an explicit `instruction_coupled` flag), real firmware memory probes, a separately labelled `behavioral_pool_model`, and OTA interruption results. The behavioral traffic report explicitly sets `firmware_path_exercised` to false and must not be used to certify firmware allocator stability.
 
 `run` and `bay` are documented and validated only in Docker. The image contains the pinned Renode runtime and platform models, so the normal host workflow does not need a Renode installation. Native execution is permitted when `RENODE` points to a compatible executable (or Renode is installed at a recognized path), but it emits an unsupported, use-at-your-own-risk warning. `run` requires the linked ELFs, executes ARM instructions, and then runs the behavioral traffic/peripheral/OTA layers. Set `execution.trace` in the board layout to retain a Renode binary-PC trace inside the container's output mount.
 
-For a full bay, mount a directory containing all firmware repositories and the topology file into the container. Each node names its board layout and firmware root relative to the topology file. CAN and UART links execute in one synchronized virtual-time domain; this is more deterministic than connecting unsynchronized emulator containers.
+For a full bay, mount a directory containing all firmware repositories and the topology file into the container. Each node names its board layout and firmware root relative to the topology file. CAN and UART links execute the real firmware endpoints in one synchronized virtual-time domain. Multi-node CAN hubs explicitly disable controller self-loopback, matching physical normal-mode traffic and preventing relay firmware from amplifying an artificial echo. Bay runs take multiple samples of every node's configured allocator probes and enforce their thresholds; use this path for RF/Power connected-load qualification.
 
-Run a real-firmware allocator soak using the probes declared by the board:
+`examples/rf-power-bay.json` is the checked-in connected RF/Power soak when FirmwareSimulator, RFBoard26, and PowerBoard26 are sibling repositories. It wires both FDCAN interrupt lines as well as the CAN hub. Each endpoint declares an `activity_probe`; the bay fails unless that firmware ISR counter reaches `minimum_activity` (default one), preventing an idle allocator profile from masquerading as a connected-network test.
+
+Run an idle/background real-firmware allocator profile using the probes declared by one board:
 
 ```sh
 docker run --rm --platform linux/amd64 -v "$PWD:/firmware:ro" \
@@ -45,4 +47,4 @@ docker run --rm --platform linux/amd64 -v "$PWD:/firmware:ro" \
   --virtual-time-ms 10000 --sample-count 20 --traffic-iterations 1000000
 ```
 
-This is a bounded soak, not a mathematical guarantee of infinite operation. Increase virtual time and repeat with multiple seeds for release qualification.
+This single-board command does not inject its behavioral packets into the ELF. Use a linked `bay` topology for network-load allocator testing. Both modes are bounded tests, not a mathematical guarantee of infinite operation; increase virtual time and repeat representative bay scenarios for release qualification.

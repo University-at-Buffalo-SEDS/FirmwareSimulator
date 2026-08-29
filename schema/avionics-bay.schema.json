@@ -22,7 +22,12 @@
         "kind": {"enum": ["can", "uart"]},
         "endpoints": {"type": "array", "minItems": 2, "items": {
           "type": "object", "required": ["node", "peripheral"],
-          "properties": {"node": {"type": "string"}, "peripheral": {"type": "string"}},
+          "properties": {
+            "node": {"type": "string"},
+            "peripheral": {"type": "string"},
+            "activity_probe": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+            "minimum_activity": {"type": "integer", "minimum": 1}
+          },
           "additionalProperties": false
         }}
       }, "additionalProperties": false

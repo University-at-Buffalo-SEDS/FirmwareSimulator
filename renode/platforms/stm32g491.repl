@@ -29,20 +29,34 @@ dma1: DMA.STM32G0DMA @ sysbus 0x40020000
 dma2: DMA.STM32G0DMA @ sysbus 0x40020400
     numberOfChannels: 5
 dmamux: Miscellaneous.STM32_DMAMUX @ sysbus 0x40020800
+    numberOfInputRequestChannels: 128
     numberOfOutputRequestChannels: 16
     numberOfRequestGeneratorChannels: 4
-fdcan1: CAN.MCAN @ sysbus 0x40006400
-    messageRAM: canMessageRAM
-fdcan2: CAN.MCAN @ sysbus 0x40006800
-    messageRAM: canMessageRAM
-canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000A400, +0x800>
-    size: 0x800
+// G4 and L5 use the same fixed-layout FDCAN register/RAM geometry. The
+// STM32-specific model is selected so Cube HAL's compact RX register map is
+// modeled; generic M_CAN silently misses all G4 receive FIFO accesses.
+fdcan1: CAN.STM32_FDCAN @ sysbus 0x40006400
+    series: .L5
+    messageRam: fdcan1MessageRAM
+    Int0 -> nvic@21
+    Int1 -> nvic@22
+fdcan2: CAN.STM32_FDCAN @ sysbus 0x40006800
+    series: .L5
+    messageRam: fdcan2MessageRAM
+    Int0 -> nvic@86
+    Int1 -> nvic@87
+fdcan1MessageRAM: Memory.ArrayMemory @ sysbus <0x4000A400, +0x350>
+    size: 0x350
+fdcan2MessageRAM: Memory.ArrayMemory @ sysbus <0x4000A750, +0x350>
+    size: 0x350
 uart4: UART.STM32F7_USART @ sysbus 0x40004C00
     frequency: 170000000
 usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 170000000
 spi1: SPI.STM32SPI @ sysbus 0x40013000
+    series: .L5
 spi2: SPI.STM32SPI @ sysbus 0x40003800
+    series: .L5
 i2c2: I2C.STM32F7_I2C @ sysbus 0x40005800
 timer1: Timers.STM32_Timer @ sysbus 0x40012C00
     frequency: 170000000
@@ -53,6 +67,7 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 170000000
     initialLimit: 0xFFFF
+    IRQ -> nvic@54
 usb: Memory.MappedMemory @ sysbus 0x40005C00
     size: 0x400
 gpio: Memory.MappedMemory @ sysbus 0x48000000

@@ -90,11 +90,12 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
                 | ("adc", "ltc2990")
                 | ("adc", "stm32_adc")
                 | ("pressure_transducer", "stm32_adc")
+                | ("storage", "sd_card")
         );
         ensure!(supported, "unsupported {0} model {model}", spec.kind);
     }
     match spec.kind.as_str() {
-        "imu" | "barometer" | "gps" => Ok(()),
+        "imu" | "barometer" | "gps" | "storage" => Ok(()),
         "adc" => {
             ensure!(
                 (1..=16).contains(&spec.bits.unwrap_or(12)),
@@ -137,6 +138,7 @@ fn sample(spec: &PeripheralSpec, rng: &mut Lcg) {
         "pressure_transducer" => {
             let _ = rng.unit() * spec.max_psi.unwrap_or(5000.0);
         }
+        "storage" => {}
         _ => unreachable!(),
     }
 }

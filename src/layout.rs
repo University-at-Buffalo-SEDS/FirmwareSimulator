@@ -75,8 +75,16 @@ pub struct ExecutionConfig {
     pub trace: bool,
     #[serde(default = "default_boot_symbol")]
     pub boot_success_symbol: String,
+    #[serde(default = "default_factory_boot_symbol")]
+    pub factory_boot_success_symbol: String,
     #[serde(default = "default_sample_count")]
     pub sample_count: usize,
+    #[serde(default)]
+    pub memory_probe_warmup_samples: usize,
+    #[serde(default)]
+    pub hal_tick_address: Option<u64>,
+    #[serde(default = "default_hal_tick_step")]
+    pub hal_tick_step: u32,
     #[serde(default)]
     pub memory_probes: Vec<MemoryProbe>,
 }
@@ -86,7 +94,11 @@ impl Default for ExecutionConfig {
             virtual_time_ms: default_virtual_time_ms(),
             trace: false,
             boot_success_symbol: default_boot_symbol(),
+            factory_boot_success_symbol: default_factory_boot_symbol(),
             sample_count: default_sample_count(),
+            memory_probe_warmup_samples: 0,
+            hal_tick_address: None,
+            hal_tick_step: default_hal_tick_step(),
             memory_probes: Vec::new(),
         }
     }
@@ -94,10 +106,16 @@ impl Default for ExecutionConfig {
 fn default_boot_symbol() -> String {
     "_tx_thread_schedule".into()
 }
+fn default_factory_boot_symbol() -> String {
+    "main".into()
+}
 fn default_virtual_time_ms() -> u64 {
     250
 }
 fn default_sample_count() -> usize {
+    1
+}
+fn default_hal_tick_step() -> u32 {
     1
 }
 

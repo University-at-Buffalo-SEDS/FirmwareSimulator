@@ -36,6 +36,8 @@ fn default_immediate() -> bool {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TrafficReport {
+    pub scope: &'static str,
+    pub firmware_path_exercised: bool,
     pub packets_attempted: usize,
     pub packets_dispatched: usize,
     pub pool: PoolStats,
@@ -79,6 +81,8 @@ pub fn run(config: &TrafficConfig, pool_size: usize, seed: u64) -> Result<Traffi
         "SEDSNet traffic leaked pool memory"
     );
     Ok(TrafficReport {
+        scope: "behavioral_pool_model",
+        firmware_path_exercised: false,
         packets_attempted: config.iterations,
         packets_dispatched: dispatched,
         pool: stats,

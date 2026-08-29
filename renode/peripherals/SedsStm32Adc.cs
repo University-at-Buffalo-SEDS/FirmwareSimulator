@@ -51,7 +51,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
             sample = 2048;
         }
 
-        public long Size { get { return 0x400; } }
+        // Each STM32 ADC instance occupies 0x100 bytes. Keeping instances
+        // separate preserves independent CR/ISR/DR state on multi-ADC parts.
+        public long Size { get { return 0x100; } }
 
         private readonly Dictionary<long, uint> registers = new Dictionary<long, uint>();
         private uint status;

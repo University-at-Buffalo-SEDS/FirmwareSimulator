@@ -11,7 +11,11 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
         json!({
             "name": name, "architecture": "stm32g4",
             "memory": {"flash_base": 134217728, "flash_size": 524288, "ram_regions": [{"name":"sram","base":536870912,"size":114688}], "bootloader_size": 16384, "slot_a_base": 134234112, "slot_a_size": 475136, "erase_size": 2048, "write_alignment": 8, "sedsnet_pool": 4096},
-            "artifacts": {"elf": "build/fw.elf", "bootloader_elf": "build/boot.elf", "firmware": "build/fw.img", "bootloader": "build/boot.bin", "factory": "build/factory.bin"}
+            "artifacts": {"elf": "build/fw.elf", "bootloader_elf": "build/boot.elf", "firmware": "build/fw.img", "bootloader": "build/boot.bin", "factory": "build/factory.bin"},
+            "execution": {"memory_probes": [
+                {"name": "pool_available", "symbol": "pool_available", "minimum": 2048},
+                {"name": "can_irqs", "symbol": "can_irqs"}
+            ]}
         })
     };
     let mut elf = vec![0_u8; 88];
@@ -42,14 +46,15 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
                 {"name": "a", "layout": "a/board.json", "firmware_root": "a"},
                 {"name": "b", "layout": "b/board.json", "firmware_root": "b"}
             ], "links": [{"name": "can", "kind": "can", "endpoints": [
-                {"node": "a", "peripheral": "fdcan2"}, {"node": "b", "peripheral": "fdcan2"}
+                {"node": "a", "peripheral": "fdcan2", "activity_probe": "can_irqs"},
+                {"node": "b", "peripheral": "fdcan2", "activity_probe": "can_irqs"}
             ]}]
         }))
         .unwrap(),
     )
     .unwrap();
     let renode = root.join("renode-mock");
-    fs::write(&renode, "#!/bin/sh\necho SEDS_NODE_BOOT_a\necho SEDS_NODE_BOOT_b\necho SEDS_NODE a PC\necho 0x08004101\necho SEDS_NODE b PC\necho 0x08004101\necho SEDS_BAY_COMPLETE\n").unwrap();
+    fs::write(&renode, "#!/bin/sh\necho SEDS_NODE_BOOT_a\necho SEDS_NODE_BOOT_b\ni=0\nwhile [ $i -lt 10 ]; do\n  echo SEDS_BAY_PROBE a pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE b pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE a can_irqs $i\n  echo 0x1\n  echo SEDS_BAY_PROBE b can_irqs $i\n  echo 0x1\n  i=$((i + 1))\ndone\necho SEDS_NODE a PC\necho 0x08004101\necho SEDS_NODE b PC\necho 0x08004101\necho SEDS_BAY_COMPLETE\n").unwrap();
     fs::set_permissions(&renode, fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("RENODE", &renode);
     std::env::set_var("FIRMWARE_SIM_CONTAINER", "1");
@@ -57,6 +62,8 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.nodes_executed, 2);
     assert_eq!(report.links_connected, 1);
     assert_eq!(report.register_dump.len(), 4);
+    assert_eq!(report.memory_profiles["a"][0].samples.len(), 10);
+    assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();

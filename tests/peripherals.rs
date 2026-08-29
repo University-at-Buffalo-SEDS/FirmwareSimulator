@@ -22,8 +22,20 @@ fn devices_survive_fault_and_disconnect_behaviors() {
     adc.channels = Some(8);
     let mut pressure = base("pressure_transducer", "pt1");
     pressure.max_psi = Some(5000.0);
-    let reports = exercise_all(&[imu, baro, base("gps", "gps1"), adc, pressure], 12, 42).unwrap();
-    assert_eq!(reports.len(), 5);
+    let reports = exercise_all(
+        &[
+            imu,
+            baro,
+            base("gps", "gps1"),
+            adc,
+            pressure,
+            base("storage", "sd1"),
+        ],
+        12,
+        42,
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 6);
     assert_eq!(reports[0].injected_errors, 4);
     assert_eq!(reports[1].disconnected_reads, 7);
 }

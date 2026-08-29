@@ -55,6 +55,14 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         "invalid execution success symbol"
     );
     ensure!(
+        layout
+            .execution
+            .factory_boot_success_symbol
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "invalid factory execution success symbol"
+    );
+    ensure!(
         layout.execution.sample_count > 0,
         "execution sample_count must be positive"
     );
@@ -62,6 +70,25 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         layout.execution.sample_count as u64 <= layout.execution.virtual_time_ms,
         "execution sample_count cannot exceed virtual_time_ms"
     );
+    ensure!(
+        layout.execution.memory_probe_warmup_samples < layout.execution.sample_count,
+        "execution memory_probe_warmup_samples must be less than sample_count"
+    );
+    ensure!(
+        layout.execution.hal_tick_step > 0,
+        "execution hal_tick_step must be positive"
+    );
+    if let Some(address) = layout.execution.hal_tick_address {
+        ensure!(
+            layout.memory.ram_regions.iter().any(|region| {
+                address >= region.base
+                    && address
+                        .checked_add(4)
+                        .is_some_and(|end| end <= region.base + region.size)
+            }),
+            "execution hal_tick_address 0x{address:08x} is outside physical RAM"
+        );
+    }
     for probe in &layout.execution.memory_probes {
         ensure!(
             !probe.name.is_empty()
@@ -140,7 +167,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     ensure!(
         observed_marker(&combined, "SEDS_FACTORY_BOOT_REACHED"),
         "factory boot flow never reached {}:\n{}",
-        layout.execution.boot_success_symbol,
+        layout.execution.factory_boot_success_symbol,
         tail(&combined, 80)
     );
     ensure!(
@@ -219,6 +246,8 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         ));
     }
     let mut flight_sensor_bus_added = false;
+    let mut g4_adc12_common_added = false;
+    let mut g4_adc345_common_added = false;
     for (index, peripheral) in layout.peripherals.iter().enumerate() {
         let (model, bus) = match (peripheral.model.as_deref(), peripheral.bus.as_deref()) {
             (None, None) => continue,
@@ -253,16 +282,53 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     flight_sensor_bus_added = true;
                 }
             }
-            (ArchitectureKind::Stm32g4, "stm32_adc", "adc1") => {
+            (ArchitectureKind::Stm32g4, "stm32_adc", "adc1" | "adc2" | "adc3") => {
+                let address = match bus {
+                    "adc1" => 0x5000_0000_u64,
+                    "adc2" => 0x5000_0100_u64,
+                    "adc3" => 0x5000_0400_u64,
+                    _ => unreachable!(),
+                };
                 overlay.push_str(&format!(
-                    "layoutAdc: Sensors.SedsStm32Adc @ sysbus 0x50000000\n    preinit:\n        include @{}\n",
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    preinit:\n        include @{}\n",
                     source_root.join("SedsStm32Adc.cs").display()
                 ));
+                if matches!(bus, "adc1" | "adc2") && !g4_adc12_common_added {
+                    overlay.push_str(&format!(
+                        "layoutAdc12Common: Sensors.SedsStm32Adc @ sysbus 0x50000300\n    preinit:\n        include @{}\n",
+                        source_root.join("SedsStm32Adc.cs").display()
+                    ));
+                    g4_adc12_common_added = true;
+                }
+                if bus == "adc3" && !g4_adc345_common_added {
+                    overlay.push_str(&format!(
+                        "layoutAdc345Common: Sensors.SedsStm32Adc @ sysbus 0x50000700\n    preinit:\n        include @{}\n",
+                        source_root.join("SedsStm32Adc.cs").display()
+                    ));
+                    g4_adc345_common_added = true;
+                }
             }
             (ArchitectureKind::Stm32h5, "stm32_adc", "adc1") => {
                 overlay.push_str(&format!(
-                    "layoutAdc: Sensors.SedsStm32Adc @ sysbus 0x42228000\n    preinit:\n        include @{}\n",
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x42228000\n    preinit:\n        include @{}\n",
                     source_root.join("SedsStm32Adc.cs").display()
+                ));
+            }
+            (ArchitectureKind::Stm32u5, "stm32_adc", "adc1" | "adc4") => {
+                let address = if bus == "adc1" {
+                    0x4202_8000_u64
+                } else {
+                    0x4602_1000_u64
+                };
+                overlay.push_str(&format!(
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsStm32Adc.cs").display()
+                ));
+            }
+            (ArchitectureKind::Stm32u5, "sd_card", "sdmmc1") => {
+                overlay.push_str(&format!(
+                    "layoutSdmmc{index}: Storage.SedsStm32Sdmmc @ sysbus 0x420c8000\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsStm32Sdmmc.cs").display()
                 ));
             }
             _ => bail!(
@@ -303,10 +369,11 @@ fn render_script(
     // H5 bootloader + application startup includes clock, SD-card absence, and
     // TIM6 timebase initialization. Give the factory flow enough virtual time
     // to reach the same scheduler hook without lengthening the allocator soak.
-    let factory_ms = match layout.architecture {
+    let minimum_factory_ms = match layout.architecture {
         ArchitectureKind::Stm32h5 => 1_000,
-        _ => 250,
+        _ => 50,
     };
+    let factory_ms = minimum_factory_ms;
     let factory_seconds = factory_ms as f64 / 1000.0;
     let tracing = if layout.execution.trace {
         format!(
@@ -316,9 +383,20 @@ fn render_script(
     } else {
         String::new()
     };
+    let tick_hook = layout
+        .execution
+        .hal_tick_address
+        .map(|address| {
+            let step = layout.execution.hal_tick_step;
+            format!(
+                "set sedsTickHook\n\"\"\"\nbus = machine[\"sysbus\"]\nbus.WriteDoubleWord(0x{address:08x}, (bus.ReadDoubleWord(0x{address:08x}) + {step}) & 0xffffffff)\n\"\"\"\ncpu AddHook `sysbus GetSymbolAddress \"HAL_GetTick\" 0` $sedsTickHook\n"
+            )
+        })
+        .unwrap_or_default();
     let name = layout.name.replace('"', "_");
     let symbol = &layout.execution.boot_success_symbol;
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\nsysbus LoadELF @{}\nsysbus LoadBinary @{} {}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\nemulation RunFor \"{}s\"\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), elf.display(), symbol, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, symbol, factory_seconds)
+    let factory_symbol = &layout.execution.factory_boot_success_symbol;
+    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\nsysbus LoadELF @{}\nsysbus LoadBinary @{} {}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}emulation RunFor \"{}s\"\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), elf.display(), symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_symbol, tick_hook, factory_seconds)
 }
 
 fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<MemoryProbeReport>> {
@@ -328,11 +406,12 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         let prefix = format!("SEDS_PROBE {} ", probe.name);
         let mut indexed = Vec::new();
         for (index, line) in lines.iter().enumerate() {
-            let marker = line.trim();
-            let Some(sample) = marker.strip_prefix(&prefix) else {
+            let Some(marker_start) = line.find(&prefix) else {
                 continue;
             };
-            let sample: usize = sample
+            let marker = &line[marker_start..];
+            let sample: usize = marker[prefix.len()..]
+                .trim()
                 .parse()
                 .with_context(|| format!("parsing probe marker {marker}"))?;
             let value = lines
@@ -354,7 +433,8 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         let samples: Vec<u32> = indexed.into_iter().map(|(_, value)| value).collect();
         let minimum_observed = *samples.iter().min().context("empty probe samples")?;
         let maximum_observed = *samples.iter().max().context("empty probe samples")?;
-        let end_drop = i64::from(samples[0]) - i64::from(*samples.last().unwrap());
+        let end_drop = i64::from(samples[layout.execution.memory_probe_warmup_samples])
+            - i64::from(*samples.last().unwrap());
         if let Some(minimum) = probe.minimum {
             ensure!(
                 minimum_observed >= minimum,
@@ -491,5 +571,48 @@ mod tests {
             r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
         );
         assert!(render_peripheral_overlay(&board).is_err());
+    }
+
+    #[test]
+    fn g4_adc_instances_have_independent_register_maps() {
+        let board = layout(
+            "stm32g4",
+            r#"[
+                {"type":"adc","name":"adc1","model":"stm32_adc","bus":"adc1"},
+                {"type":"adc","name":"adc2","model":"stm32_adc","bus":"adc2"},
+                {"type":"adc","name":"adc3","model":"stm32_adc","bus":"adc3"}
+            ]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("sysbus 0x50000000"));
+        assert!(overlay.contains("sysbus 0x50000100"));
+        assert!(overlay.contains("sysbus 0x50000400"));
+        assert_eq!(overlay.matches("layoutAdc12Common").count(), 1);
+        assert_eq!(overlay.matches("layoutAdc345Common").count(), 1);
+    }
+
+    #[test]
+    fn u5_adc_instances_are_selected_by_layout() {
+        let board = layout(
+            "stm32u5",
+            r#"[
+                {"type":"adc","name":"adc1","model":"stm32_adc","bus":"adc1"},
+                {"type":"adc","name":"adc4","model":"stm32_adc","bus":"adc4"}
+            ]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("sysbus 0x42028000"));
+        assert!(overlay.contains("sysbus 0x46021000"));
+    }
+
+    #[test]
+    fn u5_sd_card_is_selected_by_layout() {
+        let board = layout(
+            "stm32u5",
+            r#"[{"type":"storage","name":"sd","model":"sd_card","bus":"sdmmc1"}]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("Storage.SedsStm32Sdmmc @ sysbus 0x420c8000"));
+        assert!(overlay.contains("SedsStm32Sdmmc.cs"));
     }
 }

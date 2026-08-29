@@ -58,7 +58,11 @@
         "virtual_time_ms": {"type": "integer", "minimum": 1},
         "trace": {"type": "boolean"},
         "boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+        "factory_boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
         "sample_count": {"type": "integer", "minimum": 1},
+        "memory_probe_warmup_samples": {"type": "integer", "minimum": 0},
+        "hal_tick_address": {"type": "integer", "minimum": 0},
+        "hal_tick_step": {"type": "integer", "minimum": 1},
         "memory_probes": {
           "type": "array",
           "items": {
@@ -98,9 +102,9 @@
         "type": "object",
         "required": ["type", "name"],
         "properties": {
-          "type": {"enum": ["imu", "barometer", "gps", "adc", "pressure_transducer"]},
+          "type": {"enum": ["imu", "barometer", "gps", "adc", "pressure_transducer", "storage"]},
           "name": {"type": "string", "minLength": 1},
-          "model": {"enum": ["neo_m9n", "bmi088", "bmp390", "ltc2990", "stm32_adc"]},
+          "model": {"enum": ["neo_m9n", "bmi088", "bmp390", "ltc2990", "stm32_adc", "sd_card"]},
           "bus": {"type": "string", "minLength": 1},
           "failure_every": {"type": "integer", "minimum": 1},
           "disconnect_after": {"type": "integer", "minimum": 0},
