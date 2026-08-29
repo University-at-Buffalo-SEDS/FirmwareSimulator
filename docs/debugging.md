@@ -11,6 +11,8 @@ Keep the JSON with the failing CI artifact and rerun with the same `--seed`. The
 
 The `execution.register_dump` values are read from the emulated Cortex-M after executing the linked ELF. When tracing is enabled, `execution.trace` points to the Renode instruction trace. Errors in later traffic, peripheral-fault, and OTA model phases also include a deterministic synthetic diagnostic; those values are clearly separate from the live Renode register dump. On hardware, the hard-fault handler should persist the same register set and the bootloader recovery transport should upload it.
 
+Configured memory probes include every sample in the JSON report together with observed minima/maxima and the drop from the first post-startup sample to the final sample. Export stable `volatile uint32_t` or `ULONG` symbols for allocator availability, low-water level, allocation failures, panics, and lock failures. This attributes a soak failure to the actual running ELF rather than the behavioral traffic model.
+
 Useful decoding commands for a real ELF are:
 
 ```sh

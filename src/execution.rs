@@ -16,7 +16,18 @@ pub struct ExecutionReport {
     pub firmware_boot_reached: bool,
     pub factory_boot_reached: bool,
     pub register_dump: Vec<String>,
+    pub memory_profile: Vec<MemoryProbeReport>,
     pub trace: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryProbeReport {
+    pub name: String,
+    pub symbol: String,
+    pub samples: Vec<u32>,
+    pub minimum_observed: u32,
+    pub maximum_observed: u32,
+    pub end_drop: i64,
 }
 
 pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
@@ -43,14 +54,53 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
             .all(|c| c.is_ascii_alphanumeric() || c == '_'),
         "invalid execution success symbol"
     );
+    ensure!(
+        layout.execution.sample_count > 0,
+        "execution sample_count must be positive"
+    );
+    ensure!(
+        layout.execution.sample_count as u64 <= layout.execution.virtual_time_ms,
+        "execution sample_count cannot exceed virtual_time_ms"
+    );
+    for probe in &layout.execution.memory_probes {
+        ensure!(
+            !probe.name.is_empty()
+                && probe
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "invalid memory probe name {}",
+            probe.name
+        );
+        ensure!(
+            !probe.symbol.is_empty()
+                && probe
+                    .symbol
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "invalid memory probe symbol {}",
+            probe.symbol
+        );
+    }
     let renode = find_renode()?;
     let platform = platform_path(layout.architecture);
     let scratch = tempfile::tempdir().context("creating Renode scratch directory")?;
+    let peripheral_overlay = scratch.path().join("peripherals.repl");
+    fs::write(&peripheral_overlay, render_peripheral_overlay(layout)?)
+        .context("writing Renode peripheral overlay")?;
     let script = scratch.path().join("run.resc");
     let trace = scratch.path().join("execution.trace");
     fs::write(
         &script,
-        render_script(layout, &platform, &elf, &bootloader_elf, &factory, &trace),
+        render_script(
+            layout,
+            &platform,
+            &peripheral_overlay,
+            &elf,
+            &bootloader_elf,
+            &factory,
+            &trace,
+        ),
     )?;
     let output = Command::new(&renode)
         .args(["--disable-xwt", "--console", "--execute"])
@@ -80,6 +130,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         tail(&combined, 80)
     );
     let registers = marker_lines(&combined);
+    let memory_profile = parse_memory_profile(layout, &combined)?;
     ensure!(
         observed_marker(&combined, "SEDS_FIRMWARE_BOOT_REACHED"),
         "firmware never reached {}:\n{}",
@@ -112,6 +163,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         firmware_boot_reached: true,
         factory_boot_reached: true,
         register_dump: registers,
+        memory_profile,
         trace: trace_path,
     })
 }
@@ -145,20 +197,111 @@ fn platform_path(kind: ArchitectureKind) -> PathBuf {
         ArchitectureKind::Stm32h5 => "stm32h523.repl",
         ArchitectureKind::Stm32u5 => "stm32u585.repl",
     };
-    let root = env::var_os("FIRMWARE_SIM_ROOT")
+    simulator_root().join("renode/platforms").join(file)
+}
+
+fn simulator_root() -> PathBuf {
+    env::var_os("FIRMWARE_SIM_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    root.join("renode/platforms").join(file)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> {
+    let source_root = simulator_root().join("renode/peripherals");
+    let mut overlay = String::new();
+    let mut flight_sensor_bus_added = false;
+    for (index, peripheral) in layout.peripherals.iter().enumerate() {
+        let (model, bus) = match (peripheral.model.as_deref(), peripheral.bus.as_deref()) {
+            (None, None) => continue,
+            (Some(model), Some(bus)) => (model, bus),
+            _ => bail!(
+                "peripheral {} must specify model and bus together",
+                peripheral.name
+            ),
+        };
+        match (layout.architecture, model, bus) {
+            (ArchitectureKind::Stm32g4, "neo_m9n", "spi1") => {
+                overlay.push_str(&format!(
+                    "layoutDevice{index}: Sensors.SedsNeoM9N @ spi1\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsSpiSensors.cs").display()
+                ));
+            }
+            (ArchitectureKind::Stm32g4, "ltc2990", address)
+                if matches!(address, "i2c2@0x4c" | "i2c2@0x4d") =>
+            {
+                let address = address.rsplit_once('@').unwrap().1;
+                overlay.push_str(&format!(
+                    "layoutDevice{index}: Sensors.SedsLtc2990 @ i2c2 {address}\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsLtc2990.cs").display()
+                ));
+            }
+            (ArchitectureKind::Stm32h5, "bmi088" | "bmp390", "spi1") => {
+                if !flight_sensor_bus_added {
+                    overlay.push_str(&format!(
+                        "layoutFlightSensors: Sensors.SedsFlightSensorBus @ spi1\n    preinit:\n        include @{}\n",
+                        source_root.join("SedsSpiSensors.cs").display()
+                    ));
+                    flight_sensor_bus_added = true;
+                }
+            }
+            (ArchitectureKind::Stm32g4, "stm32_adc", "adc1") => {
+                overlay.push_str(&format!(
+                    "layoutAdc: Sensors.SedsStm32Adc @ sysbus 0x50000000\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsStm32Adc.cs").display()
+                ));
+            }
+            (ArchitectureKind::Stm32h5, "stm32_adc", "adc1") => {
+                overlay.push_str(&format!(
+                    "layoutAdc: Sensors.SedsStm32Adc @ sysbus 0x42228000\n    preinit:\n        include @{}\n",
+                    source_root.join("SedsStm32Adc.cs").display()
+                ));
+            }
+            _ => bail!(
+                "peripheral {} selects unsupported model/bus {model}/{bus} on {:?}",
+                peripheral.name,
+                layout.architecture
+            ),
+        }
+    }
+    if overlay.is_empty() {
+        overlay.push_str("// No instruction-coupled peripherals selected by this layout.\n");
+    }
+    Ok(overlay)
 }
 fn render_script(
     layout: &BoardLayout,
     platform: &Path,
+    peripheral_overlay: &Path,
     elf: &Path,
     bootloader_elf: &Path,
     factory: &Path,
     trace: &Path,
 ) -> String {
-    let seconds = layout.execution.virtual_time_ms as f64 / 1000.0;
+    let sample_count = layout.execution.sample_count;
+    let base_ms = layout.execution.virtual_time_ms / sample_count as u64;
+    let remainder_ms = layout.execution.virtual_time_ms % sample_count as u64;
+    let mut profile_script = String::new();
+    for sample in 0..sample_count {
+        let duration_ms = base_ms + u64::from((sample as u64) < remainder_ms);
+        profile_script.push_str(&format!(
+            "emulation RunFor \"{}s\"\n",
+            duration_ms as f64 / 1000.0
+        ));
+        for probe in &layout.execution.memory_probes {
+            profile_script.push_str(&format!(
+                "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
+                probe.name, sample, probe.symbol
+            ));
+        }
+    }
+    // H5 bootloader + application startup includes clock, SD-card absence, and
+    // TIM6 timebase initialization. Give the factory flow enough virtual time
+    // to reach the same scheduler hook without lengthening the allocator soak.
+    let factory_ms = match layout.architecture {
+        ArchitectureKind::Stm32h5 => 1_000,
+        _ => 250,
+    };
+    let factory_seconds = factory_ms as f64 / 1000.0;
     let tracing = if layout.execution.trace {
         format!(
             "cpu CreateExecutionTracing \"{}\" BinaryPC\n",
@@ -169,7 +312,80 @@ fn render_script(
     };
     let name = layout.name.replace('"', "_");
     let symbol = &layout.execution.boot_success_symbol;
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}emulation RunFor \"{}s\"\necho \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\nsysbus LoadELF @{}\nsysbus LoadBinary @{} {}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\nemulation RunFor \"{}s\"\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), elf.display(), symbol, tracing, seconds, name, platform.display(), elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, symbol, seconds)
+    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\nsysbus LoadELF @{}\nsysbus LoadBinary @{} {}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\nemulation RunFor \"{}s\"\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), elf.display(), symbol, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, symbol, factory_seconds)
+}
+
+fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<MemoryProbeReport>> {
+    let lines: Vec<_> = output.lines().collect();
+    let mut reports = Vec::new();
+    for probe in &layout.execution.memory_probes {
+        let prefix = format!("SEDS_PROBE {} ", probe.name);
+        let mut indexed = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let marker = line.trim();
+            let Some(sample) = marker.strip_prefix(&prefix) else {
+                continue;
+            };
+            let sample: usize = sample
+                .parse()
+                .with_context(|| format!("parsing probe marker {marker}"))?;
+            let value = lines
+                .get(index + 1)
+                .context("memory probe value is missing")?
+                .trim()
+                .strip_prefix("0x")
+                .context("memory probe value is not hexadecimal")?;
+            indexed.push((sample, u32::from_str_radix(value, 16)?));
+        }
+        indexed.sort_unstable_by_key(|(sample, _)| *sample);
+        ensure!(
+            indexed.len() == layout.execution.sample_count,
+            "probe {} returned {} of {} samples",
+            probe.name,
+            indexed.len(),
+            layout.execution.sample_count
+        );
+        let samples: Vec<u32> = indexed.into_iter().map(|(_, value)| value).collect();
+        let minimum_observed = *samples.iter().min().context("empty probe samples")?;
+        let maximum_observed = *samples.iter().max().context("empty probe samples")?;
+        let end_drop = i64::from(samples[0]) - i64::from(*samples.last().unwrap());
+        if let Some(minimum) = probe.minimum {
+            ensure!(
+                minimum_observed >= minimum,
+                "probe {} fell below {}: {:?}",
+                probe.name,
+                minimum,
+                samples
+            );
+        }
+        if let Some(maximum) = probe.maximum {
+            ensure!(
+                maximum_observed <= maximum,
+                "probe {} exceeded {}: {:?}",
+                probe.name,
+                maximum,
+                samples
+            );
+        }
+        if let Some(max_end_drop) = probe.max_end_drop {
+            ensure!(
+                end_drop <= i64::from(max_end_drop),
+                "probe {} lost {} bytes between first and last sample: {:?}",
+                probe.name,
+                end_drop,
+                samples
+            );
+        }
+        reports.push(MemoryProbeReport {
+            name: probe.name.clone(),
+            symbol: probe.symbol.clone(),
+            samples,
+            minimum_observed,
+            maximum_observed,
+            end_drop,
+        });
+    }
+    Ok(reports)
 }
 fn marker_lines(output: &str) -> Vec<String> {
     let lines: Vec<_> = output.lines().collect();
@@ -200,4 +416,70 @@ fn tail(value: &str, count: usize) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_peripheral_overlay;
+    use crate::layout::BoardLayout;
+
+    fn layout(architecture: &str, peripherals: &str) -> BoardLayout {
+        serde_json::from_str(&format!(
+            r#"{{
+                "name":"test",
+                "architecture":"{architecture}",
+                "memory":{{
+                    "flash_base":134217728,"flash_size":524288,
+                    "bootloader_size":16384,"slot_a_base":134234112,
+                    "slot_a_size":475136,"erase_size":2048,
+                    "write_alignment":8,"sedsnet_pool":4096
+                }},
+                "artifacts":{{
+                    "elf":"fw.elf","bootloader_elf":"boot.elf",
+                    "firmware":"fw.bin","bootloader":"boot.bin",
+                    "factory":"factory.bin"
+                }},
+                "peripherals":{peripherals}
+            }}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn overlay_contains_only_layout_selected_g4_devices() {
+        let board = layout(
+            "stm32g4",
+            r#"[
+                {"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"},
+                {"type":"adc","name":"rail","model":"ltc2990","bus":"i2c2@0x4c"}
+            ]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("SedsNeoM9N @ spi1"));
+        assert!(overlay.contains("SedsLtc2990 @ i2c2 0x4c"));
+        assert!(!overlay.contains("SedsFlightSensorBus"));
+        assert!(!overlay.contains("SedsStm32Adc"));
+    }
+
+    #[test]
+    fn h5_sensor_declarations_share_one_physical_spi_model() {
+        let board = layout(
+            "stm32h5",
+            r#"[
+                {"type":"imu","name":"imu","model":"bmi088","bus":"spi1"},
+                {"type":"barometer","name":"baro","model":"bmp390","bus":"spi1"}
+            ]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert_eq!(overlay.matches("SedsFlightSensorBus @ spi1").count(), 1);
+    }
+
+    #[test]
+    fn invalid_architecture_bus_combination_is_rejected() {
+        let board = layout(
+            "stm32h5",
+            r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
+        );
+        assert!(render_peripheral_overlay(&board).is_err());
+    }
 }

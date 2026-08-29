@@ -69,6 +69,10 @@ pub struct ExecutionConfig {
     pub trace: bool,
     #[serde(default = "default_boot_symbol")]
     pub boot_success_symbol: String,
+    #[serde(default = "default_sample_count")]
+    pub sample_count: usize,
+    #[serde(default)]
+    pub memory_probes: Vec<MemoryProbe>,
 }
 impl Default for ExecutionConfig {
     fn default() -> Self {
@@ -76,6 +80,8 @@ impl Default for ExecutionConfig {
             virtual_time_ms: default_virtual_time_ms(),
             trace: false,
             boot_success_symbol: default_boot_symbol(),
+            sample_count: default_sample_count(),
+            memory_probes: Vec::new(),
         }
     }
 }
@@ -84,6 +90,21 @@ fn default_boot_symbol() -> String {
 }
 fn default_virtual_time_ms() -> u64 {
     250
+}
+fn default_sample_count() -> usize {
+    1
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryProbe {
+    pub name: String,
+    pub symbol: String,
+    #[serde(default)]
+    pub minimum: Option<u32>,
+    #[serde(default)]
+    pub maximum: Option<u32>,
+    #[serde(default)]
+    pub max_end_drop: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

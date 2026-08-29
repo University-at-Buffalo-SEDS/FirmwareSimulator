@@ -44,7 +44,23 @@
       "properties": {
         "virtual_time_ms": {"type": "integer", "minimum": 1},
         "trace": {"type": "boolean"},
-        "boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"}
+        "boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+        "sample_count": {"type": "integer", "minimum": 1},
+        "memory_probes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "symbol"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+              "symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+              "minimum": {"type": "integer", "minimum": 0},
+              "maximum": {"type": "integer", "minimum": 0},
+              "max_end_drop": {"type": "integer", "minimum": 0}
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -71,12 +87,15 @@
         "properties": {
           "type": {"enum": ["imu", "barometer", "gps", "adc", "pressure_transducer"]},
           "name": {"type": "string", "minLength": 1},
+          "model": {"enum": ["neo_m9n", "bmi088", "bmp390", "ltc2990", "stm32_adc"]},
+          "bus": {"type": "string", "minLength": 1},
           "failure_every": {"type": "integer", "minimum": 1},
           "disconnect_after": {"type": "integer", "minimum": 0},
           "bits": {"type": "integer", "minimum": 1, "maximum": 16},
           "channels": {"type": "integer", "minimum": 1},
           "max_psi": {"type": "number", "exclusiveMinimum": 0}
         },
+        "dependentRequired": {"model": ["bus"], "bus": ["model"]},
         "additionalProperties": false
       }
     }

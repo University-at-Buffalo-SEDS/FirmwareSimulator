@@ -7,6 +7,10 @@ pub struct PeripheralSpec {
     pub kind: String,
     pub name: String,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub bus: Option<String>,
+    #[serde(default)]
     pub failure_every: Option<u64>,
     #[serde(default)]
     pub disconnect_after: Option<u64>,
@@ -22,6 +26,9 @@ pub struct PeripheralSpec {
 pub struct DeviceReport {
     pub name: String,
     pub kind: String,
+    pub model: Option<String>,
+    pub bus: Option<String>,
+    pub instruction_coupled: bool,
     pub successful_reads: u64,
     pub injected_errors: u64,
     pub disconnected_reads: u64,
@@ -45,6 +52,9 @@ fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceR
     let mut report = DeviceReport {
         name: spec.name.clone(),
         kind: spec.kind.clone(),
+        model: spec.model.clone(),
+        bus: spec.bus.clone(),
+        instruction_coupled: spec.model.is_some() && spec.bus.is_some(),
         successful_reads: 0,
         injected_errors: 0,
         disconnected_reads: 0,
@@ -67,6 +77,22 @@ fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceR
 
 fn validate(spec: &PeripheralSpec) -> Result<()> {
     ensure!(!spec.name.is_empty(), "peripheral name cannot be empty");
+    ensure!(
+        spec.model.is_some() == spec.bus.is_some(),
+        "peripheral model and bus must be specified together"
+    );
+    if let Some(model) = spec.model.as_deref() {
+        let supported = matches!(
+            (spec.kind.as_str(), model),
+            ("gps", "neo_m9n")
+                | ("imu", "bmi088")
+                | ("barometer", "bmp390")
+                | ("adc", "ltc2990")
+                | ("adc", "stm32_adc")
+                | ("pressure_transducer", "stm32_adc")
+        );
+        ensure!(supported, "unsupported {0} model {model}", spec.kind);
+    }
     match spec.kind.as_str() {
         "imu" | "barometer" | "gps" => Ok(()),
         "adc" => {
