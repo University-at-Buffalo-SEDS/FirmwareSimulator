@@ -38,7 +38,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build image
-        run: docker build --build-arg SIM_ARCH=${{ matrix.arch }} -t ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} .
+        run: |
+          docker build \
+            --build-arg SIM_ARCH=${{ matrix.arch }} \
+            --label org.opencontainers.image.source=https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator \
+            -t ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} .
       - name: Run packaged self-test
         run: docker run --rm ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} self-test --arch ${{ matrix.arch }}
       - name: Validate Renode MCU platform
@@ -56,3 +60,25 @@ jobs:
       - name: Push image
         if: github.event_name == 'push'
         run: docker push ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }}
+
+  publish-visibility:
+    if: github.event_name == 'push'
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Make the simulator package publicly pullable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in {1..10}; do
+            if gh api --method PATCH \
+              /orgs/University-at-Buffalo-SEDS/packages/container/firmwaresimulator/visibility \
+              -f visibility=public; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
