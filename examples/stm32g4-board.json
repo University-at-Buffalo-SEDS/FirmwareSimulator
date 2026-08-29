@@ -4,6 +4,7 @@
   "memory": {
     "flash_base": 134217728,
     "flash_size": 524288,
+    "ram_regions": [{"name": "sram", "base": 536870912, "size": 114688}],
     "bootloader_size": 16384,
     "slot_a_base": 134234112,
     "slot_a_size": 475136,

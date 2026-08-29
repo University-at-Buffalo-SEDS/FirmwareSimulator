@@ -18,6 +18,9 @@ pub struct SimulationReport {
     pub bootloader_bytes: usize,
     pub factory_bytes: usize,
     pub ota_bytes: Option<usize>,
+    pub physical_flash_bytes: u64,
+    pub physical_ram_bytes: u64,
+    pub physical_ram_regions: Vec<crate::layout::MemoryRegion>,
     pub devices: Vec<DeviceReport>,
     pub traffic: TrafficReport,
     pub update: UpdateReport,
@@ -34,10 +37,16 @@ pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
     ensure!(!layout.name.is_empty(), "board name cannot be empty");
     Architecture::for_kind(layout.architecture).validate(&layout.memory)?;
     let images = load_images(layout, root)?;
-    ensure!(
-        root.join(&layout.artifacts.elf).is_file(),
-        "firmware ELF is missing"
-    );
+    crate::elf::validate_elf(
+        &root.join(&layout.artifacts.elf),
+        &layout.memory,
+        "firmware",
+    )?;
+    crate::elf::validate_elf(
+        &root.join(&layout.artifacts.bootloader_elf),
+        &layout.memory,
+        "bootloader",
+    )?;
     ensure!(
         images.bootloader.len() as u64 <= layout.memory.bootloader_size,
         "bootloader exceeds partition"
@@ -83,6 +92,14 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
         bootloader_bytes: images.bootloader.len(),
         factory_bytes: images.factory.len(),
         ota_bytes: images.ota.as_ref().map(Vec::len),
+        physical_flash_bytes: layout.memory.flash_size,
+        physical_ram_bytes: layout
+            .memory
+            .ram_regions
+            .iter()
+            .map(|region| region.size)
+            .sum(),
+        physical_ram_regions: layout.memory.ram_regions.clone(),
         devices,
         traffic,
         update,
@@ -111,7 +128,11 @@ pub fn self_test(kind: ArchitectureKind) -> Result<()> {
     let memory = crate::layout::MemoryLayout {
         flash_base: 0x0800_0000,
         flash_size: arch.default_flash_size,
-        ram_size: Some(arch.default_ram_size),
+        ram_regions: vec![crate::layout::MemoryRegion {
+            name: "sram".into(),
+            base: 0x2000_0000,
+            size: arch.default_ram_size,
+        }],
         bootloader_size: 0x4000,
         slot_a_base: 0x0800_4000,
         slot_a_size: arch.default_flash_size - 0x6000,

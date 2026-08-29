@@ -1,6 +1,6 @@
 use crate::{core::ArchitectureKind, peripherals::PeripheralSpec, traffic::TrafficConfig};
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -32,8 +32,7 @@ impl BoardLayout {
 pub struct MemoryLayout {
     pub flash_base: u64,
     pub flash_size: u64,
-    #[serde(default)]
-    pub ram_size: Option<u64>,
+    pub ram_regions: Vec<MemoryRegion>,
     pub bootloader_size: u64,
     pub slot_a_base: u64,
     pub slot_a_size: u64,
@@ -48,6 +47,13 @@ pub struct MemoryLayout {
     pub erase_size: u64,
     pub write_alignment: u64,
     pub sedsnet_pool: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MemoryRegion {
+    pub name: String,
+    pub base: u64,
+    pub size: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

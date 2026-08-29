@@ -15,16 +15,20 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     fs::write(root.join("build/bootloader.bin"), vec![0x22; 1024]).unwrap();
     fs::write(root.join("build/factory.bin"), vec![0x33; 8192]).unwrap();
     fs::write(root.join("build/update.seds"), vec![0x44; 2048]).unwrap();
-    fs::write(
-        root.join("build/firmware.elf"),
-        vec![0x7f, b'E', b'L', b'F'],
-    )
-    .unwrap();
-    fs::write(
-        root.join("build/bootloader.elf"),
-        vec![0x7f, b'E', b'L', b'F'],
-    )
-    .unwrap();
+    let mut elf = vec![0_u8; 88];
+    elf[0..6].copy_from_slice(b"\x7fELF\x01\x01");
+    elf[24..28].copy_from_slice(&0x0800_4001_u32.to_le_bytes());
+    elf[28..32].copy_from_slice(&52_u32.to_le_bytes());
+    elf[42..44].copy_from_slice(&32_u16.to_le_bytes());
+    elf[44..46].copy_from_slice(&1_u16.to_le_bytes());
+    elf[52..56].copy_from_slice(&1_u32.to_le_bytes());
+    elf[56..60].copy_from_slice(&84_u32.to_le_bytes());
+    elf[60..64].copy_from_slice(&0x0800_4000_u32.to_le_bytes());
+    elf[64..68].copy_from_slice(&0x0800_4000_u32.to_le_bytes());
+    elf[68..72].copy_from_slice(&4_u32.to_le_bytes());
+    elf[72..76].copy_from_slice(&4_u32.to_le_bytes());
+    fs::write(root.join("build/firmware.elf"), &elf).unwrap();
+    fs::write(root.join("build/bootloader.elf"), &elf).unwrap();
     let renode = root.join("renode-mock");
     fs::write(&renode, "#!/bin/sh\nprintf 'SEDS_FIRMWARE_BOOT_REACHED\\nSEDS_FACTORY_BOOT_REACHED\\nSEDS_REG FIRMWARE_PC\\n0x08004101\\nSEDS_REG FACTORY_PC\\n0x08004101\\nSEDS_EXECUTION_COMPLETE\\n'\n").unwrap();
     fs::set_permissions(&renode, fs::Permissions::from_mode(0o755)).unwrap();
@@ -39,6 +43,7 @@ fn file_defined_board_and_firmware_run_end_to_end() {
             "memory": {
                 "flash_base": 134217728,
                 "flash_size": 524288,
+                "ram_regions": [{"name":"sram","base":536870912,"size":114688}],
                 "bootloader_size": 16384,
                 "slot_a_base": 134234112,
                 "slot_a_size": 475136,

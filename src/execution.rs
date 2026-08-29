@@ -206,9 +206,18 @@ fn simulator_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> {
+pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> {
     let source_root = simulator_root().join("renode/peripherals");
-    let mut overlay = String::new();
+    let mut overlay = format!(
+        "physicalFlash: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\n",
+        layout.memory.flash_base, layout.memory.flash_size
+    );
+    for (index, region) in layout.memory.ram_regions.iter().enumerate() {
+        overlay.push_str(&format!(
+            "physicalRam{index}: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\n",
+            region.base, region.size
+        ));
+    }
     let mut flight_sensor_bus_added = false;
     for (index, peripheral) in layout.peripherals.iter().enumerate() {
         let (model, bus) = match (peripheral.model.as_deref(), peripheral.bus.as_deref()) {
@@ -262,9 +271,6 @@ fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> {
                 layout.architecture
             ),
         }
-    }
-    if overlay.is_empty() {
-        overlay.push_str("// No instruction-coupled peripherals selected by this layout.\n");
     }
     Ok(overlay)
 }
@@ -430,6 +436,7 @@ mod tests {
                 "architecture":"{architecture}",
                 "memory":{{
                     "flash_base":134217728,"flash_size":524288,
+                    "ram_regions":[{{"name":"sram","base":536870912,"size":114688}}],
                     "bootloader_size":16384,"slot_a_base":134234112,
                     "slot_a_size":475136,"erase_size":2048,
                     "write_alignment":8,"sedsnet_pool":4096
@@ -455,6 +462,9 @@ mod tests {
             ]"#,
         );
         let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("physicalFlash: Memory.MappedMemory @ sysbus 0x08000000"));
+        assert!(overlay.contains("physicalRam0: Memory.MappedMemory @ sysbus 0x20000000"));
+        assert!(overlay.contains("size: 0x1c000"));
         assert!(overlay.contains("SedsNeoM9N @ spi1"));
         assert!(overlay.contains("SedsLtc2990 @ i2c2 0x4c"));
         assert!(!overlay.contains("SedsFlightSensorBus"));

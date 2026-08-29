@@ -30,7 +30,7 @@ docker run --rm -v /path/to/avionics:/avionics:ro \
   bay --topology /avionics/avionics-bay.json
 ```
 
-The seed makes traffic, sensor values, failures, and debug registers repeatable. A successful run prints JSON containing artifact sizes, peripheral behavior (including an explicit `instruction_coupled` flag), real firmware memory probes, SEDSNet model pool high-water usage, allocation failures, remaining allocations, and OTA interruption results.
+The seed makes traffic, sensor values, failures, and debug registers repeatable. Before execution, each loadable ELF segment is checked against the board's exact flash and RAM-bank map; Renode is then given only those physical regions. A successful run prints JSON containing artifact sizes, peripheral behavior (including an explicit `instruction_coupled` flag), real firmware memory probes, SEDSNet model pool high-water usage, allocation failures, remaining allocations, and OTA interruption results.
 
 `run` and `bay` are documented and validated only in Docker. The image contains the pinned Renode runtime and platform models, so the normal host workflow does not need a Renode installation. Native execution is permitted when `RENODE` points to a compatible executable (or Renode is installed at a recognized path), but it emits an unsupported, use-at-your-own-risk warning. `run` requires the linked ELFs, executes ARM instructions, and then runs the behavioral traffic/peripheral/OTA layers. Set `execution.trace` in the board layout to retain a Renode binary-PC trace inside the container's output mount.
 

@@ -1,12 +1,16 @@
 use firmware_sim::{
-    layout::MemoryLayout,
+    layout::{MemoryLayout, MemoryRegion},
     update::{interruption_matrix, Flash, UpdateStrategy},
 };
 fn memory() -> MemoryLayout {
     MemoryLayout {
         flash_base: 0x08000000,
         flash_size: 0x80000,
-        ram_size: None,
+        ram_regions: vec![MemoryRegion {
+            name: "sram".into(),
+            base: 0x20000000,
+            size: 0x1c000,
+        }],
         bootloader_size: 0x4000,
         slot_a_base: 0x08004000,
         slot_a_size: 0x74000,

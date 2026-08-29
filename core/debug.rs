@@ -47,10 +47,9 @@ pub struct CrashDiagnostic {
 impl CrashDiagnostic {
     pub fn capture(layout: &BoardLayout, seed: u64, phase: &str, reason: String) -> Self {
         let architecture = Architecture::for_kind(layout.architecture);
-        let ram_size = layout
-            .memory
-            .ram_size
-            .unwrap_or(architecture.default_ram_size);
+        let ram = layout.memory.ram_regions.first();
+        let ram_base = ram.map_or(0x2000_0000, |region| region.base);
+        let ram_size = ram.map_or(architecture.default_ram_size, |region| region.size);
         let mut state = seed.max(1);
         let mut general = [0_u32; 13];
         for register in &mut general {
@@ -59,7 +58,7 @@ impl CrashDiagnostic {
         }
         let pc_span = layout.memory.slot_a_size.saturating_sub(4).max(4);
         let pc = layout.memory.slot_a_base + ((seed % pc_span) & !1);
-        let stack_top = 0x2000_0000_u64.saturating_add(ram_size) & !7;
+        let stack_top = ram_base.saturating_add(ram_size) & !7;
         let is_m33 = matches!(
             layout.architecture,
             ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5

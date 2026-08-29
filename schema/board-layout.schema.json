@@ -8,11 +8,24 @@
     "architecture": {"enum": ["stm32g4", "stm32h5", "stm32u5"]},
     "memory": {
       "type": "object",
-      "required": ["flash_base", "flash_size", "bootloader_size", "slot_a_base", "slot_a_size", "erase_size", "write_alignment", "sedsnet_pool"],
+      "required": ["flash_base", "flash_size", "ram_regions", "bootloader_size", "slot_a_base", "slot_a_size", "erase_size", "write_alignment", "sedsnet_pool"],
       "properties": {
         "flash_base": {"type": "integer", "minimum": 0},
         "flash_size": {"type": "integer", "minimum": 1},
-        "ram_size": {"type": "integer", "minimum": 1},
+        "ram_regions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "base", "size"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+              "base": {"type": "integer", "minimum": 0},
+              "size": {"type": "integer", "minimum": 1}
+            },
+            "additionalProperties": false
+          }
+        },
         "bootloader_size": {"type": "integer", "minimum": 1},
         "slot_a_base": {"type": "integer", "minimum": 0},
         "slot_a_size": {"type": "integer", "minimum": 1},

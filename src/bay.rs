@@ -1,4 +1,7 @@
-use crate::{core::ArchitectureKind, layout::BoardLayout};
+use crate::{
+    core::{Architecture, ArchitectureKind},
+    layout::BoardLayout,
+};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -76,6 +79,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
+    let scratch = tempfile::tempdir()?;
     let mut script = String::new();
     for link in &topology.links {
         ensure!(
@@ -108,11 +112,23 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             node.name,
             elf.display()
         );
+        Architecture::for_kind(layout.architecture).validate(&layout.memory)?;
+        crate::elf::validate_elf(
+            &elf,
+            &layout.memory,
+            &format!("node {} firmware", node.name),
+        )?;
+        let overlay = scratch.path().join(format!("{}.repl", safe(&node.name)));
+        fs::write(
+            &overlay,
+            crate::execution::render_peripheral_overlay(&layout)?,
+        )?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
             safe(&node.name),
             platform(layout.architecture).display(),
+            overlay.display(),
             elf.display(),
             layout.execution.boot_success_symbol,
             marker
@@ -144,7 +160,6 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     script += "echo \"SEDS_BAY_COMPLETE\"\n";
-    let scratch = tempfile::tempdir()?;
     let script_path = scratch.path().join("bay.resc");
     fs::write(&script_path, script)?;
     let renode = env::var_os("RENODE")

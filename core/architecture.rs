@@ -97,6 +97,47 @@ impl Architecture {
             );
         }
         ensure!(memory.sedsnet_pool > 0, "sedsnet_pool must be positive");
+        ensure!(
+            !memory.ram_regions.is_empty(),
+            "ram_regions must describe the physical MCU RAM banks"
+        );
+        let mut ranges = Vec::new();
+        let mut total_ram = 0_u64;
+        for region in &memory.ram_regions {
+            ensure!(
+                !region.name.is_empty()
+                    && region
+                        .name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "invalid RAM region name {}",
+                region.name
+            );
+            ensure!(
+                region.size > 0,
+                "RAM region {} must be positive",
+                region.name
+            );
+            let end = region
+                .base
+                .checked_add(region.size)
+                .ok_or_else(|| anyhow::anyhow!("RAM region {} overflows", region.name))?;
+            ensure!(
+                !ranges
+                    .iter()
+                    .any(|(start, prior_end)| region.base < *prior_end && end > *start),
+                "RAM region {} overlaps another physical region",
+                region.name
+            );
+            ranges.push((region.base, end));
+            total_ram = total_ram
+                .checked_add(region.size)
+                .ok_or_else(|| anyhow::anyhow!("total RAM size overflows"))?;
+        }
+        ensure!(
+            memory.sedsnet_pool as u64 <= total_ram,
+            "sedsnet_pool exceeds total physical RAM"
+        );
         Ok(())
     }
 }

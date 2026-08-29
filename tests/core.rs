@@ -1,6 +1,6 @@
 use firmware_sim::{
     core::{Architecture, ArchitectureKind, FixedPool},
-    layout::MemoryLayout,
+    layout::{MemoryLayout, MemoryRegion},
 };
 
 #[test]
@@ -19,7 +19,11 @@ fn rejects_overlapping_slot() {
     let memory = MemoryLayout {
         flash_base: 0x08000000,
         flash_size: 0x80000,
-        ram_size: None,
+        ram_regions: vec![MemoryRegion {
+            name: "sram".into(),
+            base: 0x20000000,
+            size: 0x1c000,
+        }],
         bootloader_size: 0x4000,
         slot_a_base: 0x08002000,
         slot_a_size: 0x70000,
@@ -46,6 +50,73 @@ fn fixed_pool_never_overcommits() {
 }
 
 #[test]
+fn rejects_pool_larger_than_physical_ram() {
+    let mut memory = MemoryLayout {
+        flash_base: 0x08000000,
+        flash_size: 0x80000,
+        ram_regions: vec![MemoryRegion {
+            name: "sram".into(),
+            base: 0x20000000,
+            size: 0x1000,
+        }],
+        bootloader_size: 0x4000,
+        slot_a_base: 0x08004000,
+        slot_a_size: 0x74000,
+        slot_b_base: None,
+        slot_b_size: None,
+        delta_base: None,
+        delta_size: None,
+        erase_size: 0x800,
+        write_alignment: 8,
+        sedsnet_pool: 0x1001,
+    };
+    assert!(Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .is_err());
+    memory.sedsnet_pool = 0x1000;
+    Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .unwrap();
+}
+
+#[test]
+fn rejects_overlapping_physical_ram_banks() {
+    let mut memory = MemoryLayout {
+        flash_base: 0x08000000,
+        flash_size: 0x80000,
+        ram_regions: vec![
+            MemoryRegion {
+                name: "sram1".into(),
+                base: 0x20000000,
+                size: 0x2000,
+            },
+            MemoryRegion {
+                name: "sram2".into(),
+                base: 0x20001000,
+                size: 0x2000,
+            },
+        ],
+        bootloader_size: 0x4000,
+        slot_a_base: 0x08004000,
+        slot_a_size: 0x74000,
+        slot_b_base: None,
+        slot_b_size: None,
+        delta_base: None,
+        delta_size: None,
+        erase_size: 0x800,
+        write_alignment: 8,
+        sedsnet_pool: 1024,
+    };
+    assert!(Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .is_err());
+    memory.ram_regions[1].base = 0x20002000;
+    Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .unwrap();
+}
+
+#[test]
 fn crash_snapshot_exposes_cortex_m_fault_state() {
     use firmware_sim::{
         core::CrashDiagnostic,
@@ -58,7 +129,11 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
         memory: MemoryLayout {
             flash_base: 0x08000000,
             flash_size: 0x80000,
-            ram_size: Some(0x40000),
+            ram_regions: vec![MemoryRegion {
+                name: "sram".into(),
+                base: 0x20000000,
+                size: 0x40000,
+            }],
             bootloader_size: 0x4000,
             slot_a_base: 0x08004000,
             slot_a_size: 0x74000,
