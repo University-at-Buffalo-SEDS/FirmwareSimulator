@@ -8,75 +8,58 @@ cpu: CPU.CortexM @ sysbus
     numberOfMPURegions: 16
 dwt: Miscellaneous.DWT @ sysbus 0xE0001000
     frequency: 160000000
-rcc: Python.PythonPeripheral @ sysbus 0x46020C00
-    size: 0x400
-    initable: true
-    script: '''
-if request.IsInit: regs = {}
-if request.IsWrite: regs[request.Offset] = request.Value
-elif request.IsRead:
-    v = regs.get(request.Offset, 0)
-    if request.Offset == 0:
-        # Mirror oscillator enable bits into their corresponding ready bits.
-        v |= 0x500 | ((v & 0x05011101) << 1)
-    elif request.Offset == 0xf0:
-        # PLL1 enable/ready are adjacent in PLL1CFGR.
-        v |= (v & 0x04000000) << 1
-    elif request.Offset == 0x1c:
-        # Mirror the system-clock switch selection into the status field.
-        v = (v & ~0x0c) | ((v & 0x03) << 2)
-    elif request.Offset == 0x10: v = (v & ~0x38) | ((v & 7) << 3)
-    request.Value = v
-'''
-pwr: Python.PythonPeripheral @ sysbus 0x46020800
-    size: 0x400
-    initable: true
-    script: '''
-if request.IsInit: regs = {}
-if request.IsWrite: regs[request.Offset] = request.Value
-elif request.IsRead:
-    v = regs.get(request.Offset, 0) | (1 << 10)
-    # VOSR reports that Range 1 voltage scaling is ready. Without this,
-    # STM32U5 HAL_PWREx_ControlVoltageScaling times out during startup.
-    if request.Offset == 0x3c: v |= 0x30000
-    elif request.Offset == 0x0c: v |= 1 << 14
-    request.Value = v
-'''
-flashController: Memory.MappedMemory @ sysbus 0x40022000
-    size: 0x400
-gpio: Memory.MappedMemory @ sysbus 0x42020000
-    size: 0x2000
+rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x46020C00
+    variant: "u5"
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x46020800
+    variant: "u5"
+gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
+    ports: 9
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpio.cs
 fdcan1: CAN.MCAN @ sysbus 0x4000A400
     messageRAM: canMessageRAM
+    Line0 -> nvic@39
+    Line1 -> nvic@40
 canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
     size: 0x2800
 usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 160000000
+    IRQ -> nvic@61
 spi2: SPI.STM32SPI @ sysbus 0x40003800
     series: .L5
+    IRQ -> nvic@60
 timer2: Timers.STM32_Timer @ sysbus 0x40000000
     frequency: 160000000
     initialLimit: 0xFFFFFFFF
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 160000000
     initialLimit: 0xFFFF
-usb: Python.PythonPeripheral @ sysbus 0x42040000
-    size: 0x1000
-    initable: true
-    script: '''
-if request.IsInit: regs = {}
-if request.IsWrite:
-    # Core soft reset completes synchronously in the simulator.
-    regs[request.Offset] = request.Value & (~0x31 if request.Offset == 0x10 else 0xffffffff)
-elif request.IsRead:
-    v = regs.get(request.Offset, 0)
-    if request.Offset == 0x10: v |= 1 << 31
-    request.Value = v
-'''
-gpdma: Memory.MappedMemory @ sysbus 0x40020000
-    size: 0x1000
-cache: Memory.MappedMemory @ sysbus 0x40030400
-    size: 0x2000
-sysbus:
-    init:
-        Tag <0x46020000 0x400> "SYSCFG"
+    IRQ -> nvic@49
+sdmmc1: Storage.SedsStm32Sdmmc @ sysbus 0x420C8000
+    IRQ -> nvic@78
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Sdmmc.cs
+usb: USB.SedsStm32Usb @ sysbus 0x42040000
+    variant: "otg_fs"
+    IRQ -> nvic@73
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Usb.cs
+gpdma: DMA.SedsStm32Gpdma @ sysbus 0x40020000
+    channels: 16
+    0 -> nvic@29
+    1 -> nvic@30
+    2 -> nvic@31
+    3 -> nvic@32
+    4 -> nvic@33
+    5 -> nvic@34
+    6 -> nvic@35
+    7 -> nvic@36
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpdma.cs
+cache: Memory.SedsStm32Cache @ sysbus 0x40030400
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Cache.cs
+syscfg: Miscellaneous.SedsStm32Syscfg @ sysbus 0x46020000
+    variant: "u5"

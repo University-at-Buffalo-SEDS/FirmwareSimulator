@@ -1,8 +1,4 @@
-use crate::{
-    core::{Architecture, ArchitectureKind},
-    execution::MemoryProbeReport,
-    layout::BoardLayout,
-};
+use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayout};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -136,23 +132,27 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             node.name,
             elf.display()
         );
-        Architecture::for_kind(layout.architecture).validate(&layout.memory)?;
+        Architecture::for_kind(layout.architecture).validate_mcu(layout.mcu(), &layout.memory)?;
         crate::elf::validate_elf(
             &elf,
             &layout.memory,
             &format!("node {} firmware", node.name),
         )?;
-        let overlay = scratch.path().join(format!("{}.repl", safe(&node.name)));
+        let node_scratch = scratch.path().join(safe(&node.name));
+        fs::create_dir_all(&node_scratch)?;
+        let overlay = node_scratch.join("peripherals.repl");
         fs::write(
             &overlay,
             crate::execution::render_peripheral_overlay(&layout)?,
         )?;
+        let configured_platform = crate::execution::materialize_platform(&layout, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\nsysbus LoadELF @{}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
             safe(&node.name),
-            platform(layout.architecture).display(),
+            configured_platform.display(),
             overlay.display(),
+            if layout.board.strict_mmio { "sysbus UnhandledAccessBehaviour ThrowException\n" } else { "" },
             elf.display(),
             layout.execution.boot_success_symbol,
             marker
@@ -381,17 +381,6 @@ fn parse_memory_profiles(
         });
     }
     Ok(reports)
-}
-fn platform(kind: ArchitectureKind) -> PathBuf {
-    let file = match kind {
-        ArchitectureKind::Stm32g4 => "stm32g491.repl",
-        ArchitectureKind::Stm32h5 => "stm32h523.repl",
-        ArchitectureKind::Stm32u5 => "stm32u585.repl",
-    };
-    let root = env::var_os("FIRMWARE_SIM_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    root.join("renode/platforms").join(file)
 }
 fn safe(value: &str) -> String {
     value

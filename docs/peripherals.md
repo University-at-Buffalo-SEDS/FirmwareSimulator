@@ -5,7 +5,12 @@ Built-in types are `imu`, `barometer`, `gps`, `adc`, and `pressure_transducer`. 
 - `failure_every`: return a deterministic driver error every Nth access
 - `disconnect_after`: behave as disconnected after N accesses
 
-ADC models accept `bits` and `channels`; pressure transducers accept `max_psi`. The full test exercises ordinary data, intermittent failures, and disconnection without relying on hardware.
+For instruction-coupled devices these controls are passed into the Renode wire/MMIO model, so firmware observes invalid bus data, missing completion, or peripheral error status. The report's read/error totals remain deterministic behavioral-model counts and are labelled `behavioral_counts_only`; use firmware probes to assert that the real driver noticed and recovered from each injected fault.
+
+ADC models accept `bits`, `channels`, per-channel `channel_samples`, and optional
+deterministic `noise_lsb`; pressure transducers accept `max_psi`. The full test
+exercises ordinary data, intermittent failures, and disconnection without
+relying on hardware.
 
 ## Add a peripheral
 

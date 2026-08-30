@@ -20,6 +20,10 @@ pub struct PeripheralSpec {
     pub channels: Option<u8>,
     #[serde(default)]
     pub max_psi: Option<f64>,
+    #[serde(default)]
+    pub channel_samples: Vec<u32>,
+    #[serde(default)]
+    pub noise_lsb: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +33,8 @@ pub struct DeviceReport {
     pub model: Option<String>,
     pub bus: Option<String>,
     pub instruction_coupled: bool,
+    pub instruction_faults_configured: bool,
+    pub behavioral_counts_only: bool,
     pub successful_reads: u64,
     pub injected_errors: u64,
     pub disconnected_reads: u64,
@@ -55,6 +61,9 @@ fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceR
         model: spec.model.clone(),
         bus: spec.bus.clone(),
         instruction_coupled: spec.model.is_some() && spec.bus.is_some(),
+        instruction_faults_configured: spec.model.is_some()
+            && (spec.failure_every.is_some() || spec.disconnect_after.is_some()),
+        behavioral_counts_only: true,
         successful_reads: 0,
         injected_errors: 0,
         disconnected_reads: 0,
@@ -102,6 +111,11 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
                 "ADC bits must be 1..=16"
             );
             ensure!(spec.channels.unwrap_or(1) > 0, "ADC needs a channel");
+            let maximum = (1_u32 << spec.bits.unwrap_or(12)) - 1;
+            ensure!(
+                spec.channel_samples.iter().all(|sample| *sample <= maximum),
+                "ADC channel sample exceeds configured resolution"
+            );
             Ok(())
         }
         "pressure_transducer" => {

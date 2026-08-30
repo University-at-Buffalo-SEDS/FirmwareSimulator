@@ -9,7 +9,7 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     fs::create_dir_all(root.join("b/build")).unwrap();
     let board = |name: &str| {
         json!({
-            "name": name, "architecture": "stm32g4",
+            "name": name, "architecture": "stm32g4", "mcu": "stm32g491",
             "memory": {"flash_base": 134217728, "flash_size": 524288, "ram_regions": [{"name":"sram","base":536870912,"size":114688}], "bootloader_size": 16384, "slot_a_base": 134234112, "slot_a_size": 475136, "erase_size": 2048, "write_alignment": 8, "sedsnet_pool": 4096},
             "artifacts": {"elf": "build/fw.elf", "bootloader_elf": "build/boot.elf", "firmware": "build/fw.img", "bootloader": "build/boot.bin", "factory": "build/factory.bin"},
             "execution": {"memory_probes": [

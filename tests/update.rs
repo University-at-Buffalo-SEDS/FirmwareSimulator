@@ -35,7 +35,10 @@ fn tests_delta_power_loss_matrix() {
     )
     .unwrap();
     assert_eq!(report.strategy, UpdateStrategy::DeltaOnly);
-    assert!(report.interruption_points_tested >= 4);
+    assert!(report.interruption_points_tested > report.chunks);
+    assert!(report.recovery_required_points > 0);
+    assert!(report.all_flash_operation_boundaries_tested);
+    assert!(!report.cpu_reboots_executed);
 }
 
 #[test]
@@ -49,6 +52,9 @@ fn detects_dual_slot_and_recovery_layouts() {
     let dual_report =
         interruption_matrix(&[0x11; 4096], &[0x22; 4096], &[0x44; 2048], &dual, 128).unwrap();
     assert_eq!(dual_report.strategy, UpdateStrategy::DualSlot);
+    assert_eq!(dual_report.recovery_required_points, 0);
+    assert!(dual_report.old_image_boot_points > 0);
+    assert!(dual_report.new_image_boot_points > 0);
 
     dual.slot_b_base = None;
     dual.slot_b_size = None;

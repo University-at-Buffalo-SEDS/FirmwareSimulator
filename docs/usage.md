@@ -18,7 +18,14 @@ transport, then run the board layout and artifacts inside Docker:
 Use `./build.py test --all --release` to build and simulate release artifacts.
 `--full` remains a compatibility alias for `--all`.
 
-The board bridge first pulls `ghcr.io/university-at-buffalo-seds/firmwaresimulator:<architecture>`. If the registry is unavailable, it reuses a previously built local image or shallow-clones `FirmwareSimulator/main` and builds one. A sibling checkout is not selected implicitly. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a different published image, or set `SEDS_FIRMWARE_SIM_SOURCE` to explicitly build a particular local checkout.
+The board bridge first pulls the repository-linked
+`ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest` image. That one
+image contains every supported platform; `mcu` in `board.json` selects the
+platform. If the registry is unavailable, the bridge reuses a previously built
+local image or shallow-clones `FirmwareSimulator/main` and builds one. A sibling
+checkout is not selected implicitly. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a
+different published image, or set `SEDS_FIRMWARE_SIM_SOURCE` to explicitly
+build a particular local checkout.
 
 ## Container use
 
@@ -26,11 +33,11 @@ The board bridge first pulls `ghcr.io/university-at-buffalo-seds/firmwaresimulat
 cargo test --all-targets
 cargo run -- validate --layout /board/sim/board.json --firmware-root /board
 docker run --rm -v /path/to/board:/firmware:ro \
-  ghcr.io/university-at-buffalo-seds/firmwaresimulator:stm32g4 \
+  ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest \
   run --layout /firmware/sim/board.json --firmware-root /firmware --seed 24277
 
 docker run --rm -v /path/to/avionics:/avionics:ro \
-  ghcr.io/university-at-buffalo-seds/firmwaresimulator:stm32g4 \
+  ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest \
   bay --topology /avionics/avionics-bay.json
 ```
 
@@ -46,7 +53,7 @@ Run an idle/background real-firmware allocator profile using the probes declared
 
 ```sh
 docker run --rm --platform linux/amd64 -v "$PWD:/firmware:ro" \
-  ghcr.io/university-at-buffalo-seds/firmwaresimulator:stm32g4 \
+  ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest \
   profile --layout /firmware/sim/board.json --firmware-root /firmware \
   --virtual-time-ms 10000 --sample-count 20 --traffic-iterations 1000000
 ```

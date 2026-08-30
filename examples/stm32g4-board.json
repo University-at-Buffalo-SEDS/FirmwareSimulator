@@ -1,6 +1,7 @@
 {
   "name": "example-g4",
   "architecture": "stm32g4",
+  "mcu": "stm32g491",
   "memory": {
     "flash_base": 134217728,
     "flash_size": 524288,
@@ -22,6 +23,7 @@
     "factory": "build/Release/board.factory.bin"
   },
   "traffic": {"iterations": 10000, "max_payload": 128, "queue_depth": 0, "immediate_dispatch": true},
+  "board": {"strict_mmio": false, "clocks": [], "connections": [], "dma_routes": []},
   "ota": {"chunk_size": 512},
   "peripherals": [
     {"type": "imu", "name": "imu1"},

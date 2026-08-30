@@ -1,6 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use firmware_sim::{core::ArchitectureKind, layout::BoardLayout, simulator};
+use firmware_sim::{
+    core::{ArchitectureKind, McuKind},
+    layout::BoardLayout,
+    simulator,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -53,6 +57,8 @@ enum Command {
         #[arg(long)]
         arch: ArchitectureKind,
     },
+    /// Print the exact STM32 silicon models packaged in this image.
+    ListMcus,
 }
 
 fn main() -> Result<()> {
@@ -119,6 +125,10 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", firmware_sim::report::bay(&report));
             }
+        }
+        Command::ListMcus => {
+            let catalog: Vec<_> = McuKind::ALL.into_iter().map(McuKind::descriptor).collect();
+            println!("{}", serde_json::to_string_pretty(&catalog)?);
         }
     }
     Ok(())

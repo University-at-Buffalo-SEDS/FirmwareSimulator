@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SEDS firmware simulator board layout",
   "type": "object",
-  "required": ["name", "architecture", "memory", "artifacts"],
+  "required": ["name", "architecture", "mcu", "memory", "artifacts"],
   "properties": {
     "name": {"type": "string", "minLength": 1},
     "architecture": {"enum": ["stm32g4", "stm32h5", "stm32u5"]},
+    "mcu": {"enum": ["stm32g491", "stm32h523", "stm32u585"]},
     "memory": {
       "type": "object",
       "required": ["flash_base", "flash_size", "ram_regions", "bootloader_size", "slot_a_base", "slot_a_size", "erase_size", "write_alignment", "sedsnet_pool"],
@@ -48,6 +49,7 @@
         "firmware": {"type": "string", "minLength": 1},
         "bootloader": {"type": "string", "minLength": 1},
         "factory": {"type": "string", "minLength": 1},
+        "updated_firmware": {"type": "string", "minLength": 1},
         "ota": {"type": "string", "minLength": 1}
       },
       "additionalProperties": false
@@ -93,7 +95,85 @@
     },
     "ota": {
       "type": "object",
-      "properties": {"chunk_size": {"type": "integer", "minimum": 1}},
+      "properties": {
+        "chunk_size": {"type": "integer", "minimum": 1},
+        "firmware_driven": {"type": "boolean"},
+        "start_after_ms": {"type": "integer", "minimum": 0},
+        "inter_byte_us": {"type": "integer", "minimum": 0},
+        "transport": {
+          "type": "object",
+          "required": ["kind", "peripheral"],
+          "properties": {
+            "kind": {"enum": ["uart", "can", "usb", "sdmmc"]},
+            "peripheral": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
+            "can_id": {"type": "integer", "minimum": 0, "maximum": 536870911},
+            "mtu": {"type": "integer", "minimum": 1, "maximum": 64},
+            "endpoint": {"type": "integer", "minimum": 0, "maximum": 7}
+          },
+          "additionalProperties": false
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "symbol"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+              "image": {"enum": ["old", "new", "recovery"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "power_cuts": {
+          "type": "object",
+          "properties": {
+            "every_flash_operation": {"type": "boolean"},
+            "events": {"type": "array", "items": {"enum": ["erase_start", "erase_complete", "program_unit", "option_commit"]}},
+            "reboot_time_ms": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "board": {
+      "type": "object",
+      "properties": {
+        "strict_mmio": {"type": "boolean"},
+        "clocks": {"type": "array", "items": {
+          "type": "object", "required": ["peripheral", "frequency_hz"],
+          "properties": {"peripheral": {"type": "string", "minLength": 1}, "frequency_hz": {"type": "integer", "minimum": 1}},
+          "additionalProperties": false
+        }},
+        "connections": {"type": "array", "items": {
+          "type": "object", "required": ["from", "to"],
+          "properties": {"from": {"type": "string", "minLength": 1}, "to": {"type": "string", "minLength": 1}, "active_low": {"type": "boolean"}},
+          "additionalProperties": false
+        }},
+        "pins": {"type": "array", "items": {
+          "type": "object", "required": ["gpio", "pin", "initial"],
+          "properties": {"gpio": {"type": "string", "minLength": 1}, "pin": {"type": "integer", "minimum": 0}, "initial": {"enum": ["low", "high", "floating"]}},
+          "additionalProperties": false
+        }},
+        "dma_routes": {"type": "array", "items": {
+          "type": "object", "required": ["request", "controller", "channel"],
+          "properties": {"request": {"type": "string", "minLength": 1}, "controller": {"type": "string", "minLength": 1}, "channel": {"type": "integer", "minimum": 0}},
+          "additionalProperties": false
+        }},
+        "security": {
+          "type": "object",
+          "properties": {
+            "trustzone": {"type": "boolean"},
+            "secure_regions": {"type": "array", "items": {
+              "type": "object", "required": ["name", "base", "size"],
+              "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"}, "base": {"type": "integer", "minimum": 0}, "size": {"type": "integer", "minimum": 1}},
+              "additionalProperties": false
+            }}
+          },
+          "additionalProperties": false
+        }
+      },
       "additionalProperties": false
     },
     "peripherals": {
@@ -111,6 +191,8 @@
           "bits": {"type": "integer", "minimum": 1, "maximum": 16},
           "channels": {"type": "integer", "minimum": 1},
           "max_psi": {"type": "number", "exclusiveMinimum": 0}
+          ,"channel_samples": {"type": "array", "items": {"type": "integer", "minimum": 0}}
+          ,"noise_lsb": {"type": "integer", "minimum": 0}
         },
         "dependentRequired": {"model": ["bus"], "bus": ["model"]},
         "additionalProperties": false

@@ -1,5 +1,5 @@
 use crate::layout::MemoryLayout;
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -18,6 +18,12 @@ pub struct UpdateReport {
     pub interruption_points_tested: usize,
     pub original_sha256: String,
     pub updated_sha256: String,
+    pub old_image_boot_points: usize,
+    pub new_image_boot_points: usize,
+    pub recovery_required_points: usize,
+    pub all_flash_operation_boundaries_tested: bool,
+    pub cpu_reboots_executed: bool,
+    pub updated_image_from_artifact: bool,
 }
 
 pub struct Flash {
@@ -64,6 +70,12 @@ impl Flash {
         }
         Ok(())
     }
+
+    pub fn read(&self, offset: usize, length: usize) -> Result<&[u8]> {
+        self.bytes
+            .get(offset..offset + length)
+            .ok_or_else(|| anyhow::anyhow!("read outside flash"))
+    }
 }
 
 pub fn interruption_matrix(
@@ -87,38 +99,146 @@ pub fn interruption_matrix(
         UpdateStrategy::RecoveryTransport
     };
     let chunks = transfer.len().div_ceil(chunk_size);
-    let mut cuts = vec![
-        0,
-        1.min(chunks),
-        chunks / 2,
-        chunks.saturating_sub(1),
-        chunks,
-    ];
-    cuts.sort_unstable();
-    cuts.dedup();
     let (old_hash, new_hash) = (digest(original), digest(updated_image));
     ensure!(
         old_hash != new_hash,
         "simulated next firmware must differ from the installed image"
     );
-    for cut in &cuts {
-        let received = (*cut * chunk_size).min(transfer.len());
-        let boot_hash = digest(if received == transfer.len() {
-            updated_image
+    let flash_size: usize = memory.flash_size.try_into()?;
+    let erase_size: usize = memory.erase_size.try_into()?;
+    let write_alignment: usize = memory.write_alignment.try_into()?;
+    let slot_a: usize = memory
+        .slot_a_base
+        .saturating_sub(memory.flash_base)
+        .try_into()?;
+    ensure!(
+        original.len() <= memory.slot_a_size as usize,
+        "original exceeds slot A"
+    );
+    ensure!(
+        updated_image.len() <= memory.slot_a_size as usize,
+        "updated image exceeds slot A"
+    );
+    let mut flash = Flash::new(flash_size, erase_size, write_alignment);
+    flash.program(slot_a, original)?;
+    let mut old_points = 0;
+    let mut new_points = 0;
+    let mut recovery_points = 0;
+    let mut operations = 0;
+    let classify = |flash: &Flash, new_offset: Option<usize>| -> Result<(bool, bool)> {
+        let old_valid = digest(flash.read(slot_a, original.len())?) == old_hash;
+        let new_valid = if let Some(offset) = new_offset {
+            digest(flash.read(offset, updated_image.len())?) == new_hash
         } else {
-            original
-        });
+            digest(flash.read(slot_a, updated_image.len())?) == new_hash
+        };
+        Ok((old_valid, new_valid))
+    };
+    let record = |flash: &Flash,
+                  new_offset: Option<usize>,
+                  old_points: &mut usize,
+                  new_points: &mut usize,
+                  recovery_points: &mut usize|
+     -> Result<()> {
+        match classify(flash, new_offset)? {
+            (_, true) => *new_points += 1,
+            (true, false) => *old_points += 1,
+            (false, false) => *recovery_points += 1,
+        }
+        Ok(())
+    };
+
+    let destination = match strategy {
+        UpdateStrategy::DualSlot => Some(
+            memory
+                .slot_b_base
+                .context("dual-slot update has no slot B base")?
+                .saturating_sub(memory.flash_base)
+                .try_into()?,
+        ),
+        _ => None,
+    };
+    record(
+        &flash,
+        destination,
+        &mut old_points,
+        &mut new_points,
+        &mut recovery_points,
+    )?;
+
+    if strategy == UpdateStrategy::DeltaOnly {
+        let staging = memory
+            .delta_base
+            .context("delta update has no staging base")?
+            .saturating_sub(memory.flash_base) as usize;
         ensure!(
-            boot_hash == old_hash || boot_hash == new_hash,
-            "power loss left no bootable image"
+            transfer.len() <= memory.delta_size.unwrap_or(0) as usize,
+            "OTA transfer exceeds delta staging area"
         );
+        for (index, payload) in transfer.chunks(chunk_size).enumerate() {
+            let offset = staging + index * chunk_size;
+            let aligned_offset = offset / write_alignment * write_alignment;
+            ensure!(
+                aligned_offset == offset,
+                "OTA chunk size is not write aligned"
+            );
+            flash.program(offset, payload)?;
+            operations += 1;
+            record(
+                &flash,
+                destination,
+                &mut old_points,
+                &mut new_points,
+                &mut recovery_points,
+            )?;
+        }
     }
+
+    let target = destination.unwrap_or(slot_a);
+    let erase_length = updated_image.len().div_ceil(erase_size) * erase_size;
+    for offset in (0..erase_length).step_by(erase_size) {
+        flash.erase(target + offset, erase_size)?;
+        operations += 1;
+        record(
+            &flash,
+            destination,
+            &mut old_points,
+            &mut new_points,
+            &mut recovery_points,
+        )?;
+    }
+    for (index, payload) in updated_image.chunks(chunk_size).enumerate() {
+        let offset = target + index * chunk_size;
+        ensure!(
+            offset & (write_alignment - 1) == 0,
+            "OTA chunk size is not write aligned"
+        );
+        flash.program(offset, payload)?;
+        operations += 1;
+        record(
+            &flash,
+            destination,
+            &mut old_points,
+            &mut new_points,
+            &mut recovery_points,
+        )?;
+    }
+    ensure!(
+        new_points > 0,
+        "completed update did not produce the new image"
+    );
     Ok(UpdateReport {
         strategy,
         chunks,
-        interruption_points_tested: cuts.len(),
+        interruption_points_tested: operations + 1,
         original_sha256: old_hash,
         updated_sha256: new_hash,
+        old_image_boot_points: old_points,
+        new_image_boot_points: new_points,
+        recovery_required_points: recovery_points,
+        all_flash_operation_boundaries_tested: true,
+        cpu_reboots_executed: false,
+        updated_image_from_artifact: false,
     })
 }
 fn digest(data: &[u8]) -> String {

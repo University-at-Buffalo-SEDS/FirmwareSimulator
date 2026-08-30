@@ -1,0 +1,9 @@
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+gpdma: DMA.SedsStm32Gpdma @ sysbus 0x40020000
+    channels: 16
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpdma.cs
+cache: Memory.SedsStm32Cache @ sysbus 0x40030400
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Cache.cs

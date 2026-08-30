@@ -13,7 +13,10 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     fs::create_dir_all(root.join("build")).unwrap();
     fs::write(root.join("build/firmware.img"), vec![0x11; 4096]).unwrap();
     fs::write(root.join("build/bootloader.bin"), vec![0x22; 1024]).unwrap();
-    fs::write(root.join("build/factory.bin"), vec![0x33; 8192]).unwrap();
+    let mut factory = vec![0x33; 8192];
+    factory[0..4].copy_from_slice(&0x2001_c000_u32.to_le_bytes());
+    factory[4..8].copy_from_slice(&0x0800_4001_u32.to_le_bytes());
+    fs::write(root.join("build/factory.bin"), factory).unwrap();
     fs::write(root.join("build/update.seds"), vec![0x44; 2048]).unwrap();
     let mut elf = vec![0_u8; 88];
     elf[0..6].copy_from_slice(b"\x7fELF\x01\x01");
@@ -40,6 +43,7 @@ fn file_defined_board_and_firmware_run_end_to_end() {
         serde_json::to_vec_pretty(&json!({
             "name": "integration-board",
             "architecture": "stm32g4",
+            "mcu": "stm32g491",
             "memory": {
                 "flash_base": 134217728,
                 "flash_size": 524288,

@@ -12,6 +12,8 @@ fn devices_survive_fault_and_disconnect_behaviors() {
         bits: None,
         channels: None,
         max_psi: None,
+        channel_samples: Vec::new(),
+        noise_lsb: None,
     };
     let mut imu = base("imu", "imu1");
     imu.failure_every = Some(3);
@@ -52,6 +54,8 @@ fn report_identifies_instruction_coupled_devices() {
         bits: None,
         channels: None,
         max_psi: None,
+        channel_samples: Vec::new(),
+        noise_lsb: None,
     };
     let report = exercise_all(&[coupled], 1, 1).unwrap();
     assert!(report[0].instruction_coupled);

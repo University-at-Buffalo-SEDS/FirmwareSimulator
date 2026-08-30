@@ -11,8 +11,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
     {
         private enum Device { Barometer, Gyroscope, Accelerometer }
 
-        public SedsFlightSensorBus()
+        public SedsFlightSensorBus(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
         {
+            this.failureEvery = failureEvery;
+            this.disconnectAfter = disconnectAfter;
             Reset();
         }
 
@@ -20,6 +22,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
         {
             if(position == 0)
             {
+                transactions++;
+                faulted = transactions > disconnectAfter || (failureEvery != 0 && transactions % failureEvery == 0);
                 address = (byte)(value & 0x7f);
                 reading = (value & 0x80) != 0;
                 if(reading && address == 0)
@@ -31,6 +35,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 position++;
                 return 0;
             }
+
+            if(faulted) return 0xff;
 
             if(!reading)
             {
@@ -65,6 +71,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
             position = 0;
             zeroReads = 0;
             reading = false;
+            transactions = 0;
+            faulted = false;
             // BMP390 calibration bytes: deterministic non-zero coefficients.
             for(byte register = 0x31; register <= 0x45; register++)
                 registers[Key(Device.Barometer, register)] = (byte)(0x20 + register);
@@ -101,28 +109,43 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private int position;
         private int zeroReads;
         private bool reading;
+        private bool faulted;
+        private ulong transactions;
+        private readonly ulong failureEvery;
+        private readonly ulong disconnectAfter;
     }
 
     public sealed class SedsNeoM9N : ISPIPeripheral
     {
-        public SedsNeoM9N()
+        public SedsNeoM9N(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
         {
+            this.failureEvery = failureEvery;
+            this.disconnectAfter = disconnectAfter;
             Reset();
         }
 
         public byte Transmit(byte value)
         {
+            if(position++ == 0)
+            {
+                transactions++;
+                faulted = transactions > disconnectAfter || (failureEvery != 0 && transactions % failureEvery == 0);
+            }
+            if(faulted) return 0xff;
             // Host clocks data with 0xff. Configuration bytes are accepted;
             // the deterministic NMEA stream resumes on subsequent clocks.
             if(output.Count == 0) FillNmea();
             return output.Dequeue();
         }
 
-        public void FinishTransmission() { }
+        public void FinishTransmission() { position = 0; }
 
         public void Reset()
         {
             output.Clear();
+            position = 0;
+            transactions = 0;
+            faulted = false;
             FillNmea();
         }
 
@@ -135,5 +158,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
         }
 
         private readonly Queue<byte> output = new Queue<byte>();
+        private int position;
+        private ulong transactions;
+        private bool faulted;
+        private readonly ulong failureEvery;
+        private readonly ulong disconnectAfter;
     }
 }

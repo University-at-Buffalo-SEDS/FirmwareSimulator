@@ -1,5 +1,5 @@
 use firmware_sim::{
-    core::{Architecture, ArchitectureKind, FixedPool},
+    core::{Architecture, ArchitectureKind, FixedPool, McuKind},
     layout::{MemoryLayout, MemoryRegion},
 };
 
@@ -12,6 +12,40 @@ fn validates_all_architectures() {
     ] {
         firmware_sim::simulator::self_test(kind).unwrap();
     }
+}
+
+#[test]
+fn exact_mcu_must_match_architecture_and_capacity() {
+    let mut memory = MemoryLayout {
+        flash_base: 0x08000000,
+        flash_size: 0x80000,
+        ram_regions: vec![MemoryRegion {
+            name: "sram".into(),
+            base: 0x20000000,
+            size: 0x1c000,
+        }],
+        bootloader_size: 0x4000,
+        slot_a_base: 0x08004000,
+        slot_a_size: 0x74000,
+        slot_b_base: None,
+        slot_b_size: None,
+        delta_base: None,
+        delta_size: None,
+        erase_size: 0x800,
+        write_alignment: 8,
+        sedsnet_pool: 4096,
+    };
+    let architecture = Architecture::for_kind(ArchitectureKind::Stm32g4);
+    architecture
+        .validate_mcu(McuKind::Stm32g491, &memory)
+        .unwrap();
+    assert!(architecture
+        .validate_mcu(McuKind::Stm32h523, &memory)
+        .is_err());
+    memory.flash_size += 1;
+    assert!(architecture
+        .validate_mcu(McuKind::Stm32g491, &memory)
+        .is_err());
 }
 
 #[test]
@@ -120,12 +154,13 @@ fn rejects_overlapping_physical_ram_banks() {
 fn crash_snapshot_exposes_cortex_m_fault_state() {
     use firmware_sim::{
         core::CrashDiagnostic,
-        layout::{Artifacts, BoardLayout, ExecutionConfig, OtaConfig},
+        layout::{Artifacts, BoardConfig, BoardLayout, ExecutionConfig, OtaConfig},
         traffic::TrafficConfig,
     };
     let layout = BoardLayout {
         name: "debug-board".into(),
         architecture: ArchitectureKind::Stm32h5,
+        mcu: McuKind::Stm32h523,
         memory: MemoryLayout {
             flash_base: 0x08000000,
             flash_size: 0x80000,
@@ -151,16 +186,18 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
             firmware: "firmware.bin".into(),
             bootloader: "boot.bin".into(),
             factory: "factory.bin".into(),
+            updated_firmware: None,
             ota: None,
         },
         execution: ExecutionConfig::default(),
         traffic: TrafficConfig::default(),
         ota: OtaConfig::default(),
+        board: BoardConfig::default(),
         peripherals: vec![],
     };
     let diagnostic =
         CrashDiagnostic::capture(&layout, 7, "peripheral_execution", "bus fault".into());
-    assert!(diagnostic.registers.pc >= 0x08004000);
-    assert_eq!(diagnostic.registers.xpsr & (1 << 24), 1 << 24);
-    assert!(diagnostic.fault_registers.sfsr.is_some());
+    assert!(diagnostic.registers.is_none());
+    assert!(diagnostic.fault_registers.is_none());
+    assert!(diagnostic.note.contains("never emitted"));
 }

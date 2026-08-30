@@ -1,0 +1,22 @@
+flashBacking: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x80000
+physicalFlash: MTD.SedsStm32FlashController @ sysbus 0x40022000
+    flash: flashBacking
+    mcu: "stm32h523"
+    eraseSize: 0x2000
+    writeAlignment: 16
+    flashBase: 0x08000000
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Flash.cs
+sensorSmoke: Sensors.SedsFlightSensorBus @ spi1
+    failureEvery: 3
+    disconnectAfter: 10
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs
+adcSmoke: Sensors.SedsStm32Adc @ sysbus 0x42228000
+    bits: 12
+    channels: 4
+    failureEvery: 5
+    disconnectAfter: 20
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs

@@ -1,0 +1,7 @@
+adc: Sensors.SedsStm32Adc @ sysbus 0x50000000
+    bits: 12
+    channels: 3
+    samples: "100,2000,4095"
+    noiseLsb: 0
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs

@@ -24,10 +24,6 @@ jobs:
 
   image:
     needs: rust-tests
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [stm32g4, stm32h5, stm32u5]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,25 +34,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
         run: |
+          IMAGE="${IMAGE,,}"
           docker build \
-            --build-arg SIM_ARCH=${{ matrix.arch }} \
-            --label org.opencontainers.image.source=https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator \
-            -t ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} .
-      - name: Run packaged self-test
-        run: docker run --rm ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} self-test --arch ${{ matrix.arch }}
-      - name: Validate Renode MCU platform
-        shell: bash
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" .
+      - name: Run all packaged MCU self-tests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
         run: |
-          case "${{ matrix.arch }}" in
-            stm32g4) platform=stm32g491.repl ;;
-            stm32h5) platform=stm32h523.repl ;;
-            stm32u5) platform=stm32u585.repl ;;
-          esac
-          docker run --rm --entrypoint /opt/renode/renode \
-            ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }} \
-            --disable-xwt --console --execute \
-            "mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/${platform}; quit"
+          IMAGE="${IMAGE,,}"
+          check_renode() {
+            output="$(docker run --rm --entrypoint /opt/renode/renode "$IMAGE:${GITHUB_SHA}" \
+              --disable-xwt --console --execute "$1" 2>&1)"
+            printf '%s\n' "$output"
+            if printf '%s\n' "$output" | grep -Eiq \
+              'there was an error executing command|fatal error|could not compile|error E[0-9]+|CPU abort|trying to execute code outside RAM or ROM'; then
+              return 1
+            fi
+            shift
+            for expected in "$@"; do
+              if ! printf '%s\n' "$output" | grep -Fq "$expected"; then
+                echo "missing Renode contract output: $expected" >&2
+                return 1
+              fi
+            done
+          }
+          for arch in stm32g4 stm32h5 stm32u5; do
+            docker run --rm "$IMAGE:${GITHUB_SHA}" self-test --arch "$arch"
+          done
+          for platform in stm32g491.repl stm32h523.repl stm32u585.repl; do
+            check_renode \
+              "mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/${platform}; quit"
+          done
+          for mcu in stm32g491 stm32h523 stm32u585; do
+            check_renode \
+              "mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/${mcu}.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/${mcu}-peripherals.repl; quit"
+          done
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32g491-peripherals.repl; cpu AssembleBlock 0x08000000 "ldr r0, =0x40022008; ldr r1, =0x45670123; str r1, [r0]; ldr r1, =0xCDEF89AB; str r1, [r0]; ldr r0, =0x40022014; movs r1, #1; str r1, [r0]; ldr r0, =0x08010000; ldr r1, =0x12345678; str r1, [r0]; ldr r1, =0xABCDEF00; str r1, [r0, #4]; b ."; physicalFlash EndHostLoading; physicalFlash ArmPowerCut 1; cpu SetRegister 13 0x2001BFF0; cpu PC 0x08000000; emulation RunFor "0.0001s"; physicalFlash GetPowerCutTriggered; physicalFlash GetOperationTrace; python "[(e.Peripheral.Reset() if hasattr(e.Peripheral, 'Reset') else None) for e in monitor.Machine.GetRegisteredPeripherals() if e.Name not in ('sysbus', 'flashBacking')]"; physicalFlash DisarmPowerCut; sysbus ReadDoubleWord 0x08010000; python "from Antmicro.Renode.Core.CAN import CANMessageFrame; monitor.Machine[\"sysbus.fdcan1\"].OnFrameReceived(CANMessageFrame(0x321, System.Array[System.Byte]([1,2,3])))"; sysbus ReadDoubleWord 0x48000010; sysbus WriteDoubleWord 0x48000000 1; sysbus WriteDoubleWord 0x48000018 1; sysbus ReadDoubleWord 0x48000010; quit' 'True' 'program_unit' '0x12345678'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32h523-peripherals.repl; sysbus WriteDoubleWord 0x08040000 0x12345678; sysbus WriteDoubleWord 0x40022004 0x45670123; sysbus WriteDoubleWord 0x40022004 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x80000024; sysbus ReadDoubleWord 0x08040000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32u585-peripherals.repl; sysbus WriteDoubleWord 0x08100000 0x12345678; sysbus WriteDoubleWord 0x40022008 0x45670123; sysbus WriteDoubleWord 0x40022008 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x10802; sysbus ReadDoubleWord 0x08100000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/gpdma-cache-contract.repl; sysbus WriteDoubleWord 0x20000000 0x44332211; sysbus WriteDoubleWord 0x40020110 0x4040; sysbus WriteDoubleWord 0x40020118 4; sysbus WriteDoubleWord 0x4002011c 0x20000000; sysbus WriteDoubleWord 0x40020120 0x20000020; sysbus WriteDoubleWord 0x40020100 1; sysbus ReadDoubleWord 0x20000020; cache WriteDoubleWord 0 2; cache GetInvalidations; quit' '0x44332211' '0x0000000000000001'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/adc-contract.repl; sysbus WriteDoubleWord 0x50000030 0x80; sysbus WriteDoubleWord 0x50000008 5; sysbus ReadDoubleWord 0x50000040; quit' '0x00000FFF'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/trustzone-contract.repl; cpu SAURegionNumber 0; cpu SAURegionBaseAddress 0x08002000; cpu SAURegionLimitAddress 0x08002FE1; cpu SAUControl 1; cpu TrustZoneEnabled; cpu SAUControl; quit' 'True' '0x00000001'
+          check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; python "monitor.Machine[\"sysbus.usb\"].InjectPacket(System.Array[System.Byte]([1,2,3]), 1)"; usb GetBytesInjected; python "monitor.Machine[\"sysbus.sdmmc\"].LoadCardBytes(System.Array[System.Byte]([17,34,51,68]))"; sdmmc GetCardPresent; quit' '0x0000000000000003' 'True'
       - name: Push image
         if: github.event_name == 'push'
-        run: docker push ghcr.io/university-at-buffalo-seds/firmwaresimulator:${{ matrix.arch }}
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          IMAGE="${IMAGE,,}"
+          docker push "$IMAGE:${GITHUB_SHA}"
+          docker push "$IMAGE:latest"
