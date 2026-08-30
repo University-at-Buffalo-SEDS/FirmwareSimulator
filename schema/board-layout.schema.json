@@ -5,8 +5,33 @@
   "required": ["name", "architecture", "mcu", "memory", "artifacts"],
   "properties": {
     "name": {"type": "string", "minLength": 1},
-    "architecture": {"enum": ["stm32g4", "stm32h5", "stm32u5"]},
-    "mcu": {"enum": ["stm32g491", "stm32h523", "stm32u585"]},
+    "architecture": {"enum": ["stm32", "stm32g4", "stm32h5", "stm32u5"]},
+    "mcu": {"type": "string", "pattern": "^stm32[a-z0-9]+$"},
+    "mcu_descriptor": {
+      "type": "object",
+      "required": ["name", "architecture", "core_model", "platform_file", "flash_profile", "flash_base", "flash_size", "ram_base", "ram_size", "erase_size", "write_alignment", "trustzone_capable"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^stm32[a-z0-9]+$"},
+        "architecture": {"enum": ["stm32", "stm32g4", "stm32h5", "stm32u5"]},
+        "core_model": {"type": "string", "pattern": "^cortex-m[a-z0-9+.-]+$"},
+        "platform_file": {"type": "string", "minLength": 1},
+        "platform_from_firmware": {"type": "boolean"},
+        "flash_profile": {"enum": ["stm32g4", "stm32h5", "stm32u5"]},
+        "flash_base": {"type": "integer", "minimum": 0},
+        "flash_size": {"type": "integer", "minimum": 1},
+        "ram_base": {"type": "integer", "minimum": 0},
+        "ram_size": {"type": "integer", "minimum": 1},
+        "erase_size": {"type": "integer", "minimum": 1},
+        "write_alignment": {"type": "integer", "minimum": 1},
+        "trustzone_capable": {"type": "boolean"},
+        "uart_ota": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "can_ota": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "usb_ota": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "sdmmc_ota": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "board_validated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
     "memory": {
       "type": "object",
       "required": ["flash_base", "flash_size", "ram_regions", "bootloader_size", "slot_a_base", "slot_a_size", "erase_size", "write_alignment", "sedsnet_pool"],
@@ -193,6 +218,7 @@
           "max_psi": {"type": "number", "exclusiveMinimum": 0}
           ,"channel_samples": {"type": "array", "items": {"type": "integer", "minimum": 0}}
           ,"noise_lsb": {"type": "integer", "minimum": 0}
+          ,"capacity_bytes": {"type": "integer", "minimum": 512, "multipleOf": 512}
         },
         "dependentRequired": {"model": ["bus"], "bus": ["model"]},
         "additionalProperties": false

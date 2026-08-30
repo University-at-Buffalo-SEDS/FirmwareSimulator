@@ -132,7 +132,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             node.name,
             elf.display()
         );
-        Architecture::for_kind(layout.architecture).validate_mcu(layout.mcu(), &layout.memory)?;
+        Architecture::for_kind(layout.architecture)
+            .validate_mcu(layout.resolve_mcu_descriptor()?, &layout.memory)?;
         crate::elf::validate_elf(
             &elf,
             &layout.memory,
@@ -145,7 +146,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             &overlay,
             crate::execution::render_peripheral_overlay(&layout)?,
         )?;
-        let configured_platform = crate::execution::materialize_platform(&layout, &node_scratch)?;
+        let configured_platform =
+            crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
         script += &format!(
             "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",

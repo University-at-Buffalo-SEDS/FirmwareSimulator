@@ -1,5 +1,5 @@
 use crate::{
-    core::{ArchitectureKind, McuKind},
+    core::{ArchitectureKind, McuDescriptor, McuKind},
     peripherals::PeripheralSpec,
     traffic::TrafficConfig,
 };
@@ -15,6 +15,10 @@ pub struct BoardLayout {
     pub name: String,
     pub architecture: ArchitectureKind,
     pub mcu: McuKind,
+    /// Optional exact silicon descriptor. This lets a firmware repository add
+    /// a part and its Renode platform without rebuilding the simulator image.
+    #[serde(default)]
+    pub mcu_descriptor: Option<McuDescriptor>,
     pub memory: MemoryLayout,
     pub artifacts: Artifacts,
     #[serde(default)]
@@ -35,11 +39,37 @@ impl BoardLayout {
             .with_context(|| format!("parsing layout {}", path.display()))?;
         normalize_legacy_layout(&mut value)
             .with_context(|| format!("normalizing layout {}", path.display()))?;
-        serde_json::from_value(value).with_context(|| format!("parsing layout {}", path.display()))
+        let layout: Self = serde_json::from_value(value)
+            .with_context(|| format!("parsing layout {}", path.display()))?;
+        layout.resolve_mcu_descriptor()?;
+        Ok(layout)
     }
 
-    pub fn mcu(&self) -> McuKind {
-        self.mcu
+    pub fn mcu(&self) -> &McuKind {
+        &self.mcu
+    }
+
+    pub fn resolve_mcu_descriptor(&self) -> Result<&McuDescriptor> {
+        let descriptor = match &self.mcu_descriptor {
+            Some(descriptor) => {
+                if descriptor.name != self.mcu.as_str() {
+                    bail!(
+                        "mcu_descriptor name {} does not match mcu {}",
+                        descriptor.name,
+                        self.mcu
+                    );
+                }
+                descriptor
+            }
+            None => self.mcu.descriptor().with_context(|| {
+                format!(
+                    "MCU {} is not built in; add an exact mcu_descriptor to the board layout",
+                    self.mcu
+                )
+            })?,
+        };
+        descriptor.validate_definition()?;
+        Ok(descriptor)
     }
 }
 
@@ -453,7 +483,7 @@ mod tests {
         .unwrap();
 
         let layout = BoardLayout::load(&path).unwrap();
-        assert_eq!(layout.mcu, McuKind::Stm32h523);
+        assert_eq!(layout.mcu, McuKind::new("stm32h523"));
         assert_eq!(layout.memory.ram_regions[0].base, 0x2000_0000);
         assert_eq!(layout.memory.ram_regions[0].size, 278528);
         assert_eq!(layout.artifacts.elf.to_str(), Some("build/Firmware.elf"));

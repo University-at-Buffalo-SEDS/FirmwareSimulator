@@ -55,7 +55,8 @@ struct Images {
 
 pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
     ensure!(!layout.name.is_empty(), "board name cannot be empty");
-    Architecture::for_kind(layout.architecture).validate_mcu(layout.mcu(), &layout.memory)?;
+    Architecture::for_kind(layout.architecture)
+        .validate_mcu(layout.resolve_mcu_descriptor()?, &layout.memory)?;
     let images = load_images(layout, root)?;
     crate::elf::validate_elf(
         &root.join(&layout.artifacts.elf),
@@ -110,7 +111,7 @@ pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
         );
     }
     validate_machine_config(layout)?;
-    crate::execution::validate_platform_config(layout)?;
+    crate::execution::validate_platform_config(layout, root)?;
     Ok(())
 }
 
@@ -146,18 +147,18 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
         );
         match transport.kind {
             crate::layout::OtaTransportKind::Uart => {
-                let supported = layout.mcu().descriptor().uart_ota;
+                let supported = &layout.resolve_mcu_descriptor()?.uart_ota;
                 ensure!(
-                    supported.contains(&transport.peripheral.as_str()),
+                    supported.iter().any(|name| name == &transport.peripheral),
                     "{} has no modeled UART named {}",
                     layout.mcu(),
                     transport.peripheral
                 );
             }
             crate::layout::OtaTransportKind::Can => {
-                let supported = layout.mcu().descriptor().can_ota;
+                let supported = &layout.resolve_mcu_descriptor()?.can_ota;
                 ensure!(
-                    supported.contains(&transport.peripheral.as_str()),
+                    supported.iter().any(|name| name == &transport.peripheral),
                     "{} has no modeled CAN controller named {}",
                     layout.mcu(),
                     transport.peripheral
@@ -172,9 +173,9 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
                 );
             }
             crate::layout::OtaTransportKind::Usb => {
-                let supported = layout.mcu().descriptor().usb_ota;
+                let supported = &layout.resolve_mcu_descriptor()?.usb_ota;
                 ensure!(
-                    supported.contains(&transport.peripheral.as_str()),
+                    supported.iter().any(|name| name == &transport.peripheral),
                     "{} has no modeled USB controller named {}",
                     layout.mcu(),
                     transport.peripheral
@@ -185,9 +186,9 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
                 );
             }
             crate::layout::OtaTransportKind::Sdmmc => {
-                let supported = layout.mcu().descriptor().sdmmc_ota;
+                let supported = &layout.resolve_mcu_descriptor()?.sdmmc_ota;
                 ensure!(
-                    supported.contains(&transport.peripheral.as_str()),
+                    supported.iter().any(|name| name == &transport.peripheral),
                     "{} has no modeled SDMMC controller named {}",
                     layout.mcu(),
                     transport.peripheral
@@ -260,6 +261,7 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
             pin.gpio
         );
         let pin_count = match layout.architecture {
+            ArchitectureKind::Stm32 => 16 * 16,
             ArchitectureKind::Stm32g4 => 7 * 16,
             ArchitectureKind::Stm32h5 => 8 * 16,
             ArchitectureKind::Stm32u5 => 9 * 16,
@@ -308,7 +310,7 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
     }
     if layout.board.security.trustzone {
         ensure!(
-            layout.mcu().descriptor().trustzone_capable,
+            layout.resolve_mcu_descriptor()?.trustzone_capable,
             "{} has no Arm TrustZone core",
             layout.mcu()
         );

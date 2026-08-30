@@ -3,7 +3,7 @@
 Architecture constants live in one file per family under `core/`, while executable MCU descriptions live under `renode/platforms/`. Shared partition validation and register serialization stay architecture-neutral.
 
 STM32 ordering codes are silicon descriptions, not board descriptions. Add a
-new `McuKind` for each exact supported part and reuse an existing architecture
+new descriptor for each exact supported part and reuse an existing architecture
 and peripheral model only when the reference manuals identify the same IP
 generation and register layout. Cortex-M0/M0+/M3/M7/M23/M33/M55 cores can be
 added through Renode's corresponding CPU model; adding the core alone does not
@@ -11,10 +11,13 @@ make that STM32 part supported.
 
 ## Add another STM32 family
 
-1. Add an exact `McuKind` and `McuDescriptor` in `core/architecture.rs`; record
-   its architecture, Renode core/platform, physical capacity, flash geometry,
-   TrustZone capability, and available OTA controllers. Add an
-   `ArchitectureKind` only when this is a genuinely new family/IP profile.
+1. Add an exact descriptor to `mcu/catalog.json`, or put `mcu_descriptor` and a
+   firmware-relative platform in the board repository when the part can reuse
+   an existing flash profile. Record its architecture, Renode core/platform,
+   physical capacity, flash geometry, TrustZone capability, and available OTA
+   controllers. Use the generic `stm32` execution profile for an external exact
+   platform; add an `ArchitectureKind` only for a genuinely new bundled IP
+   profile.
 2. Create `core/stm32xx.rs` with vector alignment and default flash/RAM sizes, then register the module in `core/mod.rs` and `Architecture::for_kind`.
 3. Decide whether the core is M4, M33, or another profile and expose its additional fault/security registers in `core/debug.rs`.
 4. Add it to the JSON schema, unified-image self-test loop, platform smoke overlays, and layout-validation tests.

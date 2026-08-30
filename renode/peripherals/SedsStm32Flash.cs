@@ -201,13 +201,13 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             uint page;
             long bankOffset = 0;
-            if(mcu == "stm32h523")
+            if(mcu == "stm32h5")
             {
                 page = (value >> 6) & 0x1f;
                 if((value & (1u << 31)) != 0) bankOffset = flash.Size / 2;
             }
             else page = (value >> 3) & 0x7f;
-            if(mcu == "stm32u585" && (value & (1u << 11)) != 0) bankOffset = flash.Size / 2;
+            if(mcu == "stm32u5" && (value & (1u << 11)) != 0) bankOffset = flash.Size / 2;
             var offset = checked(bankOffset + (long)page * eraseSize);
             if(offset < 0 || offset > flash.Size - eraseSize)
             {
@@ -243,8 +243,8 @@ namespace Antmicro.Renode.Peripherals.MTD
             machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => machine.Pause());
         }
 
-        private bool IsH5 { get { return mcu == "stm32h523"; } }
-        private bool IsTrustZonePart { get { return IsH5 || mcu == "stm32u585"; } }
+        private bool IsH5 { get { return mcu == "stm32h5"; } }
+        private bool IsTrustZonePart { get { return IsH5 || mcu == "stm32u5"; } }
         private long AccessControlOffset { get { return 0x00; } }
         private uint AccessControlResetValue { get { return IsH5 ? 0x00000003u : 0u; } }
         private uint AccessControlWritableMask
@@ -252,7 +252,7 @@ namespace Antmicro.Renode.Peripherals.MTD
             get
             {
                 if(IsH5) return 0x0000013fu; // LATENCY, WRHIGHFREQ, PRFTEN
-                if(mcu == "stm32u585") return 0x0000790fu; // LATENCY, PRFTEN, low-power controls
+                if(mcu == "stm32u5") return 0x0000790fu; // LATENCY, PRFTEN, low-power controls
                 return 0x00047f0fu; // LATENCY, prefetch/cache, power-down, debugger access
             }
         }

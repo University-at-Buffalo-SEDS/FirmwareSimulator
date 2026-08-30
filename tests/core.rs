@@ -1,11 +1,34 @@
 use firmware_sim::{
-    core::{Architecture, ArchitectureKind, FixedPool, McuKind},
+    core::{mcu_catalog, Architecture, ArchitectureKind, FixedPool, McuKind},
     layout::{MemoryLayout, MemoryRegion},
 };
 
 #[test]
+fn every_built_in_mcu_descriptor_is_valid_and_has_a_matching_platform() {
+    for descriptor in mcu_catalog() {
+        descriptor.validate_definition().unwrap();
+        let platform = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("renode/platforms")
+                .join(&descriptor.platform_file),
+        )
+        .unwrap();
+        assert!(platform.contains(&format!("cpuType: \"{}\"", descriptor.core_model)));
+    }
+    assert!(mcu_catalog().len() >= 22);
+    assert_eq!(
+        mcu_catalog()
+            .iter()
+            .filter(|mcu| mcu.board_validated)
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn validates_all_architectures() {
     for kind in [
+        ArchitectureKind::Stm32,
         ArchitectureKind::Stm32g4,
         ArchitectureKind::Stm32h5,
         ArchitectureKind::Stm32u5,
@@ -37,14 +60,14 @@ fn exact_mcu_must_match_architecture_and_capacity() {
     };
     let architecture = Architecture::for_kind(ArchitectureKind::Stm32g4);
     architecture
-        .validate_mcu(McuKind::Stm32g491, &memory)
+        .validate_mcu(McuKind::new("stm32g491").descriptor().unwrap(), &memory)
         .unwrap();
     assert!(architecture
-        .validate_mcu(McuKind::Stm32h523, &memory)
+        .validate_mcu(McuKind::new("stm32h523").descriptor().unwrap(), &memory)
         .is_err());
     memory.flash_size += 1;
     assert!(architecture
-        .validate_mcu(McuKind::Stm32g491, &memory)
+        .validate_mcu(McuKind::new("stm32g491").descriptor().unwrap(), &memory)
         .is_err());
 }
 
@@ -160,7 +183,8 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
     let layout = BoardLayout {
         name: "debug-board".into(),
         architecture: ArchitectureKind::Stm32h5,
-        mcu: McuKind::Stm32h523,
+        mcu: McuKind::new("stm32h523"),
+        mcu_descriptor: None,
         memory: MemoryLayout {
             flash_base: 0x08000000,
             flash_size: 0x80000,

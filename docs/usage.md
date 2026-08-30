@@ -20,8 +20,8 @@ Use `./build.py test --all --release` to build and simulate release artifacts.
 
 The board bridge first pulls the repository-linked
 `ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest` image. That one
-image contains every supported platform; `mcu` in `board.json` selects the
-platform. If the registry is unavailable, the bridge reuses a previously built
+image contains every reusable platform profile; `mcu` and optional
+`mcu_descriptor` in `board.json` select the silicon and platform. If the registry is unavailable, the bridge reuses a previously built
 local image or shallow-clones `FirmwareSimulator/main` and builds one. A sibling
 checkout is not selected implicitly. Set `SEDS_FIRMWARE_SIM_IMAGE` to test a
 different published image, or set `SEDS_FIRMWARE_SIM_SOURCE` to explicitly

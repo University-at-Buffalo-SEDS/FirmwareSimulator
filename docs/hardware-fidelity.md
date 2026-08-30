@@ -5,11 +5,11 @@ FirmwareSimulator is a deterministic virtual platform, not a cycle-accurate elec
 ## Executed behavior
 
 - Cortex-M4F/M33 instructions execute in pinned Renode virtual time.
-- An exact `mcu` selects STM32G491, STM32H523, or STM32U585 and constrains total flash/RAM capacity.
+- An exact `mcu` selects a bundled or inline silicon descriptor and constrains CPU model, platform, total flash/RAM capacity, flash geometry, security, and modeled OTA controllers. G491, H523, and U585 have real-board validation; other bundled descriptors have platform-contract validation.
 - Direct firmware boot and combined-factory boot execute independently. Factory flash contains only the factory binary; MSP and PC come from its vector table, while ELFs provide symbols only.
 - Selected CAN, UART, USB, SPI, I2C, timers, ADC, SDMMC, and DMA paths run through MMIO/wire models. Configured failure/disconnect schedules are passed into instruction-coupled sensor models.
 - Embedded flash is executable `MappedMemory` and remains nonvolatile across
-  peripheral resets. A CPU memory-access hook on the G491/H523/U585 controller
+  peripheral resets. A CPU memory-access hook on the selected G4/H5/U5 flash profile
   observes the stores made by real firmware and enforces HAL unlock, status
   clearing, bank/page erase selection, aligned contiguous programming units,
   and one-to-zero transitions. Host-side image loading is sealed before reset

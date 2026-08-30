@@ -3,6 +3,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
 COPY src src
 COPY core core
+COPY mcu mcu
 COPY peripherals peripherals
 COPY renode renode
 COPY tests tests
@@ -27,8 +28,8 @@ RUN case "$TARGETARCH" in \
     && rm /tmp/renode.tar.gz
 
 FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim
-# One image contains every supported MCU platform. The board layout's `mcu`
-# field selects STM32G491, STM32H523, or STM32U585 at runtime.
+# One image contains every bundled profile. The board layout's `mcu` and
+# optional runtime descriptor select the exact silicon platform.
 LABEL org.opencontainers.image.source="https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator"
 ENV SIM_ARCH=all
 ENV FIRMWARE_SIM_ROOT=/opt/firmware-sim

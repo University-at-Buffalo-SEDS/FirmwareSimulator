@@ -4,8 +4,8 @@ Each firmware repository owns `sim/board.json`. The file and its referenced arti
 
 Required sections:
 
-- `architecture`: CPU family (`stm32g4`, `stm32h5`, or `stm32u5`)
-- `mcu`: exact supported part (`stm32g491`, `stm32h523`, or `stm32u585`); it must match `architecture` and selects the platform from the unified image
+- `architecture`: execution profile (`stm32g4`, `stm32h5`, `stm32u5`, or `stm32` for an exact repository-supplied platform)
+- `mcu`: exact silicon line from `firmware-sim list-mcus`, or the name of an inline `mcu_descriptor`; it must match `architecture` and selects the platform at runtime
 - `memory`: BSP flash base/size, every physical RAM bank, bootloader and application partitions, erase/program alignment, and the independent SEDSNet main-pool budget
 - `artifacts`: linked firmware and bootloader ELFs, packaged application, bootloader binary, exact combined factory image, and optional `.seds` OTA file
 - `execution`: virtual runtime, optional PC tracing, and the symbol proving firmware startup completed (defaults to ThreadX `_tx_thread_schedule`)
@@ -81,11 +81,42 @@ nearby part merely because its firmware links.
 
 The checked-in MCU catalog records, in one descriptor, the exact core model,
 platform file, flash/SRAM limits, flash geometry, TrustZone capability, and OTA
-controller names. Adding another ordering code starts there; validation also
-checks that the referenced Renode platform declares the catalogued Cortex-M
-core. This supports Cortex-M0/M0+/M3/M4/M7/M23/M33/M55 additions without
-putting board wiring into the silicon definition, but each new part still needs
-its accurate platform and peripheral-IP implementation.
+controller names. A firmware repository can instead include that object as
+`mcu_descriptor`, set `platform_from_firmware` to `true`, and point
+`platform_file` at a repository-relative Renode platform. This permits new
+Cortex-M0/M0+/M3/M4/M7/M23/M33/M55 CPU and memory variants without rebuilding
+the simulator; use the generic `stm32` architecture profile for these external
+platforms. The descriptor must select an implemented `flash_profile`
+(`stm32g4`, `stm32h5`, or `stm32u5`); a different flash-controller generation
+still requires a simulator model before firmware-driven erase/program behavior
+can be claimed.
+
+For example, a repository-owned Cortex-M7 platform can be selected without a
+new container build:
+
+```json
+"architecture": "stm32",
+"mcu": "stm32custom",
+"mcu_descriptor": {
+  "name": "stm32custom",
+  "architecture": "stm32",
+  "core_model": "cortex-m7",
+  "platform_file": "sim/stm32custom.repl",
+  "platform_from_firmware": true,
+  "flash_profile": "stm32g4",
+  "flash_base": 134217728,
+  "flash_size": 2097152,
+  "ram_base": 536870912,
+  "ram_size": 524288,
+  "erase_size": 2048,
+  "write_alignment": 8,
+  "trustzone_capable": false
+}
+```
+
+The values above demonstrate the schema, not a real-device hardware claim; copy
+the actual part values and platform MMIO map from its reference manual. The
+selected flash profile must match its controller behavior, not merely its CPU.
 
 ## Board clocks and wires
 

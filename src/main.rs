@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use firmware_sim::{
-    core::{ArchitectureKind, McuKind},
+    core::{mcu_catalog, ArchitectureKind},
     layout::BoardLayout,
     simulator,
 };
@@ -127,8 +127,7 @@ fn main() -> Result<()> {
             }
         }
         Command::ListMcus => {
-            let catalog: Vec<_> = McuKind::ALL.into_iter().map(McuKind::descriptor).collect();
-            println!("{}", serde_json::to_string_pretty(&catalog)?);
+            println!("{}", serde_json::to_string_pretty(mcu_catalog())?);
         }
     }
     Ok(())

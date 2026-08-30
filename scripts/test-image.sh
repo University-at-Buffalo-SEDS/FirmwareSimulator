@@ -24,11 +24,14 @@ check_renode() {
 }
 
 catalog="$(docker run --rm "$image" list-mcus)"
-for mcu in stm32g491 stm32h523 stm32u585; do
+for mcu in \
+    stm32g431 stm32g441 stm32g471 stm32g473 stm32g474 stm32g483 stm32g484 stm32g491 stm32g4a1 \
+    stm32h523 stm32h533 stm32h543 stm32h553 stm32h562 stm32h563 stm32h573 \
+    stm32u575 stm32u585 stm32u595 stm32u599 stm32u5a5 stm32u5a9; do
     printf '%s\n' "$catalog" | grep -Fq "$mcu"
 done
 
-for arch in stm32g4 stm32h5 stm32u5; do
+for arch in stm32 stm32g4 stm32h5 stm32u5; do
     docker run --rm "$image" self-test --arch "$arch"
 done
 

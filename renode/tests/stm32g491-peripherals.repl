@@ -2,7 +2,7 @@ flashBacking: Memory.MappedMemory @ sysbus 0x08000000
     size: 0x80000
 physicalFlash: MTD.SedsStm32FlashController @ sysbus 0x40022000
     flash: flashBacking
-    mcu: "stm32g491"
+    mcu: "stm32g4"
     eraseSize: 0x800
     writeAlignment: 8
     flashBase: 0x08000000

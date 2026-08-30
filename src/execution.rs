@@ -1,7 +1,4 @@
-use crate::{
-    core::{ArchitectureKind, McuKind},
-    layout::BoardLayout,
-};
+use crate::{core::ArchitectureKind, layout::BoardLayout};
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::{
@@ -148,7 +145,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         crate::elf::flash_image(&elf, &layout.memory, "firmware")?,
     )
     .context("writing firmware flash image")?;
-    let platform = materialize_platform(layout, scratch.path())?;
+    let platform = materialize_platform(layout, root, scratch.path())?;
     let peripheral_overlay = scratch.path().join("peripherals.repl");
     fs::write(&peripheral_overlay, render_peripheral_overlay(layout)?)
         .context("writing Renode peripheral overlay")?;
@@ -389,23 +386,30 @@ fn find_renode() -> Result<PathBuf> {
     }
     bail!("Renode is required for instruction-level execution; set RENODE or use the simulator Docker image")
 }
-fn platform_path(kind: McuKind) -> PathBuf {
-    simulator_root()
-        .join("renode/platforms")
-        .join(kind.descriptor().platform_file)
+fn platform_path(layout: &BoardLayout, firmware_root: &Path) -> Result<PathBuf> {
+    let descriptor = layout.resolve_mcu_descriptor()?;
+    Ok(if descriptor.platform_from_firmware {
+        firmware_root.join(&descriptor.platform_file)
+    } else {
+        simulator_root()
+            .join("renode/platforms")
+            .join(&descriptor.platform_file)
+    })
 }
 
-pub(crate) fn materialize_platform(layout: &BoardLayout, directory: &Path) -> Result<PathBuf> {
-    let source = platform_path(layout.mcu());
+pub(crate) fn materialize_platform(
+    layout: &BoardLayout,
+    firmware_root: &Path,
+    directory: &Path,
+) -> Result<PathBuf> {
+    let descriptor = layout.resolve_mcu_descriptor()?;
+    let source = platform_path(layout, firmware_root)?;
     let mut text = fs::read_to_string(&source)
         .with_context(|| format!("reading platform {}", source.display()))?;
     ensure!(
-        text.contains(&format!(
-            "cpuType: \"{}\"",
-            layout.mcu().descriptor().core_model
-        )),
+        text.contains(&format!("cpuType: \"{}\"", descriptor.core_model)),
         "MCU catalog core {} does not match platform {}",
-        layout.mcu().descriptor().core_model,
+        descriptor.core_model,
         source.display()
     );
     if layout.board.clocks.is_empty() && !layout.board.security.trustzone {
@@ -477,9 +481,9 @@ pub(crate) fn materialize_platform(layout: &BoardLayout, directory: &Path) -> Re
     Ok(output)
 }
 
-pub(crate) fn validate_platform_config(layout: &BoardLayout) -> Result<()> {
+pub(crate) fn validate_platform_config(layout: &BoardLayout, firmware_root: &Path) -> Result<()> {
     let scratch = tempfile::tempdir().context("validating configured MCU platform")?;
-    materialize_platform(layout, scratch.path()).map(|_| ())
+    materialize_platform(layout, firmware_root, scratch.path()).map(|_| ())
 }
 
 fn simulator_root() -> PathBuf {
@@ -495,7 +499,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         "flashBacking: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\nphysicalFlash: MTD.SedsStm32FlashController @ sysbus 0x40022000\n    flash: flashBacking\n    mcu: \"{}\"\n    eraseSize: {}\n    writeAlignment: {}\n    flashBase: 0x{:08x}\n    preinit:\n        include @{}\n",
         layout.memory.flash_base,
         layout.memory.flash_size,
-        layout.mcu(),
+        layout.resolve_mcu_descriptor()?.flash_profile,
         layout.memory.erase_size,
         layout.memory.write_alignment,
         layout.memory.flash_base,
@@ -1093,7 +1097,10 @@ mod tests {
         render_peripheral_overlay, render_script, render_security_script, ExecutionArtifacts,
         ExecutionScenario,
     };
-    use crate::layout::{BoardLayout, MemoryProbe};
+    use crate::{
+        core::ArchitectureKind,
+        layout::{BoardLayout, MemoryProbe},
+    };
 
     fn layout(architecture: &str, peripherals: &str) -> BoardLayout {
         let mcu = match architecture {
@@ -1380,7 +1387,7 @@ mod tests {
             frequency_hz: 80_000_000,
         });
         let scratch = tempfile::tempdir().unwrap();
-        let configured = materialize_platform(&board, scratch.path()).unwrap();
+        let configured = materialize_platform(&board, scratch.path(), scratch.path()).unwrap();
         let platform = std::fs::read_to_string(configured).unwrap();
         let uart = platform
             .split("uart4:")
@@ -1419,11 +1426,48 @@ mod tests {
         let mut board = layout("stm32u5", "[]");
         board.board.security.trustzone = true;
         let scratch = tempfile::tempdir().unwrap();
-        let configured = materialize_platform(&board, scratch.path()).unwrap();
+        let configured = materialize_platform(&board, scratch.path(), scratch.path()).unwrap();
         let platform = std::fs::read_to_string(configured).unwrap();
         let cpu = platform.split("cpu:").nth(1).unwrap();
         assert!(cpu.contains("cpuType: \"cortex-m33\""));
         assert!(cpu.contains("enableTrustZone: true"));
+    }
+
+    #[test]
+    fn firmware_repository_can_supply_an_exact_mcu_platform() {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("custom.repl"),
+            "nvic: IRQControllers.NVIC @ sysbus 0xE000E000\n    IRQ -> cpu@0\ncpu: CPU.CortexM @ sysbus\n    cpuType: \"cortex-m7\"\n    nvic: nvic\n",
+        )
+        .unwrap();
+        let mut board = layout("stm32g4", "[]");
+        board.architecture = ArchitectureKind::Stm32;
+        board.mcu = crate::core::McuKind::new("stm32f777");
+        board.mcu_descriptor = Some(crate::core::McuDescriptor {
+            name: "stm32f777".into(),
+            architecture: ArchitectureKind::Stm32,
+            core_model: "cortex-m7".into(),
+            platform_file: "custom.repl".into(),
+            platform_from_firmware: true,
+            flash_profile: "stm32g4".into(),
+            flash_base: 0x0800_0000,
+            flash_size: 0x20_0000,
+            ram_base: 0x2000_0000,
+            ram_size: 0x8_0000,
+            erase_size: 0x800,
+            write_alignment: 8,
+            trustzone_capable: false,
+            uart_ota: vec![],
+            can_ota: vec![],
+            usb_ota: vec![],
+            sdmmc_ota: vec![],
+            board_validated: false,
+        });
+        let configured = materialize_platform(&board, scratch.path(), scratch.path()).unwrap();
+        assert_eq!(configured, scratch.path().join("custom.repl"));
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("mcu: \"stm32g4\""));
     }
 
     #[test]

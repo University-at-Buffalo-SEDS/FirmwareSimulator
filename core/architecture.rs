@@ -2,22 +2,22 @@ use crate::layout::MemoryLayout;
 use anyhow::{ensure, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{fmt, sync::OnceLock};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum McuKind {
-    Stm32g491,
-    Stm32h523,
-    Stm32u585,
-}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct McuKind(String);
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct McuDescriptor {
-    pub name: &'static str,
+    pub name: String,
     pub architecture: ArchitectureKind,
-    pub core_model: &'static str,
-    pub platform_file: &'static str,
+    pub core_model: String,
+    pub platform_file: String,
+    #[serde(default)]
+    pub platform_from_firmware: bool,
+    pub flash_profile: String,
     pub flash_base: u64,
     pub flash_size: u64,
     pub ram_base: u64,
@@ -25,98 +25,92 @@ pub struct McuDescriptor {
     pub erase_size: u64,
     pub write_alignment: u64,
     pub trustzone_capable: bool,
-    pub uart_ota: &'static [&'static str],
-    pub can_ota: &'static [&'static str],
-    pub usb_ota: &'static [&'static str],
-    pub sdmmc_ota: &'static [&'static str],
+    #[serde(default)]
+    pub uart_ota: Vec<String>,
+    #[serde(default)]
+    pub can_ota: Vec<String>,
+    #[serde(default)]
+    pub usb_ota: Vec<String>,
+    #[serde(default)]
+    pub sdmmc_ota: Vec<String>,
+    #[serde(default)]
+    pub board_validated: bool,
 }
 
 impl McuKind {
-    pub const ALL: [Self; 3] = [Self::Stm32g491, Self::Stm32h523, Self::Stm32u585];
-
-    pub fn descriptor(self) -> McuDescriptor {
-        match self {
-            Self::Stm32g491 => McuDescriptor {
-                name: "stm32g491",
-                architecture: ArchitectureKind::Stm32g4,
-                core_model: "cortex-m4f",
-                platform_file: "stm32g491.repl",
-                flash_base: 0x0800_0000,
-                flash_size: 0x80000,
-                ram_base: 0x2000_0000,
-                ram_size: 0x1c000,
-                erase_size: 0x800,
-                write_alignment: 8,
-                trustzone_capable: false,
-                uart_ota: &["uart4", "usart1"],
-                can_ota: &["fdcan1", "fdcan2"],
-                usb_ota: &["usb"],
-                sdmmc_ota: &[],
-            },
-            Self::Stm32h523 => McuDescriptor {
-                name: "stm32h523",
-                architecture: ArchitectureKind::Stm32h5,
-                core_model: "cortex-m33",
-                platform_file: "stm32h523.repl",
-                flash_base: 0x0800_0000,
-                flash_size: 0x80000,
-                ram_base: 0x2000_0000,
-                ram_size: 0x44000,
-                erase_size: 0x2000,
-                write_alignment: 16,
-                trustzone_capable: true,
-                uart_ota: &[],
-                can_ota: &["fdcan1"],
-                usb_ota: &["usb"],
-                sdmmc_ota: &["sdmmc"],
-            },
-            Self::Stm32u585 => McuDescriptor {
-                name: "stm32u585",
-                architecture: ArchitectureKind::Stm32u5,
-                core_model: "cortex-m33",
-                platform_file: "stm32u585.repl",
-                flash_base: 0x0800_0000,
-                flash_size: 0x200000,
-                ram_base: 0x2000_0000,
-                ram_size: 0xc0000,
-                erase_size: 0x2000,
-                write_alignment: 16,
-                trustzone_capable: true,
-                uart_ota: &["usart1"],
-                can_ota: &["fdcan1"],
-                usb_ota: &["usb"],
-                sdmmc_ota: &["sdmmc1"],
-            },
-        }
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into().to_ascii_lowercase())
     }
 
-    pub fn architecture(self) -> ArchitectureKind {
-        self.descriptor().architecture
+    pub fn descriptor(&self) -> Option<&'static McuDescriptor> {
+        mcu_catalog()
+            .iter()
+            .find(|descriptor| descriptor.name == self.0)
     }
 
-    pub fn for_architecture(kind: ArchitectureKind) -> Self {
-        match kind {
-            ArchitectureKind::Stm32g4 => Self::Stm32g491,
-            ArchitectureKind::Stm32h5 => Self::Stm32h523,
-            ArchitectureKind::Stm32u5 => Self::Stm32u585,
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
+}
 
-    fn flash_program_geometry(self) -> (u64, u64) {
-        let descriptor = self.descriptor();
-        (descriptor.erase_size, descriptor.write_alignment)
+pub fn mcu_catalog() -> &'static [McuDescriptor] {
+    static CATALOG: OnceLock<Vec<McuDescriptor>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("../mcu/catalog.json"))
+            .expect("the built-in MCU catalog must be valid")
+    })
+}
+
+impl McuDescriptor {
+    pub fn validate_definition(&self) -> Result<()> {
+        ensure!(!self.name.is_empty(), "MCU descriptor name cannot be empty");
+        ensure!(
+            self.core_model.starts_with("cortex-m"),
+            "MCU {} has an invalid Cortex-M core model",
+            self.name
+        );
+        let platform = std::path::Path::new(&self.platform_file);
+        ensure!(
+            !self.platform_file.is_empty()
+                && !platform.is_absolute()
+                && !platform
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir)),
+            "MCU {} platform_file must be a nonempty relative path",
+            self.name
+        );
+        ensure!(
+            matches!(
+                self.flash_profile.as_str(),
+                "stm32g4" | "stm32h5" | "stm32u5"
+            ),
+            "MCU {} uses unsupported flash_profile {}",
+            self.name,
+            self.flash_profile
+        );
+        ensure!(
+            self.flash_size > 0
+                && self.ram_size > 0
+                && self.erase_size.is_power_of_two()
+                && self.write_alignment.is_power_of_two(),
+            "MCU {} has invalid memory or flash geometry",
+            self.name
+        );
+        Ok(())
     }
 }
 
 impl fmt::Display for McuKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.descriptor().name)
+        f.write_str(&self.0)
     }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ArchitectureKind {
+    /// Runtime-supplied exact STM32 platform (any supported Cortex-M model).
+    Stm32,
     Stm32g4,
     Stm32h5,
     Stm32u5,
@@ -125,6 +119,7 @@ pub enum ArchitectureKind {
 impl fmt::Display for ArchitectureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Stm32 => "stm32",
             Self::Stm32g4 => "stm32g4",
             Self::Stm32h5 => "stm32h5",
             Self::Stm32u5 => "stm32u5",
@@ -143,6 +138,12 @@ pub struct Architecture {
 impl Architecture {
     pub fn for_kind(kind: ArchitectureKind) -> Self {
         match kind {
+            ArchitectureKind::Stm32 => Self {
+                kind,
+                vector_alignment: 0x200,
+                default_flash_size: 512 * 1024,
+                default_ram_size: 128 * 1024,
+            },
             ArchitectureKind::Stm32g4 => Self {
                 kind,
                 vector_alignment: super::stm32g4::VECTOR_ALIGNMENT,
@@ -251,41 +252,48 @@ impl Architecture {
         Ok(())
     }
 
-    pub fn validate_mcu(&self, mcu: McuKind, memory: &MemoryLayout) -> Result<()> {
+    pub fn validate_mcu(&self, mcu: &McuDescriptor, memory: &MemoryLayout) -> Result<()> {
+        mcu.validate_definition()?;
         ensure!(
-            mcu.architecture() == self.kind,
-            "MCU {mcu} does not belong to architecture {}",
+            mcu.architecture == self.kind,
+            "MCU {} does not belong to architecture {}",
+            mcu.name,
             self.kind
         );
         self.validate(memory)?;
-        let descriptor = mcu.descriptor();
         ensure!(
-            memory.flash_size <= descriptor.flash_size,
-            "configured flash exceeds {mcu} physical flash"
+            memory.flash_size <= mcu.flash_size,
+            "configured flash exceeds {} physical flash",
+            mcu.name
         );
         ensure!(
-            memory.flash_base == descriptor.flash_base,
-            "{mcu} physical flash must start at 0x08000000"
+            memory.flash_base == mcu.flash_base,
+            "{} physical flash must start at 0x{:08x}",
+            mcu.name,
+            mcu.flash_base
         );
-        let physical_ram_base = descriptor.ram_base;
-        let physical_ram_end = physical_ram_base + descriptor.ram_size;
+        let physical_ram_base = mcu.ram_base;
+        let physical_ram_end = physical_ram_base + mcu.ram_size;
         for region in &memory.ram_regions {
             let end = region.base + region.size;
             ensure!(
                 region.base >= physical_ram_base && end <= physical_ram_end,
-                "RAM region {} is outside {mcu} physical SRAM",
-                region.name
+                "RAM region {} is outside {} physical SRAM",
+                region.name,
+                mcu.name
             );
         }
         let total_ram: u64 = memory.ram_regions.iter().map(|region| region.size).sum();
         ensure!(
-            total_ram <= descriptor.ram_size,
-            "configured RAM exceeds {mcu} physical RAM"
+            total_ram <= mcu.ram_size,
+            "configured RAM exceeds {} physical RAM",
+            mcu.name
         );
-        let (erase_size, write_alignment) = mcu.flash_program_geometry();
+        let (erase_size, write_alignment) = (mcu.erase_size, mcu.write_alignment);
         ensure!(
             memory.erase_size == erase_size && memory.write_alignment == write_alignment,
-            "{mcu} flash geometry requires erase_size {erase_size} and write_alignment {write_alignment}"
+            "{} flash geometry requires erase_size {erase_size} and write_alignment {write_alignment}",
+            mcu.name
         );
         Ok(())
     }

@@ -1,0 +1,200 @@
+[
+  {
+    "name": "stm32g431", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 131072,
+    "ram_base": 536870912, "ram_size": 32768,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g441", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 131072,
+    "ram_base": 536870912, "ram_size": 32768,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g471", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 131072,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g473", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 131072,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g474", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 131072,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g483", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 131072,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g484", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 131072,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32g491", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 114688,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["uart4", "usart1"], "can_ota": ["fdcan1", "fdcan2"],
+    "usb_ota": ["usb"], "sdmmc_ota": [], "board_validated": true
+  },
+  {
+    "name": "stm32g4a1", "architecture": "stm32g4", "core_model": "cortex-m4f",
+    "platform_file": "stm32g491.repl", "flash_profile": "stm32g4",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 114688,
+    "erase_size": 2048, "write_alignment": 8, "trustzone_capable": false,
+    "uart_ota": ["uart4", "usart1"], "can_ota": ["fdcan1", "fdcan2"],
+    "usb_ota": ["usb"], "sdmmc_ota": [], "board_validated": false
+  },
+  {
+    "name": "stm32h523", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 278528,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": true
+  },
+  {
+    "name": "stm32h533", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 524288,
+    "ram_base": 536870912, "ram_size": 278528,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32h563", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 2097152,
+    "ram_base": 536870912, "ram_size": 655360,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32h543", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 1048576,
+    "ram_base": 536870912, "ram_size": 311296,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32h553", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 1048576,
+    "ram_base": 536870912, "ram_size": 311296,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32h562", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 2097152,
+    "ram_base": 536870912, "ram_size": 655360,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32h573", "architecture": "stm32h5", "core_model": "cortex-m33",
+    "platform_file": "stm32h523.repl", "flash_profile": "stm32h5",
+    "flash_base": 134217728, "flash_size": 2097152,
+    "ram_base": 536870912, "ram_size": 655360,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": [], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc"], "board_validated": false
+  },
+  {
+    "name": "stm32u575", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 2097152,
+    "ram_base": 536870912, "ram_size": 786432,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": false
+  },
+  {
+    "name": "stm32u585", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 2097152,
+    "ram_base": 536870912, "ram_size": 786432,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": true
+  },
+  {
+    "name": "stm32u595", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 4194304,
+    "ram_base": 536870912, "ram_size": 2621440,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": false
+  },
+  {
+    "name": "stm32u599", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 4194304,
+    "ram_base": 536870912, "ram_size": 2621440,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": false
+  },
+  {
+    "name": "stm32u5a5", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 4194304,
+    "ram_base": 536870912, "ram_size": 2621440,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": false
+  },
+  {
+    "name": "stm32u5a9", "architecture": "stm32u5", "core_model": "cortex-m33",
+    "platform_file": "stm32u585.repl", "flash_profile": "stm32u5",
+    "flash_base": 134217728, "flash_size": 4194304,
+    "ram_base": 536870912, "ram_size": 2621440,
+    "erase_size": 8192, "write_alignment": 16, "trustzone_capable": true,
+    "uart_ota": ["usart1"], "can_ota": ["fdcan1"], "usb_ota": ["usb"],
+    "sdmmc_ota": ["sdmmc1"], "board_validated": false
+  }
+]
