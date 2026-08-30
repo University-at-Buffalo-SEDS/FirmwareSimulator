@@ -24,12 +24,18 @@ fn memory() -> MemoryLayout {
     }
 }
 
+fn delta_transfer(size: usize) -> Vec<u8> {
+    let mut transfer = vec![0x44; size];
+    transfer[..4].copy_from_slice(&0x4c43_4450u32.to_le_bytes());
+    transfer
+}
+
 #[test]
 fn tests_delta_power_loss_matrix() {
     let report = interruption_matrix(
         &vec![0x11; 4096],
         &vec![0x22; 4096],
-        &vec![0x44; 1024],
+        &delta_transfer(1024),
         &memory(),
         128,
     )
@@ -39,6 +45,19 @@ fn tests_delta_power_loss_matrix() {
     assert!(report.recovery_required_points > 0);
     assert!(report.all_flash_operation_boundaries_tested);
     assert!(!report.cpu_reboots_executed);
+}
+
+#[test]
+fn full_image_ota_uses_recovery_even_when_delta_staging_exists() {
+    let report = interruption_matrix(
+        &vec![0x11; 4096],
+        &vec![0x22; 4096],
+        &vec![0x55; 0x7000],
+        &memory(),
+        512,
+    )
+    .unwrap();
+    assert_eq!(report.strategy, UpdateStrategy::RecoveryTransport);
 }
 
 #[test]

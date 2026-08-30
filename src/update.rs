@@ -85,15 +85,23 @@ pub fn interruption_matrix(
     memory: &MemoryLayout,
     chunk_size: usize,
 ) -> Result<UpdateReport> {
+    const LAUNCHCORE_DELTA_MAGIC: u32 = 0x4c43_4450;
     ensure!(
         !original.is_empty() && !updated_image.is_empty(),
         "update images cannot be empty"
     );
     ensure!(!transfer.is_empty(), "OTA transfer cannot be empty");
     ensure!(chunk_size > 0, "OTA chunk_size must be positive");
+    let transfer_magic = transfer
+        .get(..4)
+        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
     let strategy = if memory.slot_b_size.unwrap_or(0) >= updated_image.len() as u64 {
         UpdateStrategy::DualSlot
-    } else if memory.delta_size.unwrap_or(0) > 0 {
+    } else if transfer_magic == Some(LAUNCHCORE_DELTA_MAGIC) {
+        ensure!(
+            memory.delta_base.is_some() && memory.delta_size.unwrap_or(0) > 0,
+            "delta OTA has no staging area"
+        );
         UpdateStrategy::DeltaOnly
     } else {
         UpdateStrategy::RecoveryTransport
