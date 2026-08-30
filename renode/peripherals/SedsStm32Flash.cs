@@ -33,6 +33,7 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         public uint ReadDoubleWord(long offset)
         {
+            if(offset == AccessControlOffset) return accessControl;
             if(offset == StatusOffset) return status;
             if(offset == ControlOffset) return control | (locked ? LockBit : 0u);
             return 0;
@@ -40,6 +41,15 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         public void WriteDoubleWord(long offset, uint value)
         {
+            if(offset == AccessControlOffset)
+            {
+                // FLASH_ACR is not protected by the program/erase lock. Cube HAL
+                // writes LATENCY before changing SYSCLK and immediately reads it
+                // back, so this register must retain the family-specific writable
+                // fields even though cache and power-down timing are not modeled.
+                accessControl = value & AccessControlWritableMask;
+                return;
+            }
             if(offset == KeyOffset)
             {
                 if(keyStage == 0 && value == 0x45670123u) keyStage = 1;
@@ -72,6 +82,7 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             locked = true;
             keyStage = 0;
+            accessControl = AccessControlResetValue;
             status = 0;
             control = 0;
             programming = false;
@@ -234,6 +245,17 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         private bool IsH5 { get { return mcu == "stm32h523"; } }
         private bool IsTrustZonePart { get { return IsH5 || mcu == "stm32u585"; } }
+        private long AccessControlOffset { get { return 0x00; } }
+        private uint AccessControlResetValue { get { return IsH5 ? 0x00000003u : 0u; } }
+        private uint AccessControlWritableMask
+        {
+            get
+            {
+                if(IsH5) return 0x0000013fu; // LATENCY, WRHIGHFREQ, PRFTEN
+                if(mcu == "stm32u585") return 0x0000790fu; // LATENCY, PRFTEN, low-power controls
+                return 0x00047f0fu; // LATENCY, prefetch/cache, power-down, debugger access
+            }
+        }
         private long KeyOffset { get { return IsH5 ? 0x04 : 0x08; } }
         private long StatusOffset { get { return IsTrustZonePart ? 0x20 : 0x10; } }
         private long StatusClearOffset { get { return IsH5 ? 0x30 : StatusOffset; } }
@@ -255,6 +277,7 @@ namespace Antmicro.Renode.Peripherals.MTD
         private readonly List<string> operationTrace = new List<string>();
         private bool locked;
         private int keyStage;
+        private uint accessControl;
         private uint status;
         private uint control;
         private bool programming;
