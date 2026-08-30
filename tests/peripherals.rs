@@ -39,7 +39,13 @@ fn devices_survive_fault_and_disconnect_behaviors() {
     .unwrap();
     assert_eq!(reports.len(), 6);
     assert_eq!(reports[0].injected_errors, 4);
+    assert_eq!(reports[0].expected_injected_errors, 4);
+    assert!(reports[0].faults_configured);
+    assert!(reports[0].fault_test_passed);
     assert_eq!(reports[1].disconnected_reads, 7);
+    assert_eq!(reports[1].expected_disconnected_reads, 7);
+    assert!(reports[1].fault_test_passed);
+    assert!(reports.iter().all(|report| report.fault_test_passed));
 }
 
 #[test]

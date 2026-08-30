@@ -33,11 +33,15 @@ pub struct DeviceReport {
     pub model: Option<String>,
     pub bus: Option<String>,
     pub instruction_coupled: bool,
+    pub faults_configured: bool,
     pub instruction_faults_configured: bool,
     pub behavioral_counts_only: bool,
     pub successful_reads: u64,
     pub injected_errors: u64,
+    pub expected_injected_errors: u64,
     pub disconnected_reads: u64,
+    pub expected_disconnected_reads: u64,
+    pub fault_test_passed: bool,
 }
 
 pub fn exercise_all(
@@ -55,18 +59,30 @@ pub fn exercise_all(
 fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceReport> {
     validate(spec)?;
     let mut rng = Lcg(seed.max(1));
+    let connected_attempts = spec
+        .disconnect_after
+        .map_or(iterations, |limit| iterations.min(limit));
+    let expected_injected_errors = spec
+        .failure_every
+        .filter(|period| *period > 0)
+        .map_or(0, |period| connected_attempts / period);
+    let expected_disconnected_reads = iterations.saturating_sub(connected_attempts);
     let mut report = DeviceReport {
         name: spec.name.clone(),
         kind: spec.kind.clone(),
         model: spec.model.clone(),
         bus: spec.bus.clone(),
         instruction_coupled: spec.model.is_some() && spec.bus.is_some(),
+        faults_configured: spec.failure_every.is_some() || spec.disconnect_after.is_some(),
         instruction_faults_configured: spec.model.is_some()
             && (spec.failure_every.is_some() || spec.disconnect_after.is_some()),
         behavioral_counts_only: true,
         successful_reads: 0,
         injected_errors: 0,
+        expected_injected_errors,
         disconnected_reads: 0,
+        expected_disconnected_reads,
+        fault_test_passed: false,
     };
     for attempt in 1..=iterations {
         if spec.disconnect_after.is_some_and(|limit| attempt > limit) {
@@ -81,6 +97,8 @@ fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceR
             report.successful_reads += 1;
         }
     }
+    report.fault_test_passed = report.injected_errors == report.expected_injected_errors
+        && report.disconnected_reads == report.expected_disconnected_reads;
     Ok(report)
 }
 

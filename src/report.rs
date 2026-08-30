@@ -48,8 +48,16 @@ pub fn simulation(report: &SimulationReport) -> String {
             ],
             vec![
                 "Peripheral models".into(),
-                "PASS".into(),
-                format!("{} exercised", report.devices.len()),
+                pass(report.devices.iter().all(|device| device.fault_test_passed)),
+                format!(
+                    "{} exercised; {} fault-injection schedules passed",
+                    report.devices.len(),
+                    report
+                        .devices
+                        .iter()
+                        .filter(|device| device.faults_configured)
+                        .count(),
+                ),
             ],
             vec![
                 "SEDSNet traffic model".into(),
@@ -92,8 +100,9 @@ pub fn simulation(report: &SimulationReport) -> String {
                 "Kind",
                 "Model / Bus",
                 "Reads",
-                "Errors",
-                "Disconnected",
+                "Fault test",
+                "Injected / Expected",
+                "Disconnected / Expected",
             ],
             report
                 .devices
@@ -108,8 +117,19 @@ pub fn simulation(report: &SimulationReport) -> String {
                             device.bus.as_deref().unwrap_or("-"),
                         ),
                         device.successful_reads.to_string(),
-                        device.injected_errors.to_string(),
-                        device.disconnected_reads.to_string(),
+                        if device.faults_configured {
+                            pass(device.fault_test_passed).into()
+                        } else {
+                            "N/A".into()
+                        },
+                        format!(
+                            "{} / {}",
+                            device.injected_errors, device.expected_injected_errors
+                        ),
+                        format!(
+                            "{} / {}",
+                            device.disconnected_reads, device.expected_disconnected_reads
+                        ),
                     ]
                 })
                 .collect(),

@@ -1,6 +1,6 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process};
 
-use firmware_sim::{layout::BoardLayout, simulator};
+use firmware_sim::{layout::BoardLayout, report, simulator};
 use serde_json::json;
 
 #[test]
@@ -85,6 +85,13 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     assert_ne!(report.update.original_sha256, report.update.updated_sha256);
     assert_eq!(report.ota_bytes, Some(2048));
     assert!(report.execution.instruction_execution_observed);
+    let rendered = report::simulation(&report);
+    assert!(rendered.contains("Fault test"));
+    assert!(rendered.contains("Injected / Expected"));
+    assert!(rendered.contains("Disconnected / Expected"));
+    assert!(rendered.contains("58 / 58"));
+    assert!(rendered.contains("100 / 100"));
+    assert!(rendered.contains("2 fault-injection schedules passed"));
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();
