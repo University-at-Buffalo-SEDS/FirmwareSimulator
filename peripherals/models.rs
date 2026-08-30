@@ -24,6 +24,8 @@ pub struct PeripheralSpec {
     pub channel_samples: Vec<u32>,
     #[serde(default)]
     pub noise_lsb: Option<u32>,
+    #[serde(default)]
+    pub capacity_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -122,7 +124,16 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
         ensure!(supported, "unsupported {0} model {model}", spec.kind);
     }
     match spec.kind.as_str() {
-        "imu" | "barometer" | "gps" | "storage" => Ok(()),
+        "imu" | "barometer" | "gps" => Ok(()),
+        "storage" => {
+            if let Some(capacity) = spec.capacity_bytes {
+                ensure!(
+                    capacity >= 512 && capacity % 512 == 0,
+                    "storage capacity_bytes must be a positive multiple of 512"
+                );
+            }
+            Ok(())
+        }
         "adc" => {
             ensure!(
                 (1..=16).contains(&spec.bits.unwrap_or(12)),

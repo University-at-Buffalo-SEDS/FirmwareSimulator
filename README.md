@@ -1,6 +1,6 @@
 # FirmwareSimulator
 
-A deterministic Rust orchestrator and Renode execution environment for SEDS embedded firmware. A board is described by JSON and passed beside its linked ELF and packaged artifacts. One container contains the STM32G491, STM32H523, and STM32U585 platforms; the layout selects the MCU at runtime.
+A deterministic Rust orchestrator and Renode execution environment for SEDS embedded firmware. A board is described by JSON and passed beside its linked ELF and packaged artifacts. One multi-architecture (`linux/amd64` and `linux/arm64`) container contains the STM32G491, STM32H523, and STM32U585 platforms; the layout selects the MCU at runtime.
 
 ## Repository layout
 

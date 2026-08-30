@@ -76,6 +76,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     );
     let factory_msp = u32::from_le_bytes(factory_bytes[0..4].try_into().unwrap());
     let factory_pc = u32::from_le_bytes(factory_bytes[4..8].try_into().unwrap());
+    let firmware_reset = crate::elf::reset_vector(&elf, &layout.memory, "firmware")?;
     ensure!(
         layout
             .execution
@@ -141,6 +142,12 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     }
     let renode = find_renode()?;
     let scratch = tempfile::tempdir().context("creating Renode scratch directory")?;
+    let firmware_image = scratch.path().join("firmware-flash.bin");
+    fs::write(
+        &firmware_image,
+        crate::elf::flash_image(&elf, &layout.memory, "firmware")?,
+    )
+    .context("writing firmware flash image")?;
     let platform = materialize_platform(layout, scratch.path())?;
     let peripheral_overlay = scratch.path().join("peripherals.repl");
     fs::write(&peripheral_overlay, render_peripheral_overlay(layout)?)
@@ -157,8 +164,10 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
                 elf: &elf,
                 bootloader_elf: &bootloader_elf,
                 factory: &factory,
+                firmware_image: &firmware_image,
             },
             ExecutionScenario {
+                firmware_reset,
                 factory_reset: (factory_msp, factory_pc),
                 trace: &trace,
                 ota: ota_bytes.as_deref(),
@@ -171,8 +180,9 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     let memory_profile = parse_memory_profile(layout, &combined)?;
     ensure!(
         observed_marker(&combined, "SEDS_FIRMWARE_BOOT_REACHED"),
-        "firmware never reached {}:\n{}",
+        "firmware never reached {}; final registers: {}\n{}",
         layout.execution.boot_success_symbol,
+        registers.join(", "),
         tail(&combined, 80)
     );
     ensure!(
@@ -258,8 +268,10 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
                         elf: &elf,
                         bootloader_elf: &bootloader_elf,
                         factory: &factory,
+                        firmware_image: &firmware_image,
                     },
                     ExecutionScenario {
+                        firmware_reset,
                         factory_reset: (factory_msp, factory_pc),
                         trace: &cut_trace,
                         ota: ota_bytes.as_deref(),
@@ -615,9 +627,15 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     source_root.join("SedsStm32Adc.cs").display()
                 ));
             }
-            (ArchitectureKind::Stm32u5, "sd_card", "sdmmc1") => {
+            (ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5, "sd_card", "sdmmc1") => {
+                let controller = if layout.architecture == ArchitectureKind::Stm32h5 {
+                    "sdmmc"
+                } else {
+                    "sdmmc1"
+                };
                 overlay.push_str(&format!(
-                    "sdmmc1:\n    FailureEvery: {}\n    DisconnectAfter: {}\n",
+                    "{controller}:\n    CardCapacityBytes: {}\n    FailureEvery: {}\n    DisconnectAfter: {}\n",
+                    peripheral.capacity_bytes.unwrap_or(4 * 1024 * 1024),
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX)
                 ));
@@ -640,15 +658,18 @@ fn render_wire(source: &str, target: &str) -> String {
         None => format!("{source}:\n    -> {target}\n"),
     }
 }
+
 #[derive(Clone, Copy)]
 struct ExecutionArtifacts<'a> {
     elf: &'a Path,
     bootloader_elf: &'a Path,
     factory: &'a Path,
+    firmware_image: &'a Path,
 }
 
 #[derive(Clone, Copy)]
 struct ExecutionScenario<'a> {
+    firmware_reset: (u32, u32, u32),
     factory_reset: (u32, u32),
     trace: &'a Path,
     ota: Option<&'a [u8]>,
@@ -666,13 +687,16 @@ fn render_script(
         elf,
         bootloader_elf,
         factory,
+        firmware_image,
     } = artifacts;
     let ExecutionScenario {
+        firmware_reset,
         factory_reset,
         trace,
         ota,
         power_cut_after,
     } = scenario;
+    let (firmware_msp, firmware_pc, firmware_vtor) = firmware_reset;
     let (factory_msp, factory_pc) = factory_reset;
     let sample_count = layout.execution.sample_count;
     let base_ms = layout.execution.virtual_time_ms / sample_count as u64;
@@ -740,7 +764,7 @@ fn render_script(
     };
     let security = render_security_script(layout);
     let board_initialization = render_board_initialization_script(layout);
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_msp, factory_pc, factory_symbol, tick_hook, outcome_hooks, factory_seconds, ota_script)
+    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_msp, firmware_pc, firmware_vtor, symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_msp, factory_pc, factory_symbol, tick_hook, outcome_hooks, factory_seconds, ota_script)
 }
 
 fn render_board_initialization_script(layout: &BoardLayout) -> String {
@@ -1195,6 +1219,17 @@ mod tests {
         );
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("sdmmc1:"));
+    }
+
+    #[test]
+    fn h5_sd_card_maps_logical_bus_to_platform_controller() {
+        let board = layout(
+            "stm32h5",
+            r#"[{"type":"storage","name":"sd","model":"sd_card","bus":"sdmmc1"}]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("sdmmc:"));
+        assert!(!overlay.contains("sdmmc1:"));
         assert!(overlay.contains("FailureEvery: 0"));
     }
 
@@ -1209,14 +1244,20 @@ mod tests {
                 elf: std::path::Path::new("firmware.elf"),
                 bootloader_elf: std::path::Path::new("bootloader.elf"),
                 factory: std::path::Path::new("factory.bin"),
+                firmware_image: std::path::Path::new("firmware-flash.bin"),
             },
             ExecutionScenario {
+                firmware_reset: (0x2001_bff0, 0x0800_4001, 0x0800_4200),
                 factory_reset: (0x2001_c000, 0x0800_0001),
                 trace: std::path::Path::new("trace.bin"),
                 ota: None,
                 power_cut_after: None,
             },
         );
+        let firmware = script.split("_firmware\"").nth(1).unwrap();
+        assert!(firmware.contains("cpu SetRegister 13 0x2001bff0"));
+        assert!(firmware.contains("cpu PC 0x08004001"));
+        assert!(firmware.contains("cpu VectorTableOffset 0x08004200"));
         let factory = script.split("_factory\"").nth(1).unwrap();
         assert!(factory.contains("LoadSymbolsFrom @firmware.elf"));
         assert!(factory.contains("LoadSymbolsFrom @bootloader.elf"));

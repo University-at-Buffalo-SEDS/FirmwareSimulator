@@ -118,7 +118,7 @@ pub fn simulation(report: &SimulationReport) -> String {
                         ),
                         device.successful_reads.to_string(),
                         if device.faults_configured {
-                            pass(device.fault_test_passed).into()
+                            pass(device.fault_test_passed)
                         } else {
                             "N/A".into()
                         },

@@ -3,7 +3,7 @@ use crate::{
     peripherals::PeripheralSpec,
     traffic::TrafficConfig,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -31,12 +31,128 @@ pub struct BoardLayout {
 impl BoardLayout {
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = fs::read(path).with_context(|| format!("reading layout {}", path.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("parsing layout {}", path.display()))
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing layout {}", path.display()))?;
+        normalize_legacy_layout(&mut value)
+            .with_context(|| format!("normalizing layout {}", path.display()))?;
+        serde_json::from_value(value).with_context(|| format!("parsing layout {}", path.display()))
     }
 
     pub fn mcu(&self) -> McuKind {
         self.mcu
     }
+}
+
+// v0.1 layouts selected the only MCU in each architecture implicitly and used a
+// single contiguous `ram_size`. Keep those packages runnable while v0.2's
+// explicit MCU/RAM-bank schema remains the canonical representation.
+fn normalize_legacy_layout(value: &mut serde_json::Value) -> Result<()> {
+    let root = value
+        .as_object_mut()
+        .context("board layout must be a JSON object")?;
+    let architecture = root
+        .get("architecture")
+        .and_then(serde_json::Value::as_str)
+        .context("missing string field `architecture`")?
+        .to_owned();
+
+    if !root.contains_key("mcu") {
+        let mcu = match architecture.as_str() {
+            "stm32g4" => "stm32g491",
+            "stm32h5" => "stm32h523",
+            "stm32u5" => "stm32u585",
+            other => bail!("cannot infer an MCU for legacy architecture {other}"),
+        };
+        root.insert("mcu".into(), serde_json::Value::String(mcu.into()));
+    }
+
+    let memory = root
+        .get_mut("memory")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("missing object field `memory`")?;
+    if !memory.contains_key("ram_regions") {
+        let size = memory
+            .get("ram_size")
+            .and_then(serde_json::Value::as_u64)
+            .context("missing `ram_regions` (legacy layouts may provide `ram_size`)")?;
+        if size == 0 {
+            bail!("legacy ram_size must be positive");
+        }
+        memory.insert(
+            "ram_regions".into(),
+            serde_json::json!([{"name": "sram", "base": 0x2000_0000_u64, "size": size}]),
+        );
+    }
+
+    let artifacts = root
+        .get_mut("artifacts")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("missing object field `artifacts`")?;
+    if !artifacts.contains_key("elf") {
+        let firmware = artifacts
+            .get("firmware")
+            .and_then(serde_json::Value::as_str)
+            .context("missing string field `artifacts.firmware`")?;
+        let stem = firmware
+            .strip_suffix(".launchcore.img")
+            .or_else(|| firmware.strip_suffix(".img"))
+            .context("cannot infer artifacts.elf from legacy firmware path")?;
+        artifacts.insert(
+            "elf".into(),
+            serde_json::Value::String(format!("{stem}.elf")),
+        );
+    }
+    if !artifacts.contains_key("bootloader_elf") {
+        let bootloader = artifacts
+            .get("bootloader")
+            .and_then(serde_json::Value::as_str)
+            .context("missing string field `artifacts.bootloader`")?;
+        let stem = bootloader
+            .strip_suffix(".bin")
+            .context("cannot infer artifacts.bootloader_elf from legacy bootloader path")?;
+        artifacts.insert(
+            "bootloader_elf".into(),
+            serde_json::Value::String(format!("{stem}.elf")),
+        );
+    }
+
+    if let Some(peripherals) = root
+        .get_mut("peripherals")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for peripheral in peripherals {
+            let Some(spec) = peripheral.as_object_mut() else {
+                continue;
+            };
+            if spec.get("type").and_then(serde_json::Value::as_str) != Some("adc")
+                || spec.contains_key("model")
+                || spec.contains_key("bus")
+            {
+                continue;
+            }
+            let Some(name) = spec
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let is_physical_adc = match architecture.as_str() {
+                "stm32g4" => matches!(name.as_str(), "adc1" | "adc2" | "adc3"),
+                "stm32h5" => name == "adc1",
+                "stm32u5" => matches!(name.as_str(), "adc1" | "adc4"),
+                _ => false,
+            };
+            if is_physical_adc {
+                spec.insert(
+                    "model".into(),
+                    serde_json::Value::String("stm32_adc".into()),
+                );
+                spec.insert("bus".into(), serde_json::Value::String(name));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -308,4 +424,44 @@ pub struct SecurityConfig {
     pub trustzone: bool,
     #[serde(default)]
     pub secure_regions: Vec<MemoryRegion>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoardLayout;
+    use crate::core::McuKind;
+    use std::fs;
+
+    #[test]
+    fn loads_legacy_single_ram_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("board.json");
+        fs::write(
+            &path,
+            r#"{
+                "name":"legacy-h5", "architecture":"stm32h5",
+                "memory":{"flash_base":134217728,"flash_size":524288,
+                    "ram_size":278528,"bootloader_size":16384,
+                    "slot_a_base":134234112,"slot_a_size":475136,
+                    "erase_size":8192,"write_alignment":16,"sedsnet_pool":1024},
+                "artifacts":{"firmware":"build/Firmware.launchcore.img",
+                    "bootloader":"build/FirmwareBootloader.bin",
+                    "factory":"build/Firmware.factory.bin"},
+                "peripherals":[{"type":"adc","name":"adc1","bits":12,"channels":4}]
+            }"#,
+        )
+        .unwrap();
+
+        let layout = BoardLayout::load(&path).unwrap();
+        assert_eq!(layout.mcu, McuKind::Stm32h523);
+        assert_eq!(layout.memory.ram_regions[0].base, 0x2000_0000);
+        assert_eq!(layout.memory.ram_regions[0].size, 278528);
+        assert_eq!(layout.artifacts.elf.to_str(), Some("build/Firmware.elf"));
+        assert_eq!(
+            layout.artifacts.bootloader_elf.to_str(),
+            Some("build/FirmwareBootloader.elf")
+        );
+        assert_eq!(layout.peripherals[0].model.as_deref(), Some("stm32_adc"));
+        assert_eq!(layout.peripherals[0].bus.as_deref(), Some("adc1"));
+    }
 }

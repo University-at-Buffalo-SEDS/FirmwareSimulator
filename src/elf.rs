@@ -77,6 +77,139 @@ pub fn validate_elf(path: &Path, memory: &MemoryLayout, label: &str) -> Result<(
     Ok(())
 }
 
+pub fn reset_vector(path: &Path, memory: &MemoryLayout, label: &str) -> Result<(u32, u32, u32)> {
+    let bytes =
+        fs::read(path).with_context(|| format!("reading {label} ELF {}", path.display()))?;
+    ensure!(
+        bytes.len() >= ELF32_HEADER_SIZE,
+        "{label} ELF header is truncated"
+    );
+    ensure!(
+        &bytes[0..6] == b"\x7fELF\x01\x01",
+        "{label} must be a 32-bit little-endian ELF"
+    );
+    let entry = u32_at(&bytes, 24)?;
+    let phoff = u32_at(&bytes, 28)? as usize;
+    let phentsize = u16_at(&bytes, 42)? as usize;
+    let phnum = u16_at(&bytes, 44)? as usize;
+    ensure!(
+        phentsize >= ELF32_PROGRAM_HEADER_SIZE,
+        "{label} ELF program header is too small"
+    );
+    ensure!(phnum > 0, "{label} ELF has no program headers");
+    for index in 0..phnum {
+        let header = program_header_offset(phoff, phentsize, index, bytes.len(), label)?;
+        if u32_at(&bytes, header)? != PT_LOAD {
+            continue;
+        }
+        let file_offset = u32_at(&bytes, header + 4)? as usize;
+        let physical_address = u32_at(&bytes, header + 12)?;
+        let file_size = u32_at(&bytes, header + 16)? as usize;
+        let file_end = file_offset
+            .checked_add(file_size)
+            .context("ELF segment overflow")?;
+        ensure!(
+            file_end <= bytes.len(),
+            "{label} ELF LOAD {index} data is truncated"
+        );
+        if file_size < 8 {
+            continue;
+        }
+        for offset in (file_offset..=file_end - 8).step_by(4) {
+            let msp = u32_at(&bytes, offset)?;
+            let reset = u32_at(&bytes, offset + 4)?;
+            let valid_msp = memory.ram_regions.iter().any(|region| {
+                let msp = msp as u64;
+                msp >= region.base && msp <= region.base.saturating_add(region.size)
+            });
+            if valid_msp && reset == entry {
+                let vector_table = physical_address
+                    .checked_add((offset - file_offset) as u32)
+                    .context("vector table address overflow")?;
+                return Ok((msp, reset, vector_table));
+            }
+        }
+    }
+    anyhow::bail!("{label} ELF has no vector table whose reset handler matches entry 0x{entry:08x}")
+}
+
+pub fn flash_image(path: &Path, memory: &MemoryLayout, label: &str) -> Result<Vec<u8>> {
+    let bytes =
+        fs::read(path).with_context(|| format!("reading {label} ELF {}", path.display()))?;
+    ensure!(
+        bytes.len() >= ELF32_HEADER_SIZE && &bytes[0..6] == b"\x7fELF\x01\x01",
+        "{label} must be a 32-bit little-endian ELF"
+    );
+    let phoff = u32_at(&bytes, 28)? as usize;
+    let phentsize = u16_at(&bytes, 42)? as usize;
+    let phnum = u16_at(&bytes, 44)? as usize;
+    ensure!(
+        phentsize >= ELF32_PROGRAM_HEADER_SIZE,
+        "{label} ELF program header is too small"
+    );
+    ensure!(phnum > 0, "{label} ELF has no program headers");
+    let mut loads = Vec::new();
+    let mut image_len = 0usize;
+    for index in 0..phnum {
+        let header = program_header_offset(phoff, phentsize, index, bytes.len(), label)?;
+        if u32_at(&bytes, header)? != PT_LOAD {
+            continue;
+        }
+        let file_offset = u32_at(&bytes, header + 4)? as usize;
+        let physical_address = u32_at(&bytes, header + 12)? as u64;
+        let file_size = u32_at(&bytes, header + 16)? as usize;
+        if file_size == 0 || !fits_flash(physical_address, file_size as u64, memory) {
+            continue;
+        }
+        let source_end = file_offset
+            .checked_add(file_size)
+            .context("ELF segment overflow")?;
+        let source = bytes
+            .get(file_offset..source_end)
+            .with_context(|| format!("{label} ELF LOAD {index} data is truncated"))?;
+        let destination = usize::try_from(physical_address - memory.flash_base)
+            .context("ELF flash image offset exceeds host limits")?;
+        image_len = image_len.max(
+            destination
+                .checked_add(file_size)
+                .context("ELF flash image overflow")?,
+        );
+        loads.push((destination, source));
+    }
+    ensure!(
+        !loads.is_empty(),
+        "{label} ELF has no initialized flash LOAD segments"
+    );
+    let mut image = vec![0xff; image_len];
+    for (destination, source) in loads {
+        image[destination..destination + source.len()].copy_from_slice(source);
+    }
+    Ok(image)
+}
+
+fn program_header_offset(
+    phoff: usize,
+    phentsize: usize,
+    index: usize,
+    file_len: usize,
+    label: &str,
+) -> Result<usize> {
+    let header = phoff
+        .checked_add(
+            index
+                .checked_mul(phentsize)
+                .context("ELF program header overflow")?,
+        )
+        .context("ELF program header overflow")?;
+    ensure!(
+        header
+            .checked_add(ELF32_PROGRAM_HEADER_SIZE)
+            .is_some_and(|end| end <= file_len),
+        "{label} ELF program header is truncated"
+    );
+    Ok(header)
+}
+
 fn fits_physical(base: u64, size: u64, memory: &MemoryLayout) -> bool {
     fits_flash(base, size, memory)
         || memory
@@ -100,22 +233,20 @@ fn fits(base: u64, size: u64, region_base: u64, region_size: u64) -> bool {
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Result<u16> {
-    let value = bytes
-        .get(offset..offset + 2)
-        .context("truncated ELF field")?;
+    let end = offset.checked_add(2).context("ELF field offset overflow")?;
+    let value = bytes.get(offset..end).context("truncated ELF field")?;
     Ok(u16::from_le_bytes([value[0], value[1]]))
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
-    let value = bytes
-        .get(offset..offset + 4)
-        .context("truncated ELF field")?;
+    let end = offset.checked_add(4).context("ELF field offset overflow")?;
+    let value = bytes.get(offset..end).context("truncated ELF field")?;
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_elf;
+    use super::{flash_image, reset_vector, validate_elf};
     use crate::layout::{MemoryLayout, MemoryRegion};
     use std::{fs, path::Path};
 
@@ -189,5 +320,32 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("exceeds every physical flash/RAM region"));
+    }
+
+    #[test]
+    fn finds_a_relocated_vector_table_inside_an_elf_segment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vectors.elf");
+        let mut data = elf(0x0800_4000, 0x0800_4000, 0x300, 0x300);
+        data[24..28].copy_from_slice(&0x0800_5101_u32.to_le_bytes());
+        data[0x200..0x204].copy_from_slice(&0x2001_c000_u32.to_le_bytes());
+        data[0x204..0x208].copy_from_slice(&0x0800_5101_u32.to_le_bytes());
+        write(&path, &data);
+        assert_eq!(
+            reset_vector(&path, &memory(), "firmware").unwrap(),
+            (0x2001_c000, 0x0800_5101, 0x0800_41ac)
+        );
+    }
+
+    #[test]
+    fn builds_erased_sparse_flash_image_from_physical_load_addresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flash.elf");
+        let mut data = elf(0x2000_0000, 0x0800_5000, 4, 8);
+        data[84..88].copy_from_slice(&[1, 2, 3, 4]);
+        write(&path, &data);
+        let image = flash_image(&path, &memory(), "firmware").unwrap();
+        assert_eq!(&image[0x5000..0x5004], &[1, 2, 3, 4]);
+        assert!(image[..0x5000].iter().all(|byte| *byte == 0xff));
     }
 }

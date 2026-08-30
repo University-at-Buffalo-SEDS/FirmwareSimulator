@@ -71,9 +71,21 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             }
             else if(variant == "u5")
             {
-                value |= 1u << 10;
-                if(offset == 0x3c) value |= 0x30000;
-                else if(offset == 0x0c) value |= 1u << 14;
+                if(offset == 0x0c)
+                {
+                    // VOSR: voltage scaling and EPOD transitions complete
+                    // synchronously in the functional model.
+                    value |= (1u << 14) | (1u << 15);
+                }
+                else if(offset == 0x3c)
+                {
+                    // SVMSR reports the voltage range selected in VOSR plus
+                    // ACTVOSRDY. Cube HAL waits for both VOSRDY and ACTVOSRDY.
+                    uint vosr;
+                    registers.TryGetValue(0x0c, out vosr);
+                    value = (value & ~0x30000u) | (vosr & 0x30000u);
+                    value |= 1u << 15;
+                }
             }
             return value;
         }

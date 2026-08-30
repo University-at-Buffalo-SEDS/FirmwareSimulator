@@ -24,6 +24,7 @@ namespace Antmicro.Renode.Peripherals.Storage
         {
             switch(offset)
             {
+            case 0x10: return responseCommand;
             case 0x14: return response[0];
             case 0x18: return response[1];
             case 0x1c: return response[2];
@@ -44,7 +45,9 @@ namespace Antmicro.Renode.Peripherals.Storage
             case 0x08: argument = value; break;
             case 0x0c:
                 registers[offset] = value;
-                if((value & (1u << 10)) != 0) ExecuteCommand(value & 0x3f);
+                // STM32 H5/U5 SDMMC v2 enables the command-path state machine
+                // with CMD.CPSMEN bit 12 (older STM32 blocks used bit 10).
+                if((value & (1u << 12)) != 0) ExecuteCommand(value & 0x3f);
                 break;
             case 0x28: dataLength = value; registers[offset] = value; break;
             case 0x2c: dataControl = value; registers[offset] = value; break;
@@ -99,6 +102,16 @@ namespace Antmicro.Renode.Peripherals.Storage
         public bool GetCardPresent() { return cardPresent; }
         public ulong GetCommandsExecuted() { return commands; }
         public ulong GetBytesRead() { return bytesRead; }
+        public ulong CardCapacityBytes
+        {
+            get { return (ulong)card.Length; }
+            set
+            {
+                if(value < BlockSize || value % BlockSize != 0 || value > int.MaxValue)
+                    throw new ArgumentOutOfRangeException("value", "card capacity must be a positive, host-sized multiple of 512 bytes");
+                LoadCardBytes(new byte[checked((int)value)]);
+            }
+        }
         public GPIO IRQ { get; private set; }
         public ulong FailureEvery { get; set; }
         public ulong DisconnectAfter { get; set; }
@@ -110,6 +123,7 @@ namespace Antmicro.Renode.Peripherals.Storage
             fifo.Clear();
             Array.Clear(response, 0, response.Length);
             argument = 0;
+            responseCommand = 0;
             status = 0;
             interruptMask = 0;
             dataLength = 0;
@@ -129,7 +143,9 @@ namespace Antmicro.Renode.Peripherals.Storage
         private void ExecuteCommand(uint index)
         {
             commands++;
-            status &= ~(CommandSent | CommandResponse | CommandTimeout | DataEnd | DataBlockEnd);
+            responseCommand = index;
+            Array.Clear(response, 0, response.Length);
+            status &= ~(CommandSent | CommandResponse | CommandTimeout | DataTimeout | DataEnd | DataBlockEnd);
             if(commands > DisconnectAfter) cardPresent = false;
             if(!cardPresent || (FailureEvery != 0 && commands % FailureEvery == 0))
             {
@@ -173,7 +189,7 @@ namespace Antmicro.Renode.Peripherals.Storage
                 status |= CommandResponse | DataEnd;
                 break;
             case 16: // SET_BLOCKLEN
-                status |= argument == BlockSize ? CommandResponse : DataTimeout;
+                status |= argument > 0 && argument <= BlockSize ? CommandResponse : CommandTimeout;
                 break;
             case 17: // READ_SINGLE_BLOCK
                 status |= CommandResponse;
@@ -191,6 +207,31 @@ namespace Antmicro.Renode.Peripherals.Storage
             case 41: // SD_SEND_OP_COND (ACMD41)
                 if(!applicationCommand) { status |= CommandTimeout; break; }
                 response[0] = 0xc0ff8000;
+                applicationCommand = false;
+                status |= CommandResponse;
+                break;
+            case 13: // SEND_STATUS or SD_STATUS (ACMD13)
+                status |= CommandResponse;
+                if(applicationCommand)
+                {
+                    response[0] = 0;
+                    applicationCommand = false;
+                    PrepareData(new byte[64]);
+                }
+                else response[0] = 4u << 9; // TRANSFER state
+                break;
+            case 51: // SEND_SCR (ACMD51)
+                if(!applicationCommand) { status |= CommandTimeout; break; }
+                response[0] = 0;
+                applicationCommand = false;
+                status |= CommandResponse;
+                // SCR.SD_BUS_WIDTHS advertises the mandatory 1-bit mode and
+                // the commonly supported 4-bit mode. The HAL byte-swaps the
+                // two FIFO words before testing bits 16 and 18.
+                PrepareData(new byte[] { 0x00, 0x05, 0x00, 0x00, 0, 0, 0, 0 });
+                break;
+            case 6: // SWITCH_FUNC or SET_BUS_WIDTH (ACMD6)
+                response[0] = 0;
                 applicationCommand = false;
                 status |= CommandResponse;
                 break;
@@ -214,7 +255,12 @@ namespace Antmicro.Renode.Peripherals.Storage
             }
             var transfer = new byte[checked((int)requested)];
             Array.Copy(card, checked((long)byteOffset), transfer, 0, transfer.Length);
-            remainingData = (uint)requested;
+            PrepareData(transfer);
+        }
+
+        private void PrepareData(byte[] transfer)
+        {
+            remainingData = (uint)transfer.Length;
             if((idmaControl & 1) != 0 && idmaBase != 0)
             {
                 var bus = machine.GetSystemBus(this);
@@ -273,6 +319,7 @@ namespace Antmicro.Renode.Peripherals.Storage
         private bool selected;
         private bool applicationCommand;
         private uint argument;
+        private uint responseCommand;
         private uint status;
         private uint interruptMask;
         private uint dataLength;
