@@ -18,12 +18,18 @@ gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
     ports: 9
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpio.cs
-fdcan1: CAN.MCAN @ sysbus 0x4000A400
-    messageRAM: canMessageRAM
-    Line0 -> nvic@39
-    Line1 -> nvic@40
-canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
-    size: 0x2800
+// U5 uses ST's reduced M_CAN integration with a fixed message-RAM layout:
+// 28 standard filters, 8 extended filters, and three entries in each RX FIFO,
+// TX-event FIFO, and TX FIFO. Generic M_CAN sees the unconfigured full-core
+// layout and incorrectly reports that the fixed U5 TX FIFO is full.
+fdcan1: CAN.SedsStm32U5Fdcan @ sysbus 0x4000A400
+    messageRam: fdcan1MessageRAM
+    Int0 -> nvic@39
+    Int1 -> nvic@40
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32U5Fdcan.cs
+fdcan1MessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x350>
+    size: 0x350
 usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 160000000
     IRQ -> nvic@61

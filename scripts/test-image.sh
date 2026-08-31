@@ -53,14 +53,19 @@ done
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32g491-peripherals.repl; cpu AssembleBlock 0x08000000 "ldr r0, =0x40022008; ldr r1, =0x45670123; str r1, [r0]; ldr r1, =0xCDEF89AB; str r1, [r0]; ldr r0, =0x40022014; movs r1, #1; str r1, [r0]; ldr r0, =0x08010000; ldr r1, =0x12345678; str r1, [r0]; ldr r1, =0xABCDEF00; str r1, [r0, #4]; b ."; physicalFlash EndHostLoading; physicalFlash ArmPowerCut 1; cpu SetRegister 13 0x2001BFF0; cpu PC 0x08000000; emulation RunFor "0.0001s"; physicalFlash GetPowerCutTriggered; physicalFlash GetOperationTrace; sysbus ReadDoubleWord 0x08010000; python "from Antmicro.Renode.Core.CAN import CANMessageFrame; monitor.Machine[\"sysbus.fdcan1\"].OnFrameReceived(CANMessageFrame(0x321, System.Array[System.Byte]([1,2,3])))"; sysbus WriteDoubleWord 0x48000000 1; sysbus WriteDoubleWord 0x48000018 1; sysbus ReadDoubleWord 0x48000010; quit' 'True' 'program_unit' '0x12345678'
 
+# Every fixed-layout controller must expose all three TX entries as free after
+# reset. G4 has two instances; H5 and U5 have one. All bundled part numbers map
+# to one of these three runtime-checked platform profiles.
+check_renode 'emulation CreateCANHub "fdcan-test" false; mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; connector Connect sysbus.fdcan1 fdcan-test; sysbus ReadDoubleWord 0x400064C4; sysbus WriteDoubleWord 0x40006418 0; sysbus WriteDoubleWord 0x400064CC 1; sysbus ReadDoubleWord 0x400064D4; quit' '0x00000003' '0x00000001'
+check_renode 'emulation CreateCANHub "fdcan-test" false; mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; connector Connect sysbus.fdcan2 fdcan-test; sysbus ReadDoubleWord 0x400068C4; sysbus WriteDoubleWord 0x40006818 0; sysbus WriteDoubleWord 0x400068CC 1; sysbus ReadDoubleWord 0x400068D4; quit' '0x00000003' '0x00000001'
+
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32h523-peripherals.repl; sysbus WriteDoubleWord 0x08040000 0x12345678; sysbus WriteDoubleWord 0x40022004 0x45670123; sysbus WriteDoubleWord 0x40022004 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x80000024; sysbus ReadDoubleWord 0x08040000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
 
-# H5 has three fixed TX FIFO entries. A zero TFFL value is the generic M_CAN
-# regression: CubeH5 correctly omits the message-RAM configuration registers,
-# leaving that model convinced that the FIFO is permanently full.
-check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; sysbus ReadDoubleWord 0x4000A4C4; quit' '0x00000003'
+check_renode 'emulation CreateCANHub "fdcan-test" false; mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; connector Connect sysbus.fdcan1 fdcan-test; sysbus ReadDoubleWord 0x4000A4C4; sysbus WriteDoubleWord 0x4000A418 0; sysbus WriteDoubleWord 0x4000A4CC 1; sysbus ReadDoubleWord 0x4000A4D4; quit' '0x00000003' '0x00000001'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32u585-peripherals.repl; sysbus WriteDoubleWord 0x08100000 0x12345678; sysbus WriteDoubleWord 0x40022008 0x45670123; sysbus WriteDoubleWord 0x40022008 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x10802; sysbus ReadDoubleWord 0x08100000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
+
+check_renode 'emulation CreateCANHub "fdcan-test" false; mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; connector Connect sysbus.fdcan1 fdcan-test; sysbus ReadDoubleWord 0x4000A4C4; sysbus WriteDoubleWord 0x4000A418 0; sysbus WriteDoubleWord 0x4000A4CC 1; sysbus ReadDoubleWord 0x4000A4D4; quit' '0x00000003' '0x00000001'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/gpdma-cache-contract.repl; sysbus WriteDoubleWord 0x20000000 0x44332211; sysbus WriteDoubleWord 0x40020110 0x4040; sysbus WriteDoubleWord 0x40020118 4; sysbus WriteDoubleWord 0x4002011c 0x20000000; sysbus WriteDoubleWord 0x40020120 0x20000020; sysbus WriteDoubleWord 0x40020100 1; sysbus ReadDoubleWord 0x20000020; cache WriteDoubleWord 0 2; cache GetInvalidations; quit' '0x44332211' '0x0000000000000001'
 
