@@ -8,6 +8,7 @@ FirmwareSimulator is a deterministic virtual platform, not a cycle-accurate elec
 - An exact `mcu` selects a bundled or inline silicon descriptor and constrains CPU model, platform, total flash/RAM capacity, flash geometry, security, and modeled OTA controllers. G491, H523, and U585 have real-board validation; other bundled descriptors have platform-contract validation.
 - Direct firmware boot and combined-factory boot execute independently. Factory flash contains only the factory binary; MSP and PC come from its vector table, while ELFs provide symbols only.
 - Selected CAN, UART, USB, SPI, I2C, timers, ADC, SDMMC, and DMA paths run through MMIO/wire models. STM32G4, H5, and U5 FDCAN use their fixed three-entry message-RAM geometry rather than configurable generic M_CAN RAM. Configured failure/disconnect schedules are passed into instruction-coupled sensor models.
+- The G4 platform exposes USART1, USART2, and UART4 at their silicon MMIO and NVIC locations; linked gateway traffic can enter USART2 through the firmware-visible receive register and interrupt path.
 - Embedded flash is executable `MappedMemory` and remains nonvolatile across
   peripheral resets. A CPU memory-access hook on the selected G4/H5/U5 flash profile
   observes the stores made by real firmware and enforces HAL unlock, status

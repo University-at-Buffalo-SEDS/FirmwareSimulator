@@ -1386,6 +1386,10 @@ mod tests {
             peripheral: "uart4".into(),
             frequency_hz: 80_000_000,
         });
+        board.board.clocks.push(crate::layout::ClockConfig {
+            peripheral: "usart2".into(),
+            frequency_hz: 85_000_000,
+        });
         let scratch = tempfile::tempdir().unwrap();
         let configured = materialize_platform(&board, scratch.path(), scratch.path()).unwrap();
         let platform = std::fs::read_to_string(configured).unwrap();
@@ -1393,12 +1397,22 @@ mod tests {
             .split("uart4:")
             .nth(1)
             .unwrap()
-            .split("usart1:")
+            .split("usart2:")
             .next()
             .unwrap();
         assert!(uart.starts_with(" UART.STM32F7_USART"));
         assert!(uart.contains("frequency: 80000000"));
         assert!(!uart.contains("frequency: 170000000"));
+        let usart = platform
+            .split("usart2:")
+            .nth(1)
+            .unwrap()
+            .split("usart1:")
+            .next()
+            .unwrap();
+        assert!(usart.starts_with(" UART.STM32F7_USART"));
+        assert!(usart.contains("frequency: 85000000"));
+        assert!(!usart.contains("frequency: 170000000"));
     }
 
     #[test]

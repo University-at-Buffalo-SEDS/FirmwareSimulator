@@ -53,6 +53,10 @@ done
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32g491-peripherals.repl; cpu AssembleBlock 0x08000000 "ldr r0, =0x40022008; ldr r1, =0x45670123; str r1, [r0]; ldr r1, =0xCDEF89AB; str r1, [r0]; ldr r0, =0x40022014; movs r1, #1; str r1, [r0]; ldr r0, =0x08010000; ldr r1, =0x12345678; str r1, [r0]; ldr r1, =0xABCDEF00; str r1, [r0, #4]; b ."; physicalFlash EndHostLoading; physicalFlash ArmPowerCut 1; cpu SetRegister 13 0x2001BFF0; cpu PC 0x08000000; emulation RunFor "0.0001s"; physicalFlash GetPowerCutTriggered; physicalFlash GetOperationTrace; sysbus ReadDoubleWord 0x08010000; python "from Antmicro.Renode.Core.CAN import CANMessageFrame; monitor.Machine[\"sysbus.fdcan1\"].OnFrameReceived(CANMessageFrame(0x321, System.Array[System.Byte]([1,2,3])))"; sysbus WriteDoubleWord 0x48000000 1; sysbus WriteDoubleWord 0x48000018 1; sysbus ReadDoubleWord 0x48000010; quit' 'True' 'program_unit' '0x12345678'
 
+# The linked gateway receives through G491 USART2. Exercise the actual receive
+# register rather than accepting a platform that merely reserves the address.
+check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; sysbus WriteDoubleWord 0x40004400 0x25; usart2 WriteChar 0x5A; sysbus ReadDoubleWord 0xE000E204; sysbus ReadDoubleWord 0x40004424; quit' '0x00000040' '0x0000005A'
+
 # Every fixed-layout controller must expose all three TX entries as free after
 # reset. G4 has two instances; H5 and U5 have one. All bundled part numbers map
 # to one of these three runtime-checked platform profiles.

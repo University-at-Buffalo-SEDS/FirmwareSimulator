@@ -30,6 +30,15 @@ fn every_built_in_mcu_descriptor_is_valid_and_has_a_matching_platform() {
             "{} must not use configurable generic M_CAN",
             descriptor.name
         );
+        if descriptor.architecture == ArchitectureKind::Stm32g4 {
+            assert!(
+                platform.contains(
+                    "usart2: UART.STM32F7_USART @ sysbus 0x40004400\n    frequency: 170000000\n    IRQ -> nvic@38"
+                ),
+                "{} must expose the G4 USART2 gateway interface",
+                descriptor.name
+            );
+        }
     }
     assert!(mcu_catalog().len() >= 22);
     assert_eq!(
