@@ -18,12 +18,18 @@ gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
     ports: 8
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpio.cs
-fdcan1: CAN.MCAN @ sysbus 0x4000A400
-    messageRAM: canMessageRAM
-    Line0 -> nvic@39
-    Line1 -> nvic@40
-canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
-    size: 0x2800
+// H5 uses ST's reduced M_CAN integration with a fixed message-RAM layout:
+// 28 standard filters, 8 extended filters, and three entries in each RX FIFO,
+// TX-event FIFO, and TX FIFO. Generic M_CAN expects firmware to configure a
+// layout that is not configurable on H5 and consequently reports TX full.
+fdcan1: CAN.SedsStm32H5Fdcan @ sysbus 0x4000A400
+    messageRam: fdcan1MessageRAM
+    Int0 -> nvic@39
+    Int1 -> nvic@40
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32H5Fdcan.cs
+fdcan1MessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x350>
+    size: 0x350
 spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
     IRQ -> nvic@55
 timer6: Timers.STM32_Timer @ sysbus 0x40001000

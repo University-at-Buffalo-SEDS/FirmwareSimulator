@@ -55,6 +55,11 @@ check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/re
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32h523-peripherals.repl; sysbus WriteDoubleWord 0x08040000 0x12345678; sysbus WriteDoubleWord 0x40022004 0x45670123; sysbus WriteDoubleWord 0x40022004 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x80000024; sysbus ReadDoubleWord 0x08040000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
 
+# H5 has three fixed TX FIFO entries. A zero TFFL value is the generic M_CAN
+# regression: CubeH5 correctly omits the message-RAM configuration registers,
+# leaving that model convinced that the FIFO is permanently full.
+check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; sysbus ReadDoubleWord 0x4000A4C4; quit' '0x00000003'
+
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32u585-peripherals.repl; sysbus WriteDoubleWord 0x08100000 0x12345678; sysbus WriteDoubleWord 0x40022008 0x45670123; sysbus WriteDoubleWord 0x40022008 0xCDEF89AB; sysbus WriteDoubleWord 0x40022028 0x10802; sysbus ReadDoubleWord 0x08100000; physicalFlash GetOperationCount; physicalFlash GetOperationTrace; quit' '0xFFFFFFFF' '0x0000000000000002' 'erase_start,erase_complete'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/gpdma-cache-contract.repl; sysbus WriteDoubleWord 0x20000000 0x44332211; sysbus WriteDoubleWord 0x40020110 0x4040; sysbus WriteDoubleWord 0x40020118 4; sysbus WriteDoubleWord 0x4002011c 0x20000000; sysbus WriteDoubleWord 0x40020120 0x20000020; sysbus WriteDoubleWord 0x40020100 1; sysbus ReadDoubleWord 0x20000020; cache WriteDoubleWord 0 2; cache GetInvalidations; quit' '0x44332211' '0x0000000000000001'
