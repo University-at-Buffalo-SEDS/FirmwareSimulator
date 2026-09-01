@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env, fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
 };
 
 #[derive(Debug, Deserialize)]
@@ -17,9 +19,16 @@ pub struct BayTopology {
     pub virtual_time_ms: u64,
     #[serde(default = "default_sample_count")]
     pub sample_count: usize,
+    /// Enforce each board layout's end-to-end memory-drop limit. Short linked
+    /// functional runs can disable this because allocator availability is
+    /// intentionally bursty; minimum and maximum bounds remain enforced.
+    #[serde(default = "default_true")]
+    pub enforce_end_drop: bool,
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub links: Vec<Link>,
+    #[serde(default)]
+    pub assertions: Vec<NetworkAssertion>,
 }
 #[derive(Debug, Deserialize)]
 pub struct Node {
@@ -32,12 +41,19 @@ pub struct Link {
     pub name: String,
     pub kind: LinkKind,
     pub endpoints: Vec<Endpoint>,
+    /// Human-readable physical stages represented by this deterministic link.
+    /// For example: RF radio, ground-station router, and the Pico-Fi tunnel.
+    #[serde(default)]
+    pub transport_path: Vec<String>,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkKind {
     Can,
     Uart,
+    Radio,
+    PicoFi,
+    RoutedSerial,
 }
 #[derive(Debug, Deserialize)]
 pub struct Endpoint {
@@ -47,6 +63,48 @@ pub struct Endpoint {
     pub activity_probe: Option<String>,
     #[serde(default = "default_minimum_activity")]
     pub minimum_activity: u32,
+    #[serde(default)]
+    pub tx_probe: Option<String>,
+    #[serde(default)]
+    pub rx_probe: Option<String>,
+    #[serde(default = "default_minimum_activity")]
+    pub minimum_tx: u32,
+    #[serde(default = "default_minimum_activity")]
+    pub minimum_rx: u32,
+}
+#[derive(Debug, Deserialize)]
+pub struct NetworkAssertion {
+    pub name: String,
+    pub node: String,
+    pub probe: String,
+    #[serde(default)]
+    pub minimum: Option<u32>,
+    #[serde(default)]
+    pub maximum: Option<u32>,
+    #[serde(default)]
+    pub required_bits: Option<u32>,
+}
+#[derive(Debug, Serialize)]
+pub struct LinkReport {
+    pub name: String,
+    pub kind: String,
+    pub transport_path: Vec<String>,
+    pub endpoints: Vec<EndpointReport>,
+}
+#[derive(Debug, Serialize)]
+pub struct EndpointReport {
+    pub node: String,
+    pub tx_probe: Option<String>,
+    pub tx_observed: Option<u32>,
+    pub rx_probe: Option<String>,
+    pub rx_observed: Option<u32>,
+}
+#[derive(Debug, Serialize)]
+pub struct AssertionReport {
+    pub name: String,
+    pub node: String,
+    pub probe: String,
+    pub observed: u32,
 }
 #[derive(Debug, Serialize)]
 pub struct BayReport {
@@ -56,6 +114,8 @@ pub struct BayReport {
     pub virtual_time_ms: u64,
     pub register_dump: Vec<String>,
     pub memory_profiles: BTreeMap<String, Vec<MemoryProbeReport>>,
+    pub link_reports: Vec<LinkReport>,
+    pub assertion_reports: Vec<AssertionReport>,
 }
 
 pub fn run(topology_path: &Path) -> Result<BayReport> {
@@ -116,7 +176,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             LinkKind::Can => {
                 script += &format!("emulation CreateCANHub \"{}\" false\n", safe(&link.name))
             }
-            LinkKind::Uart => {
+            LinkKind::Uart | LinkKind::Radio | LinkKind::PicoFi | LinkKind::RoutedSerial => {
                 script += &format!("emulation CreateUARTHub \"{}\"\n", safe(&link.name))
             }
         }
@@ -192,6 +252,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 );
             }
         }
+        script += &format!(
+            "echo \"SEDS_BAY_SAMPLE_DONE {} {}\"\n",
+            sample + 1,
+            topology.sample_count
+        );
     }
     for node in &topology.nodes {
         script += &format!(
@@ -206,17 +271,52 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let renode = env::var_os("RENODE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/bin/renode"));
-    let output = Command::new(&renode)
+    println!(
+        "[SIM] starting {} nodes across {} physical links for {} ms",
+        topology.nodes.len(),
+        topology.links.len(),
+        topology.virtual_time_ms
+    );
+    let mut child = Command::new(&renode)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script_path.display()))
-        .output()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("starting Renode")?;
+    let stdout = child.stdout.take().context("capturing Renode stdout")?;
+    let stderr = child.stderr.take().context("capturing Renode stderr")?;
+    let stdout_reader = thread::spawn(move || -> Result<String> {
+        let mut captured = String::new();
+        for line in BufReader::new(stdout).lines() {
+            let line = line?;
+            if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
+                println!("[SIM] network sample {progress} complete");
+            }
+            captured.push_str(&line);
+            captured.push('\n');
+        }
+        Ok(captured)
+    });
+    let stderr_reader = thread::spawn(move || -> Result<String> {
+        let mut captured = String::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = line?;
+            captured.push_str(&line);
+            captured.push('\n');
+        }
+        Ok(captured)
+    });
+    let status = child.wait()?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("Renode stdout reader panicked"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("Renode stderr reader panicked"))??;
+    let combined = format!("{stdout}{stderr}");
     let lower = combined.to_ascii_lowercase();
-    if !output.status.success()
+    if !status.success()
         || !combined
             .lines()
             .any(|line| line.trim() == "SEDS_BAY_COMPLETE")
@@ -258,36 +358,126 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     for (node_name, layout) in &node_layouts {
         memory_profiles.insert(
             node_name.clone(),
-            parse_memory_profiles(node_name, layout, &combined, topology.sample_count)?,
+            parse_memory_profiles(
+                node_name,
+                layout,
+                &combined,
+                topology.sample_count,
+                topology.enforce_end_drop,
+            )?,
         );
     }
+    let mut link_reports = Vec::new();
     for link in &topology.links {
+        let mut endpoint_reports = Vec::new();
         for endpoint in &link.endpoints {
-            let Some(probe_name) = endpoint.activity_probe.as_deref() else {
-                continue;
-            };
             let reports = memory_profiles
                 .get(&endpoint.node)
                 .with_context(|| format!("missing profiles for node {}", endpoint.node))?;
-            let report = reports
-                .iter()
-                .find(|report| report.name == probe_name)
-                .with_context(|| {
-                    format!(
-                        "link {} endpoint {} requires unknown activity probe {}",
-                        link.name, endpoint.node, probe_name
-                    )
-                })?;
+            let tx_observed = validate_endpoint_probe(
+                reports,
+                endpoint.tx_probe.as_deref(),
+                endpoint.minimum_tx,
+                &link.name,
+                &endpoint.node,
+                "TX",
+            )?;
+            let rx_observed = validate_endpoint_probe(
+                reports,
+                endpoint.rx_probe.as_deref(),
+                endpoint.minimum_rx,
+                &link.name,
+                &endpoint.node,
+                "RX",
+            )?;
+            if endpoint.tx_probe.is_none() && endpoint.rx_probe.is_none() {
+                validate_endpoint_probe(
+                    reports,
+                    endpoint.activity_probe.as_deref(),
+                    endpoint.minimum_activity,
+                    &link.name,
+                    &endpoint.node,
+                    "activity",
+                )?;
+            }
             ensure!(
-                report.maximum_observed >= endpoint.minimum_activity,
-                "link {} endpoint {} observed no real firmware activity: probe {} maximum {} is below {}",
+                endpoint.tx_probe.is_some() && endpoint.rx_probe.is_some()
+                    || endpoint.activity_probe.is_some(),
+                "link {} endpoint {} has no TX/RX probes; bidirectional communication cannot be certified",
                 link.name,
-                endpoint.node,
-                probe_name,
-                report.maximum_observed,
-                endpoint.minimum_activity
+                endpoint.node
             );
+            endpoint_reports.push(EndpointReport {
+                node: endpoint.node.clone(),
+                tx_probe: endpoint.tx_probe.clone(),
+                tx_observed,
+                rx_probe: endpoint.rx_probe.clone(),
+                rx_observed,
+            });
         }
+        link_reports.push(LinkReport {
+            name: link.name.clone(),
+            kind: format!("{:?}", link.kind),
+            transport_path: link.transport_path.clone(),
+            endpoints: endpoint_reports,
+        });
+    }
+    let mut assertion_reports = Vec::new();
+    let mut assertion_failures = Vec::new();
+    for assertion in &topology.assertions {
+        let reports = memory_profiles.get(&assertion.node).with_context(|| {
+            format!(
+                "assertion {} references unknown node {}",
+                assertion.name, assertion.node
+            )
+        })?;
+        let report = reports
+            .iter()
+            .find(|report| report.name == assertion.probe)
+            .with_context(|| {
+                format!(
+                    "assertion {} references unknown probe {} on {}",
+                    assertion.name, assertion.probe, assertion.node
+                )
+            })?;
+        let observed = report.maximum_observed;
+        if let Some(minimum) = assertion.minimum {
+            if observed < minimum {
+                assertion_failures.push(format!(
+                    "{}: {}.{} maximum {} is below {}",
+                    assertion.name, assertion.node, assertion.probe, observed, minimum
+                ));
+            }
+        }
+        if let Some(maximum) = assertion.maximum {
+            if observed > maximum {
+                assertion_failures.push(format!(
+                    "{}: {}.{} maximum {} exceeds {}",
+                    assertion.name, assertion.node, assertion.probe, observed, maximum
+                ));
+            }
+        }
+        if let Some(required_bits) = assertion.required_bits {
+            if observed & required_bits != required_bits {
+                assertion_failures.push(format!(
+                    "{}: {}.{} observed 0x{observed:08x}, requires 0x{required_bits:08x}",
+                    assertion.name, assertion.node, assertion.probe
+                ));
+            }
+        }
+        assertion_reports.push(AssertionReport {
+            name: assertion.name.clone(),
+            node: assertion.node.clone(),
+            probe: assertion.probe.clone(),
+            observed,
+        });
+    }
+    if !assertion_failures.is_empty() {
+        bail!(
+            "{} network assertion(s) failed:\n- {}",
+            assertion_failures.len(),
+            assertion_failures.join("\n- ")
+        );
     }
     Ok(BayReport {
         bay: topology.name,
@@ -296,7 +486,32 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         virtual_time_ms: topology.virtual_time_ms,
         register_dump,
         memory_profiles,
+        link_reports,
+        assertion_reports,
     })
+}
+
+fn validate_endpoint_probe(
+    reports: &[MemoryProbeReport],
+    probe_name: Option<&str>,
+    minimum: u32,
+    link_name: &str,
+    node_name: &str,
+    direction: &str,
+) -> Result<Option<u32>> {
+    let Some(probe_name) = probe_name else {
+        return Ok(None);
+    };
+    let report = reports
+        .iter()
+        .find(|report| report.name == probe_name)
+        .with_context(|| format!("link {link_name} endpoint {node_name} requires unknown {direction} probe {probe_name}"))?;
+    ensure!(
+        report.maximum_observed >= minimum,
+        "link {link_name} endpoint {node_name} {direction} failed: probe {probe_name} maximum {} is below {minimum}",
+        report.maximum_observed
+    );
+    Ok(Some(report.maximum_observed))
 }
 
 fn parse_memory_profiles(
@@ -304,6 +519,7 @@ fn parse_memory_profiles(
     layout: &BoardLayout,
     output: &str,
     sample_count: usize,
+    enforce_end_drop: bool,
 ) -> Result<Vec<MemoryProbeReport>> {
     let mut reports = Vec::new();
     for probe in &layout.execution.memory_probes {
@@ -365,13 +581,15 @@ fn parse_memory_profiles(
                 samples
             );
         }
-        if let Some(max_end_drop) = probe.max_end_drop {
-            ensure!(
-                end_drop <= i64::from(max_end_drop),
-                "node {node_name} probe {} lost {end_drop} bytes: {:?}",
-                probe.name,
-                samples
-            );
+        if enforce_end_drop {
+            if let Some(max_end_drop) = probe.max_end_drop {
+                ensure!(
+                    end_drop <= i64::from(max_end_drop),
+                    "node {node_name} probe {} lost {end_drop} bytes: {:?}",
+                    probe.name,
+                    samples
+                );
+            }
         }
         reports.push(MemoryProbeReport {
             name: probe.name.clone(),
@@ -410,6 +628,10 @@ fn default_duration() -> u64 {
 }
 fn default_sample_count() -> usize {
     10
+}
+
+fn default_true() -> bool {
+    true
 }
 fn default_minimum_activity() -> u32 {
     1

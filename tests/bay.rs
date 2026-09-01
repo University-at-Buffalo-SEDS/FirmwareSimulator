@@ -14,7 +14,9 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
             "artifacts": {"elf": "build/fw.elf", "bootloader_elf": "build/boot.elf", "firmware": "build/fw.img", "bootloader": "build/boot.bin", "factory": "build/factory.bin"},
             "execution": {"memory_probes": [
                 {"name": "pool_available", "symbol": "pool_available", "minimum": 2048},
-                {"name": "can_irqs", "symbol": "can_irqs"}
+                {"name": "can_tx", "symbol": "can_tx"},
+                {"name": "can_rx", "symbol": "can_rx"},
+                {"name": "topology_mask", "symbol": "topology_mask"}
             ]}
         })
     };
@@ -46,15 +48,19 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
                 {"name": "a", "layout": "a/board.json", "firmware_root": "a"},
                 {"name": "b", "layout": "b/board.json", "firmware_root": "b"}
             ], "links": [{"name": "can", "kind": "can", "endpoints": [
-                {"node": "a", "peripheral": "fdcan2", "activity_probe": "can_irqs"},
-                {"node": "b", "peripheral": "fdcan2", "activity_probe": "can_irqs"}
-            ]}]
+                {"node": "a", "peripheral": "fdcan2", "tx_probe": "can_tx", "rx_probe": "can_rx"},
+                {"node": "b", "peripheral": "fdcan2", "tx_probe": "can_tx", "rx_probe": "can_rx"}
+            ]}],
+            "assertions": [
+                {"name": "a discovered b", "node": "a", "probe": "topology_mask", "required_bits": 2},
+                {"name": "b discovered a", "node": "b", "probe": "topology_mask", "required_bits": 1}
+            ]
         }))
         .unwrap(),
     )
     .unwrap();
     let renode = root.join("renode-mock");
-    fs::write(&renode, "#!/bin/sh\necho SEDS_NODE_BOOT_a\necho SEDS_NODE_BOOT_b\ni=0\nwhile [ $i -lt 10 ]; do\n  echo SEDS_BAY_PROBE a pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE b pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE a can_irqs $i\n  echo 0x1\n  echo SEDS_BAY_PROBE b can_irqs $i\n  echo 0x1\n  i=$((i + 1))\ndone\necho SEDS_NODE a PC\necho 0x08004101\necho SEDS_NODE b PC\necho 0x08004101\necho SEDS_BAY_COMPLETE\n").unwrap();
+    fs::write(&renode, "#!/bin/sh\necho SEDS_NODE_BOOT_a\necho SEDS_NODE_BOOT_b\ni=0\nwhile [ $i -lt 10 ]; do\n  echo SEDS_BAY_PROBE a pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE b pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE a can_tx $i\n  echo 0x5\n  echo SEDS_BAY_PROBE a can_rx $i\n  echo 0x6\n  echo SEDS_BAY_PROBE b can_tx $i\n  echo 0x6\n  echo SEDS_BAY_PROBE b can_rx $i\n  echo 0x5\n  echo SEDS_BAY_PROBE a topology_mask $i\n  echo 0x2\n  echo SEDS_BAY_PROBE b topology_mask $i\n  echo 0x1\n  i=$((i + 1))\ndone\necho SEDS_NODE a PC\necho 0x08004101\necho SEDS_NODE b PC\necho 0x08004101\necho SEDS_BAY_COMPLETE\n").unwrap();
     fs::set_permissions(&renode, fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("RENODE", &renode);
     std::env::set_var("FIRMWARE_SIM_CONTAINER", "1");
@@ -64,6 +70,8 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.register_dump.len(), 4);
     assert_eq!(report.memory_profiles["a"][0].samples.len(), 10);
     assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
+    assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
+    assert_eq!(report.assertion_reports.len(), 2);
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();

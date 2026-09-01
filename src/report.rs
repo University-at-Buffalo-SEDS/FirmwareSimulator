@@ -205,10 +205,70 @@ pub fn bay(report: &BayReport) -> String {
             })
             .collect(),
     );
+    let links = table(
+        &[
+            "Link",
+            "Transport",
+            "Node",
+            "TX probe / count",
+            "RX probe / count",
+            "Physical path",
+        ],
+        report
+            .link_reports
+            .iter()
+            .flat_map(|link| {
+                link.endpoints.iter().map(move |endpoint| {
+                    vec![
+                        link.name.clone(),
+                        link.kind.clone(),
+                        endpoint.node.clone(),
+                        endpoint
+                            .tx_probe
+                            .as_ref()
+                            .map(|name| format!("{} / {}", name, endpoint.tx_observed.unwrap_or(0)))
+                            .unwrap_or_else(|| "legacy activity probe".into()),
+                        endpoint
+                            .rx_probe
+                            .as_ref()
+                            .map(|name| format!("{} / {}", name, endpoint.rx_observed.unwrap_or(0)))
+                            .unwrap_or_else(|| "legacy activity probe".into()),
+                        if link.transport_path.is_empty() {
+                            "direct".into()
+                        } else {
+                            link.transport_path.join(" -> ")
+                        },
+                    ]
+                })
+            })
+            .collect(),
+    );
+    let assertions = if report.assertion_reports.is_empty() {
+        "No SEDSNet semantic assertions configured.".into()
+    } else {
+        table(
+            &["Assertion", "Node", "Probe", "Observed", "Result"],
+            report
+                .assertion_reports
+                .iter()
+                .map(|assertion| {
+                    vec![
+                        assertion.name.clone(),
+                        assertion.node.clone(),
+                        assertion.probe.clone(),
+                        format!("0x{:08x}", assertion.observed),
+                        "PASS".into(),
+                    ]
+                })
+                .collect(),
+        )
+    };
     format!(
-        "Avionics bay simulation: {}\n\nTEST MATRIX\n{}\n\nMEMORY PROBES\n{}\n\nCPU REGISTERS\n{}",
+        "Avionics bay simulation: {}\n\nTEST MATRIX\n{}\n\nBIDIRECTIONAL LINKS\n{}\n\nSEDSNET ASSERTIONS\n{}\n\nMEMORY PROBES\n{}\n\nCPU REGISTERS\n{}",
         report.bay,
         summary,
+        links,
+        assertions,
         probes,
         pairs(&report.register_dump),
     )
