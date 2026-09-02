@@ -293,6 +293,16 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         )?;
         let node_scratch = scratch.path().join(safe(&node.name));
         fs::create_dir_all(&node_scratch)?;
+        let firmware_image = node_scratch.join("firmware-flash.bin");
+        fs::write(
+            &firmware_image,
+            crate::elf::flash_image(
+                &elf,
+                &layout.memory,
+                &format!("node {} firmware", node.name),
+            )?,
+        )
+        .with_context(|| format!("writing node {} flash image", node.name))?;
         let overlay = node_scratch.join("peripherals.repl");
         fs::write(
             &overlay,
@@ -302,12 +312,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
             if layout.board.strict_mmio { "sysbus UnhandledAccessBehaviour ThrowException\n" } else { "" },
             elf.display(),
+            firmware_image.display(),
+            layout.memory.flash_base,
             firmware_msp,
             firmware_pc,
             firmware_vtor,

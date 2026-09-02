@@ -199,6 +199,16 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         tail(&combined, 80)
     );
     ensure!(
+        !observed_marker(&combined, "SEDS_FIRMWARE_HARDFAULT"),
+        "firmware entered HardFault_Handler after its boot marker:\n{}",
+        tail(&combined, 80)
+    );
+    ensure!(
+        !observed_marker(&combined, "SEDS_FACTORY_HARDFAULT"),
+        "factory image entered HardFault_Handler after its boot marker:\n{}",
+        tail(&combined, 80)
+    );
+    ensure!(
         registers.iter().any(|line| line.contains("PC")),
         "Renode did not return registers:\n{}",
         tail(&combined, 80)
@@ -808,6 +818,8 @@ fn render_script(
     let name = layout.name.replace('"', "_");
     let symbol = &layout.execution.boot_success_symbol;
     let factory_symbol = &layout.execution.factory_boot_success_symbol;
+    let firmware_fault_hook = "cpu AddHook `sysbus GetSymbolAddress \"HardFault_Handler\" 0` 'self.InfoLog(\"SEDS_FIRMWARE_HARDFAULT\")'\n";
+    let factory_fault_hook = "cpu AddHook `sysbus GetSymbolAddress \"HardFault_Handler\" 0` 'self.InfoLog(\"SEDS_FACTORY_HARDFAULT\")'\n";
     let ota_script = render_ota_script(layout, ota, power_cut_after);
     let outcome_hooks = layout
         .ota
@@ -827,7 +839,21 @@ fn render_script(
     };
     let security = render_security_script(layout);
     let board_initialization = render_board_initialization_script(layout);
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_msp, firmware_pc, firmware_vtor, symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_msp, factory_pc, factory_symbol, tick_hook, outcome_hooks, factory_seconds, ota_script)
+    let firmware_reset_macro = format!(
+        "macro reset\n\"\"\"\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\ncpu SetRegister 13 0x{firmware_msp:08x}\ncpu PC 0x{firmware_pc:08x}\ncpu VectorTableOffset 0x{firmware_vtor:08x}\n\"\"\"\n",
+        elf.display(),
+        firmware_image.display(),
+        layout.memory.flash_base
+    );
+    let factory_reset_macro = format!(
+        "macro reset\n\"\"\"\nsysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\ncpu SetRegister 13 0x{factory_msp:08x}\ncpu PC 0x{factory_pc:08x}\ncpu VectorTableOffset 0x{:08x}\n\"\"\"\n",
+        elf.display(),
+        bootloader_elf.display(),
+        firmware_image.display(),
+        layout.memory.flash_base,
+        layout.memory.flash_base
+    );
+    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_reset_macro, firmware_msp, firmware_pc, firmware_vtor, symbol, firmware_fault_hook, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_reset_macro, factory_msp, factory_pc, factory_symbol, factory_fault_hook, tick_hook, outcome_hooks, factory_seconds, ota_script)
 }
 
 fn render_board_initialization_script(layout: &BoardLayout) -> String {
@@ -1203,6 +1229,8 @@ mod tests {
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("flashBacking: Memory.MappedMemory @ sysbus 0x08000000"));
         assert!(overlay.contains("physicalFlash: MTD.SedsStm32FlashController"));
+        assert!(include_str!("../renode/peripherals/SedsStm32Flash.cs")
+            .contains("mcu == \"stm32g4\" && flash.Size / eraseSize > 128"));
         assert!(overlay.contains("physicalRam0: Memory.MappedMemory @ sysbus 0x20000000"));
         assert!(overlay.contains("size: 0x1c000"));
         assert!(overlay.contains("SedsNeoM9N @ spi1"));
@@ -1332,7 +1360,9 @@ mod tests {
         let factory = script.split("_factory\"").nth(1).unwrap();
         assert!(factory.contains("LoadSymbolsFrom @firmware.elf"));
         assert!(factory.contains("LoadSymbolsFrom @bootloader.elf"));
-        assert!(!factory.contains("LoadELF"));
+        assert!(factory.contains("sysbus LoadBinary @factory.bin 134217728"));
+        assert!(factory.contains("macro reset\n\"\"\"\nsysbus LoadSymbolsFrom @firmware.elf"));
+        assert!(factory.contains("sysbus LoadBinary @firmware-flash.bin 0x08000000"));
         assert!(factory.contains("cpu SetRegister 13 0x2001c000"));
         assert!(factory.contains("cpu PC 0x08000001"));
     }

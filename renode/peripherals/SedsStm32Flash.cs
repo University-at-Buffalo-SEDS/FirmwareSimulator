@@ -27,8 +27,8 @@ namespace Antmicro.Renode.Peripherals.MTD
             flash.ZeroAll();
             shadow = new byte[checked((int)flash.Size)];
             for(var i = 0; i < shadow.Length; i++) shadow[i] = 0xff;
-            InstallMemoryHooks();
             Reset();
+            InstallMemoryHooks();
         }
 
         public uint ReadDoubleWord(long offset)
@@ -48,6 +48,10 @@ namespace Antmicro.Renode.Peripherals.MTD
                 // back, so this register must retain the family-specific writable
                 // fields even though cache and power-down timing are not modeled.
                 accessControl = value & AccessControlWritableMask;
+                if((value & (1u << 11)) != 0)
+                {
+                    RequestTranslationCacheClearing();
+                }
                 return;
             }
             if(offset == KeyOffset)
@@ -89,7 +93,11 @@ namespace Antmicro.Renode.Peripherals.MTD
             programBytes = 0;
             programUnitStart = -1;
             powered = true;
-            InstallMemoryHooks();
+            // MappedMemory is reset to its erased byte by a platform reset,
+            // but physical flash is nonvolatile. Restore the controller's
+            // shadow after peripheral reset so code, OTA metadata, and board
+            // variables survive SYSRESETREQ and power-cycle scenarios.
+            if(hostLoadingEnded) flash.WriteBytes(0, shadow);
         }
 
         public long Size { get { return 0x400; } }
@@ -167,7 +175,13 @@ namespace Antmicro.Renode.Peripherals.MTD
                 corrected[n] = (byte)(oldValue & requested[n]);
                 shadow[offset + n] = corrected[n];
             }
-            flash.WriteBytes(offset, corrected);
+            // The CPU write has already updated MappedMemory before this hook
+            // runs. Rewriting identical bytes here invalidates Renode's
+            // translation blocks a second time from inside the access hook;
+            // on Cortex-M4 this can surface later as a false UNDEFINSTR in
+            // unrelated executable flash. Only rewrite when enforcing a
+            // rejected 0->1 transition actually changes the stored bytes.
+            if(!corrected.SequenceEqual(requested)) flash.WriteBytes(offset, corrected);
             if(transitionError) status |= ProgrammingErrorBit;
 
             programBytes += (uint)count;
@@ -178,6 +192,7 @@ namespace Antmicro.Renode.Peripherals.MTD
                 programCount++;
                 status |= EndOfOperationBit;
                 RecordEvent("program_unit");
+                RequestTranslationCacheClearing();
             }
         }
 
@@ -206,7 +221,13 @@ namespace Antmicro.Renode.Peripherals.MTD
                 page = (value >> 6) & 0x1f;
                 if((value & (1u << 31)) != 0) bankOffset = flash.Size / 2;
             }
-            else page = (value >> 3) & 0x7f;
+            // STM32G491/496 expose an 8-bit PNB field because their 512 KiB
+            // single-bank flash contains 256 2-KiB pages. MCU descriptors pass
+            // the family flash profile ("stm32g4"), so derive the extended
+            // page field from physical geometry rather than an exact chip name.
+            // A 7-bit mask wrapped page 254 to page 126 and erased live code.
+            else page = (value >> 3) &
+                (mcu == "stm32g4" && flash.Size / eraseSize > 128 ? 0xffu : 0x7fu);
             if(mcu == "stm32u5" && (value & (1u << 11)) != 0) bankOffset = flash.Size / 2;
             var offset = checked(bankOffset + (long)page * eraseSize);
             if(offset < 0 || offset > flash.Size - eraseSize)
@@ -226,6 +247,20 @@ namespace Antmicro.Renode.Peripherals.MTD
             status |= EndOfOperationBit;
             control &= ~(StartBit | EraseBit);
             RecordEvent("erase_complete");
+            RequestTranslationCacheClearing();
+        }
+
+        private void RequestTranslationCacheClearing()
+        {
+            // Flash register and memory hooks execute on the CPU thread. The
+            // synchronous ClearTranslationCache API attempts to pause that
+            // same CPU and can be ignored or deadlock. Renode's request API
+            // interrupts the current block and flushes at the next safe CPU
+            // boundary, which is the required behavior for self-programming.
+            foreach(var cpu in machine.GetSystemBus(this).GetCPUs().OfType<TranslationCPU>())
+            {
+                cpu.RequestTranslationCacheClearing();
+            }
         }
 
         private void RecordEvent(string eventName)
