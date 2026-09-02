@@ -782,6 +782,7 @@ fn render_script(
     // to reach the same scheduler hook without lengthening the allocator soak.
     let minimum_factory_ms = match layout.architecture {
         ArchitectureKind::Stm32h5 => 1_000,
+        ArchitectureKind::Stm32g4 => 10,
         _ => 50,
     };
     let factory_ms = minimum_factory_ms;
@@ -826,7 +827,7 @@ fn render_script(
     };
     let security = render_security_script(layout);
     let board_initialization = render_board_initialization_script(layout);
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\ncpu IsHalted true\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_msp, firmware_pc, firmware_vtor, symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_msp, factory_pc, factory_symbol, tick_hook, outcome_hooks, factory_seconds, ota_script)
+    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_msp, firmware_pc, firmware_vtor, symbol, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_msp, factory_pc, factory_symbol, tick_hook, outcome_hooks, factory_seconds, ota_script)
 }
 
 fn render_board_initialization_script(layout: &BoardLayout) -> String {
@@ -1327,6 +1328,7 @@ mod tests {
         assert!(firmware
             .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true"));
         assert!(firmware.contains("cpu LogFunctionNames true true"));
+        assert!(script.contains("cpu GetRegister 14\nmach clear\nmach create \"test_factory\""));
         let factory = script.split("_factory\"").nth(1).unwrap();
         assert!(factory.contains("LoadSymbolsFrom @firmware.elf"));
         assert!(factory.contains("LoadSymbolsFrom @bootloader.elf"));
