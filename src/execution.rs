@@ -3,8 +3,12 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::{
     env, fs,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
 
 #[derive(Debug, Serialize)]
@@ -333,22 +337,57 @@ fn unique_ota_outcome(layout: &BoardLayout, output: &str) -> Result<Option<Strin
 }
 
 fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
-    let output = Command::new(renode)
+    let mut child = Command::new(renode)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script.display()))
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| format!("starting Renode at {}", renode.display()))?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if !output.status.success() {
-        bail!(
-            "Renode failed ({}):\n{}",
-            output.status,
-            tail(&combined, 80)
-        );
+
+    let (sender, receiver) = mpsc::channel();
+    let mut readers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        readers.push(spawn_output_reader(stdout, sender.clone()));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        readers.push(spawn_output_reader(stderr, sender.clone()));
+    }
+    drop(sender);
+
+    let mut combined = String::new();
+    let mut execution_fault = false;
+    let status = loop {
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => {
+                let lower = line.to_ascii_lowercase();
+                combined.push_str(&line);
+                if lower.contains("cpu abort")
+                    || lower.contains("fatal error")
+                    || lower.contains("there was an error executing command")
+                    || lower.contains("parameters did not match")
+                {
+                    execution_fault = true;
+                    let _ = child.kill();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        if let Some(status) = child.try_wait().context("polling Renode")? {
+            break status;
+        }
+    };
+    for reader in readers {
+        let _ = reader.join();
+    }
+    combined.extend(receiver.try_iter());
+
+    if execution_fault {
+        bail!("firmware execution faulted:\n{}", tail(&combined, 80));
+    }
+    if !status.success() {
+        bail!("Renode failed ({}):\n{}", status, tail(&combined, 80));
     }
     let lower = combined.to_ascii_lowercase();
     ensure!(
@@ -361,6 +400,19 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
         tail(&combined, 80)
     );
     Ok(combined)
+}
+
+fn spawn_output_reader<R>(stream: R, sender: mpsc::Sender<String>) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            if sender.send(format!("{line}\n")).is_err() {
+                break;
+            }
+        }
+    })
 }
 
 fn warn_if_native_executor() {
@@ -730,7 +782,7 @@ fn render_script(
     let factory_seconds = factory_ms as f64 / 1000.0;
     let tracing = if layout.execution.trace {
         format!(
-            "cpu CreateExecutionTracing \"{}\" BinaryPC\n",
+            "cpu CreateExecutionTracing \"seds-execution\" \"{}\" PC true\ncpu LogFunctionNames true true\n",
             trace.display()
         )
     } else {
@@ -1242,7 +1294,8 @@ mod tests {
 
     #[test]
     fn factory_boot_uses_binary_vectors_and_symbol_only_elf_loading() {
-        let board = layout("stm32g4", "[]");
+        let mut board = layout("stm32g4", "[]");
+        board.execution.trace = true;
         let script = render_script(
             &board,
             std::path::Path::new("platform.repl"),
@@ -1265,6 +1318,9 @@ mod tests {
         assert!(firmware.contains("cpu SetRegister 13 0x2001bff0"));
         assert!(firmware.contains("cpu PC 0x08004001"));
         assert!(firmware.contains("cpu VectorTableOffset 0x08004200"));
+        assert!(firmware
+            .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true"));
+        assert!(firmware.contains("cpu LogFunctionNames true true"));
         let factory = script.split("_factory\"").nth(1).unwrap();
         assert!(factory.contains("LoadSymbolsFrom @firmware.elf"));
         assert!(factory.contains("LoadSymbolsFrom @bootloader.elf"));

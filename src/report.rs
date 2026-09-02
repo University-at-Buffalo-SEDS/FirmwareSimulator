@@ -175,6 +175,11 @@ pub fn bay(report: &BayReport) -> String {
                 report.nodes_executed.to_string(),
             ],
             vec![
+                "Host software nodes".into(),
+                "PASS".into(),
+                report.host_nodes_executed.to_string(),
+            ],
+            vec![
                 "Virtual links".into(),
                 "PASS".into(),
                 report.links_connected.to_string(),

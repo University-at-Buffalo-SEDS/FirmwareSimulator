@@ -26,6 +26,8 @@ pub struct BayTopology {
     pub enforce_end_drop: bool,
     pub nodes: Vec<Node>,
     #[serde(default)]
+    pub host_nodes: Vec<HostNode>,
+    #[serde(default)]
     pub links: Vec<Link>,
     #[serde(default)]
     pub assertions: Vec<NetworkAssertion>,
@@ -35,6 +37,23 @@ pub struct Node {
     pub name: String,
     pub layout: PathBuf,
     pub firmware_root: PathBuf,
+}
+#[derive(Debug, Deserialize)]
+pub struct HostNode {
+    pub name: String,
+    pub binary: PathBuf,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    pub serial_links: Vec<HostSerialLink>,
+}
+#[derive(Debug, Deserialize)]
+pub struct HostSerialLink {
+    pub link: String,
+    pub env: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct Link {
@@ -110,6 +129,7 @@ pub struct AssertionReport {
 pub struct BayReport {
     pub bay: String,
     pub nodes_executed: usize,
+    pub host_nodes_executed: usize,
     pub links_connected: usize,
     pub virtual_time_ms: u64,
     pub register_dump: Vec<String>,
@@ -135,8 +155,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         "avionics bay must contain at least one node"
     );
     ensure!(
-        topology.sample_count > 1,
-        "bay sample_count must exceed one"
+        topology.sample_count > 0,
+        "bay sample_count must be nonzero"
     );
     ensure!(
         topology.sample_count as u64 <= topology.virtual_time_ms,
@@ -151,10 +171,24 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             node.name
         );
     }
+    for host in &topology.host_nodes {
+        ensure!(
+            !topology.nodes.iter().any(|node| node.name == host.name),
+            "host node {} duplicates a firmware node",
+            host.name
+        );
+        ensure!(
+            host.binary.is_file(),
+            "host node {} binary is missing: {}",
+            host.name,
+            host.binary.display()
+        );
+    }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
     let mut script = String::new();
     let mut node_layouts = Vec::new();
+    let mut host_serial_paths = BTreeMap::new();
     for link in &topology.links {
         ensure!(
             link.endpoints.len() >= 2,
@@ -163,11 +197,46 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
         for endpoint in &link.endpoints {
             ensure!(
-                topology.nodes.iter().any(|node| node.name == endpoint.node),
+                topology.nodes.iter().any(|node| node.name == endpoint.node)
+                    || topology
+                        .host_nodes
+                        .iter()
+                        .any(|node| node.name == endpoint.node),
                 "link {} references unknown node {}",
                 link.name,
                 endpoint.node
             );
+        }
+        let host_endpoints: Vec<_> = link
+            .endpoints
+            .iter()
+            .filter(|endpoint| {
+                topology
+                    .host_nodes
+                    .iter()
+                    .any(|host| host.name == endpoint.node)
+            })
+            .collect();
+        ensure!(
+            host_endpoints.len() <= 1,
+            "link {} has more than one host endpoint",
+            link.name
+        );
+        if let Some(host_endpoint) = host_endpoints.first() {
+            ensure!(
+                !matches!(link.kind, LinkKind::Can),
+                "host endpoint {} on {} must use a serial link",
+                host_endpoint.node,
+                link.name
+            );
+            let path = scratch.path().join(format!("{}.pty", safe(&link.name)));
+            script += &format!(
+                "emulation CreateUartPtyTerminal \"{}\" \"{}\"\n",
+                safe(&link.name),
+                path.display()
+            );
+            host_serial_paths.insert(link.name.clone(), path);
+            continue;
         }
         match link.kind {
             // Physical normal-mode CAN controllers do not receive their own
@@ -179,6 +248,16 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             LinkKind::Uart | LinkKind::Radio | LinkKind::PicoFi | LinkKind::RoutedSerial => {
                 script += &format!("emulation CreateUARTHub \"{}\"\n", safe(&link.name))
             }
+        }
+    }
+    for host in &topology.host_nodes {
+        for serial in &host.serial_links {
+            ensure!(
+                host_serial_paths.contains_key(&serial.link),
+                "host node {} references unknown serial link {}",
+                host.name,
+                serial.link
+            );
         }
     }
     for node in &topology.nodes {
@@ -199,6 +278,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             &layout.memory,
             &format!("node {} firmware", node.name),
         )?;
+        let (firmware_msp, firmware_pc, firmware_vtor) = crate::elf::reset_vector(
+            &elf,
+            &layout.memory,
+            &format!("node {} firmware", node.name),
+        )?;
         let node_scratch = scratch.path().join(safe(&node.name));
         fs::create_dir_all(&node_scratch)?;
         let overlay = node_scratch.join("peripherals.repl");
@@ -210,12 +294,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadELF @{}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
             if layout.board.strict_mmio { "sysbus UnhandledAccessBehaviour ThrowException\n" } else { "" },
             elf.display(),
+            firmware_msp,
+            firmware_pc,
+            firmware_vtor,
             layout.execution.boot_success_symbol,
             marker
         );
@@ -234,8 +321,16 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         node_layouts.push((node.name.clone(), layout));
     }
+    if !topology.host_nodes.is_empty() {
+        script += "echo \"SEDS_HOST_ENDPOINTS_READY\"\nsleep 5\n";
+    }
+    /* Firmware nodes are independent MCUs and must advance concurrently.
+     * Globally serial execution can deadlock a sender inside a bounded HAL
+     * FIFO wait because the receiving machine/CAN hub never gets a scheduling
+     * turn. A fixed global quantum keeps the run repeatable while matching the
+     * physical bay's concurrent execution. */
     script += &format!(
-        "emulation SetGlobalQuantum \"{}\"\nemulation SetGlobalSerialExecution True\n",
+        "emulation SetGlobalQuantum \"{}\"\nemulation SetGlobalSerialExecution False\n",
         topology.quantum_seconds
     );
     let base_ms = topology.virtual_time_ms / topology.sample_count as u64;
@@ -284,6 +379,60 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .stderr(Stdio::piped())
         .spawn()
         .context("starting Renode")?;
+    let mut host_children = Vec::new();
+    if !topology.host_nodes.is_empty() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while host_serial_paths.values().any(|path| !path.exists())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        for path in host_serial_paths.values() {
+            ensure!(
+                path.exists(),
+                "Renode did not create host UART PTY {}",
+                path.display()
+            );
+            // Renode can create the PTY endpoint with a restrictive mode even
+            // when the host process runs as the same unprivileged container
+            // user. Make the simulated cable explicitly readable/writable.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o660))
+                    .with_context(|| format!("making host UART PTY usable: {}", path.display()))?;
+            }
+        }
+        for host in &topology.host_nodes {
+            let mut command = Command::new(&host.binary);
+            command.args(&host.args).envs(&host.env);
+            if let Some(cwd) = &host.cwd {
+                command.current_dir(cwd);
+            }
+            for serial in &host.serial_links {
+                command.env(&serial.env, &host_serial_paths[&serial.link]);
+            }
+            command.env(
+                "GS_NETWORK_VARIABLE_CACHE",
+                scratch
+                    .path()
+                    .join(format!("{}-network-variables.json", safe(&host.name))),
+            );
+            let stdout_path = scratch
+                .path()
+                .join(format!("{}-stdout.log", safe(&host.name)));
+            let stderr_path = scratch
+                .path()
+                .join(format!("{}-stderr.log", safe(&host.name)));
+            let child = command
+                .stdout(Stdio::from(fs::File::create(&stdout_path)?))
+                .stderr(Stdio::from(fs::File::create(&stderr_path)?))
+                .spawn()
+                .with_context(|| format!("starting host node {}", host.name))?;
+            println!("[SIM] host node {} started", host.name);
+            host_children.push((host.name.clone(), child, stdout_path, stderr_path));
+        }
+    }
     let stdout = child.stdout.take().context("capturing Renode stdout")?;
     let stderr = child.stderr.take().context("capturing Renode stderr")?;
     let stdout_reader = thread::spawn(move || -> Result<String> {
@@ -308,6 +457,46 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         Ok(captured)
     });
     let status = child.wait()?;
+    let mut host_failures = Vec::new();
+    let mut host_diagnostics = BTreeMap::new();
+    for (name, mut host, stdout_path, stderr_path) in host_children {
+        if let Some(status) = host.try_wait()? {
+            let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+            let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+            host_failures.push(format!(
+                "host node {name} exited early with {status}; verify its serial-port and layout configuration\n{}",
+                [stdout, stderr]
+                    .concat()
+                    .lines()
+                    .rev()
+                    .take(30)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        } else {
+            let _ = host.kill();
+            let _ = host.wait();
+        }
+        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let combined_host = [stdout, stderr].concat();
+        let lines = combined_host.lines().collect::<Vec<_>>();
+        let diagnostic = if lines.len() <= 120 {
+            lines.join("\n")
+        } else {
+            format!(
+                "{}\n... {} host log lines omitted ...\n{}",
+                lines[..60].join("\n"),
+                lines.len() - 120,
+                lines[lines.len() - 60..].join("\n")
+            )
+        };
+        host_diagnostics.insert(name, diagnostic);
+    }
+    ensure!(host_failures.is_empty(), "{}", host_failures.join("; "));
     let stdout = stdout_reader
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stdout reader panicked"))??;
@@ -368,37 +557,74 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     let mut link_reports = Vec::new();
+    let mut link_failures = Vec::new();
     for link in &topology.links {
         let mut endpoint_reports = Vec::new();
         for endpoint in &link.endpoints {
+            if topology
+                .host_nodes
+                .iter()
+                .any(|host| host.name == endpoint.node)
+            {
+                endpoint_reports.push(EndpointReport {
+                    node: endpoint.node.clone(),
+                    tx_probe: None,
+                    tx_observed: None,
+                    rx_probe: None,
+                    rx_observed: None,
+                });
+                continue;
+            }
             let reports = memory_profiles
                 .get(&endpoint.node)
                 .with_context(|| format!("missing profiles for node {}", endpoint.node))?;
-            let tx_observed = validate_endpoint_probe(
+            let tx_observed = observe_endpoint_probe(
                 reports,
                 endpoint.tx_probe.as_deref(),
-                endpoint.minimum_tx,
                 &link.name,
                 &endpoint.node,
                 "TX",
             )?;
-            let rx_observed = validate_endpoint_probe(
+            let rx_observed = observe_endpoint_probe(
                 reports,
                 endpoint.rx_probe.as_deref(),
-                endpoint.minimum_rx,
                 &link.name,
                 &endpoint.node,
                 "RX",
             )?;
+            if let (Some(probe), Some(observed)) = (&endpoint.tx_probe, tx_observed) {
+                if observed < endpoint.minimum_tx {
+                    link_failures.push(format!(
+                        "{} / {} TX: {}={} (required >= {})",
+                        link.name, endpoint.node, probe, observed, endpoint.minimum_tx
+                    ));
+                }
+            }
+            if let (Some(probe), Some(observed)) = (&endpoint.rx_probe, rx_observed) {
+                if observed < endpoint.minimum_rx {
+                    link_failures.push(format!(
+                        "{} / {} RX: {}={} (required >= {})",
+                        link.name, endpoint.node, probe, observed, endpoint.minimum_rx
+                    ));
+                }
+            }
             if endpoint.tx_probe.is_none() && endpoint.rx_probe.is_none() {
-                validate_endpoint_probe(
+                let activity_observed = observe_endpoint_probe(
                     reports,
                     endpoint.activity_probe.as_deref(),
-                    endpoint.minimum_activity,
                     &link.name,
                     &endpoint.node,
                     "activity",
                 )?;
+                if let (Some(probe), Some(observed)) = (&endpoint.activity_probe, activity_observed)
+                {
+                    if observed < endpoint.minimum_activity {
+                        link_failures.push(format!(
+                            "{} / {} activity: {}={} (required >= {})",
+                            link.name, endpoint.node, probe, observed, endpoint.minimum_activity
+                        ));
+                    }
+                }
             }
             ensure!(
                 endpoint.tx_probe.is_some() && endpoint.rx_probe.is_some()
@@ -421,6 +647,47 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             transport_path: link.transport_path.clone(),
             endpoints: endpoint_reports,
         });
+    }
+    if !link_failures.is_empty() {
+        let diagnostic_probe_names = [
+            "heartbeat_attempts",
+            "heartbeat_ok",
+            "heartbeat_fail",
+            "network_ready",
+            "peer_mask",
+            "fdcan_tx_ok",
+            "fdcan_tx_fail",
+            "fdcan_rx",
+            "fdcan_last_error",
+            "fdcan_last_state",
+            "queue_errors",
+            "discovery_poll_errors",
+            "timesync_poll_errors",
+            "startup_fault_stage",
+            "telemetry_thread_entered",
+            "telemetry_service_stage",
+            "alloc_failures",
+            "panics",
+        ];
+        let mut diagnostics = Vec::new();
+        for (node, reports) in &memory_profiles {
+            let values: Vec<String> = diagnostic_probe_names
+                .iter()
+                .filter_map(|name| {
+                    reports
+                        .iter()
+                        .find(|report| report.name == *name)
+                        .map(|report| format!("{name}={}", report.maximum_observed))
+                })
+                .collect();
+            diagnostics.push(format!("{node}: {}", values.join(", ")));
+        }
+        bail!(
+            "{} network endpoint check(s) failed:\n- {}\n\nEndpoint diagnostics:\n{}",
+            link_failures.len(),
+            link_failures.join("\n- "),
+            diagnostics.join("\n")
+        );
     }
     let mut assertion_reports = Vec::new();
     let mut assertion_failures = Vec::new();
@@ -473,15 +740,22 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         });
     }
     if !assertion_failures.is_empty() {
+        let host_detail = host_diagnostics
+            .iter()
+            .map(|(name, output)| format!("{name}:\n{output}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "{} network assertion(s) failed:\n- {}",
+            "{} network assertion(s) failed:\n- {}\n\nHost diagnostics:\n{}",
             assertion_failures.len(),
-            assertion_failures.join("\n- ")
+            assertion_failures.join("\n- "),
+            host_detail
         );
     }
     Ok(BayReport {
         bay: topology.name,
         nodes_executed: topology.nodes.len(),
+        host_nodes_executed: topology.host_nodes.len(),
         links_connected: topology.links.len(),
         virtual_time_ms: topology.virtual_time_ms,
         register_dump,
@@ -491,10 +765,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     })
 }
 
-fn validate_endpoint_probe(
+fn observe_endpoint_probe(
     reports: &[MemoryProbeReport],
     probe_name: Option<&str>,
-    minimum: u32,
     link_name: &str,
     node_name: &str,
     direction: &str,
@@ -506,11 +779,6 @@ fn validate_endpoint_probe(
         .iter()
         .find(|report| report.name == probe_name)
         .with_context(|| format!("link {link_name} endpoint {node_name} requires unknown {direction} probe {probe_name}"))?;
-    ensure!(
-        report.maximum_observed >= minimum,
-        "link {link_name} endpoint {node_name} {direction} failed: probe {probe_name} maximum {} is below {minimum}",
-        report.maximum_observed
-    );
     Ok(Some(report.maximum_observed))
 }
 

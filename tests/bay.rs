@@ -20,7 +20,7 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
             ]}
         })
     };
-    let mut elf = vec![0_u8; 88];
+    let mut elf = vec![0_u8; 96];
     elf[0..6].copy_from_slice(b"\x7fELF\x01\x01");
     elf[24..28].copy_from_slice(&0x0800_4001_u32.to_le_bytes());
     elf[28..32].copy_from_slice(&52_u32.to_le_bytes());
@@ -30,8 +30,10 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     elf[56..60].copy_from_slice(&84_u32.to_le_bytes());
     elf[60..64].copy_from_slice(&0x0800_4000_u32.to_le_bytes());
     elf[64..68].copy_from_slice(&0x0800_4000_u32.to_le_bytes());
-    elf[68..72].copy_from_slice(&4_u32.to_le_bytes());
-    elf[72..76].copy_from_slice(&4_u32.to_le_bytes());
+    elf[68..72].copy_from_slice(&12_u32.to_le_bytes());
+    elf[72..76].copy_from_slice(&12_u32.to_le_bytes());
+    elf[84..88].copy_from_slice(&0x2001_c000_u32.to_le_bytes());
+    elf[88..92].copy_from_slice(&0x0800_4001_u32.to_le_bytes());
     for name in ["a", "b"] {
         fs::write(
             root.join(name).join("board.json"),

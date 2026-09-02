@@ -1,4 +1,17 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.88-bookworm AS groundstation
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
+ARG GROUNDSTATION_REF=cf9dea2606bccc78ef1f24d362e212f69cdd924c
+RUN git init /groundstation \
+    && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
+    && git -C /groundstation fetch --depth 1 origin "${GROUNDSTATION_REF}" \
+    && git -C /groundstation checkout --detach FETCH_HEAD \
+    && cargo build --manifest-path /groundstation/Cargo.toml \
+         -p groundstation_backend --release --features hitl_mode
+
+FROM rust:1.88-bookworm AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
 COPY src src
@@ -36,10 +49,20 @@ ENV FIRMWARE_SIM_ROOT=/opt/firmware-sim
 ENV FIRMWARE_SIM_CONTAINER=1
 ENV RENODE=/opt/renode/renode
 USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libudev1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/firmware-sim /usr/local/bin/firmware-sim
+COPY --from=groundstation /groundstation/target/release/groundstation_backend /usr/local/bin/groundstation_backend
+COPY --from=groundstation /groundstation/backend/layout /opt/groundstation/backend/layout
+COPY --from=groundstation /groundstation/backend/config /opt/groundstation/backend/config
+COPY --from=groundstation /groundstation/backend/comms /opt/groundstation/backend/comms
 COPY --from=renode /opt/renode /opt/renode
 COPY renode /opt/firmware-sim/renode
 RUN useradd --create-home --uid 10001 simulator
+RUN mkdir -p /opt/groundstation/backend/data \
+    && chown -R simulator:simulator /opt/groundstation \
+    && ln -s /opt/groundstation /groundstation
 USER simulator
 ENV HOME=/home/simulator
 WORKDIR /home/simulator
