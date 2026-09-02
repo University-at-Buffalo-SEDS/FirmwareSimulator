@@ -31,6 +31,14 @@ The authoritative schema is `schema/board-layout.schema.json` and `examples/stm3
 
 The direct run loads the firmware ELF and requires `execution.boot_success_symbol` (normally the scheduler) to execute. The factory run loads ELF symbols without loading ELF bytes, maps only the exact generated factory binary at the BSP flash base, initializes MSP and PC from its vector table, and requires `execution.factory_boot_success_symbol` (default `main`). Validation rejects vectors outside declared flash/RAM.
 
+Boards using LaunchCore persistent settings declare `memory.persistent_data_base`
+and `memory.persistent_data_size`. Validation requires an erase-aligned region
+containing at least two erase units, rejects overlap with the bootloader,
+application, delta, or secondary-slot ranges, and rejects a factory binary that
+extends into it. This models the storage boundary that lets OTA and normal
+factory reflashes preserve settings; a programmer-issued whole-chip mass erase
+is intentionally outside that guarantee.
+
 Set `artifacts.updated_firmware` to the unpackaged next application image when supplying `artifacts.ota`. The flash interruption model then uses the real old/new image pair. Without it, a deterministic one-bit mutation is retained only as a structural self-test and `updated_image_from_artifact` is false in the report.
 
 If a Renode architecture model cannot deliver its HAL timebase interrupt efficiently, set `execution.hal_tick_address` to the linked `uwTick` address. The simulator then advances that word whenever firmware calls `HAL_GetTick`, preserving timeout and delay progress without inventing a board-wide timer peripheral. `hal_tick_step` defaults to one millisecond and may be increased to accelerate long startup delays. The address must come from the current ELF/map and remain inside a declared physical RAM region.

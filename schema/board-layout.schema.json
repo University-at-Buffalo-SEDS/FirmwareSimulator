@@ -59,6 +59,8 @@
         "slot_b_size": {"type": "integer", "minimum": 1},
         "delta_base": {"type": "integer", "minimum": 0},
         "delta_size": {"type": "integer", "minimum": 1},
+        "persistent_data_base": {"type": "integer", "minimum": 0},
+        "persistent_data_size": {"type": "integer", "minimum": 1},
         "erase_size": {"type": "integer", "minimum": 1},
         "write_alignment": {"type": "integer", "minimum": 1},
         "sedsnet_pool": {"type": "integer", "minimum": 1}

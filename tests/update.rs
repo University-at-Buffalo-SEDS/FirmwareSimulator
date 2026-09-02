@@ -18,6 +18,8 @@ fn memory() -> MemoryLayout {
         slot_b_size: None,
         delta_base: Some(0x08078000),
         delta_size: Some(0x6000),
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 4096,

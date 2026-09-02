@@ -79,6 +79,8 @@ fn exact_mcu_must_match_architecture_and_capacity() {
         slot_b_size: None,
         delta_base: None,
         delta_size: None,
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 4096,
@@ -113,10 +115,51 @@ fn rejects_overlapping_slot() {
         slot_b_size: None,
         delta_base: None,
         delta_size: None,
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 4096,
     };
+    assert!(Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .is_err());
+}
+
+#[test]
+fn validates_reserved_persistent_flash_partition() {
+    let mut memory = MemoryLayout {
+        flash_base: 0x08000000,
+        flash_size: 0x80000,
+        ram_regions: vec![MemoryRegion {
+            name: "sram".into(),
+            base: 0x20000000,
+            size: 0x1c000,
+        }],
+        bootloader_size: 0x4000,
+        slot_a_base: 0x08004000,
+        slot_a_size: 0x74000,
+        slot_b_base: None,
+        slot_b_size: None,
+        delta_base: Some(0x08078000),
+        delta_size: Some(0x6000),
+        persistent_data_base: Some(0x0807f000),
+        persistent_data_size: Some(0x1000),
+        erase_size: 0x800,
+        write_alignment: 8,
+        sedsnet_pool: 4096,
+    };
+    Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .unwrap();
+
+    memory.persistent_data_base = Some(0x0807d800);
+    assert!(Architecture::for_kind(ArchitectureKind::Stm32g4)
+        .validate(&memory)
+        .is_err());
+
+    memory.persistent_data_base = Some(0x0807f000);
+    memory.persistent_data_size = Some(0x800);
     assert!(Architecture::for_kind(ArchitectureKind::Stm32g4)
         .validate(&memory)
         .is_err());
@@ -148,6 +191,8 @@ fn rejects_pool_larger_than_physical_ram() {
         slot_b_size: None,
         delta_base: None,
         delta_size: None,
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 0x1001,
@@ -185,6 +230,8 @@ fn rejects_overlapping_physical_ram_banks() {
         slot_b_size: None,
         delta_base: None,
         delta_size: None,
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 1024,
@@ -225,6 +272,8 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
             slot_b_size: None,
             delta_base: None,
             delta_size: None,
+            persistent_data_base: None,
+            persistent_data_size: None,
             erase_size: 0x2000,
             write_alignment: 16,
             sedsnet_pool: 1024,

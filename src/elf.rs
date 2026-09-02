@@ -266,6 +266,8 @@ mod tests {
             slot_b_size: None,
             delta_base: None,
             delta_size: None,
+            persistent_data_base: None,
+            persistent_data_size: None,
             erase_size: 0x800,
             write_alignment: 8,
             sedsnet_pool: 4096,

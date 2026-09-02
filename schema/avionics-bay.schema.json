@@ -7,6 +7,8 @@
     "name": {"type": "string", "minLength": 1},
     "quantum_seconds": {"type": "number", "exclusiveMinimum": 0},
     "virtual_time_ms": {"type": "integer", "minimum": 1},
+    "sample_count": {"type": "integer", "minimum": 1},
+    "enforce_end_drop": {"type": "boolean"},
     "nodes": {"type": "array", "minItems": 1, "items": {
       "type": "object", "required": ["name", "layout", "firmware_root"],
       "properties": {
@@ -15,22 +17,60 @@
         "firmware_root": {"type": "string", "minLength": 1}
       }, "additionalProperties": false
     }},
+    "host_nodes": {"type": "array", "items": {
+      "type": "object", "required": ["name", "binary", "serial_links"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "binary": {"type": "string", "minLength": 1},
+        "cwd": {"type": "string", "minLength": 1},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "network_variable_cache": {"type": "string", "minLength": 1},
+        "serial_links": {"type": "array", "items": {
+          "type": "object", "required": ["link", "env"],
+          "properties": {
+            "link": {"type": "string", "minLength": 1},
+            "env": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }}
+      },
+      "additionalProperties": false
+    }},
     "links": {"type": "array", "items": {
       "type": "object", "required": ["name", "kind", "endpoints"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["can", "uart"]},
+        "kind": {"enum": ["can", "uart", "radio", "pico_fi", "routed_serial"]},
+        "transport_path": {"type": "array", "items": {"type": "string"}},
         "endpoints": {"type": "array", "minItems": 2, "items": {
           "type": "object", "required": ["node", "peripheral"],
           "properties": {
             "node": {"type": "string"},
             "peripheral": {"type": "string"},
             "activity_probe": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
-            "minimum_activity": {"type": "integer", "minimum": 1}
+            "minimum_activity": {"type": "integer", "minimum": 1},
+            "tx_probe": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+            "rx_probe": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+            "minimum_tx": {"type": "integer", "minimum": 1},
+            "minimum_rx": {"type": "integer", "minimum": 1}
           },
           "additionalProperties": false
         }}
       }, "additionalProperties": false
+    }},
+    "assertions": {"type": "array", "items": {
+      "type": "object", "required": ["name", "node", "probe"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "node": {"type": "string", "minLength": 1},
+        "probe": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+        "minimum": {"type": "integer", "minimum": 0},
+        "maximum": {"type": "integer", "minimum": 0},
+        "required_bits": {"type": "integer", "minimum": 0},
+        "sample": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
     }}
   },
   "additionalProperties": false

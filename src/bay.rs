@@ -48,6 +48,11 @@ pub struct HostNode {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Optional persistent cache path shared across separate bay invocations.
+    /// Relative paths resolve beside the topology; absolute paths are useful
+    /// for a writable Docker volume such as /state.
+    #[serde(default)]
+    pub network_variable_cache: Option<PathBuf>,
     pub serial_links: Vec<HostSerialLink>,
 }
 #[derive(Debug, Deserialize)]
@@ -102,6 +107,9 @@ pub struct NetworkAssertion {
     pub maximum: Option<u32>,
     #[serde(default)]
     pub required_bits: Option<u32>,
+    /// Check one zero-based sample rather than the maximum across the run.
+    #[serde(default)]
+    pub sample: Option<usize>,
 }
 #[derive(Debug, Serialize)]
 pub struct LinkReport {
@@ -412,12 +420,21 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             for serial in &host.serial_links {
                 command.env(&serial.env, &host_serial_paths[&serial.link]);
             }
-            command.env(
-                "GS_NETWORK_VARIABLE_CACHE",
-                scratch
-                    .path()
-                    .join(format!("{}-network-variables.json", safe(&host.name))),
-            );
+            let variable_cache = host
+                .network_variable_cache
+                .as_ref()
+                .map(|path| base.join(path))
+                .unwrap_or_else(|| {
+                    scratch
+                        .path()
+                        .join(format!("{}-network-variables.json", safe(&host.name)))
+                });
+            if let Some(parent) = variable_cache.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("creating host state directory {}", parent.display())
+                })?;
+            }
+            command.env("GS_NETWORK_VARIABLE_CACHE", variable_cache);
             let stdout_path = scratch
                 .path()
                 .join(format!("{}-stdout.log", safe(&host.name)));
@@ -707,7 +724,20 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     assertion.name, assertion.probe, assertion.node
                 )
             })?;
-        let observed = report.maximum_observed;
+        let observed = if let Some(sample) = assertion.sample {
+            *report.samples.get(sample).with_context(|| {
+                format!(
+                    "assertion {} requests sample {}, but {}.{} has {} samples",
+                    assertion.name,
+                    sample,
+                    assertion.node,
+                    assertion.probe,
+                    report.samples.len()
+                )
+            })?
+        } else {
+            report.maximum_observed
+        };
         if let Some(minimum) = assertion.minimum {
             if observed < minimum {
                 assertion_failures.push(format!(

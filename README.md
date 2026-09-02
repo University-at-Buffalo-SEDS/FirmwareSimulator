@@ -39,6 +39,19 @@ Multiple firmware images can execute together in a single synchronized Renode pr
 
 One repository-linked image containing every bundled descriptor and platform profile is built and tested by GitHub Actions. Board repositories expose this through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts.
 
+To qualify the complete system from a fresh simulator checkout without manually
+cloning any board repositories, run:
+
+```sh
+python3 scripts/run-full-system.py
+```
+
+The launcher clones or fast-forwards all seven firmware migration branches into
+`build/full-system`, runs every repository's unit suite, builds release firmware,
+and executes the linked GroundStation, avionics-bay, and fill-system test. Pass
+`--debug` for debug firmware or `--workspace /path` to keep the checkouts and
+build cache elsewhere.
+
 The organization package administrator must make the `firmwaresimulator` container package public once in its GitHub package settings. GHCR preserves that visibility for later image versions; GitHub does not provide a supported REST endpoint for changing package visibility from the publishing workflow.
 
 ## Documentation

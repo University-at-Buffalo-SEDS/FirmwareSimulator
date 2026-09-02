@@ -207,6 +207,40 @@ impl Architecture {
                 "invalid slot B"
             );
         }
+        ensure!(
+            memory.persistent_data_base.is_some() == memory.persistent_data_size.is_some(),
+            "persistent_data_base and persistent_data_size must be provided together"
+        );
+        if let (Some(base), Some(size)) = (memory.persistent_data_base, memory.persistent_data_size)
+        {
+            let end = base
+                .checked_add(size)
+                .ok_or_else(|| anyhow::anyhow!("persistent-data range overflow"))?;
+            ensure!(
+                size >= 2 * memory.erase_size
+                    && base % memory.erase_size == 0
+                    && size % memory.erase_size == 0
+                    && base >= slot_end
+                    && end <= flash_end,
+                "invalid persistent-data area"
+            );
+            let overlaps = |other_base: u64, other_size: u64| {
+                base < other_base.saturating_add(other_size) && other_base < end
+            };
+            ensure!(
+                !overlaps(memory.flash_base, memory.bootloader_size)
+                    && !overlaps(memory.slot_a_base, memory.slot_a_size)
+                    && !memory
+                        .delta_base
+                        .zip(memory.delta_size)
+                        .is_some_and(|(other_base, other_size)| overlaps(other_base, other_size))
+                    && !memory
+                        .slot_b_base
+                        .zip(memory.slot_b_size)
+                        .is_some_and(|(other_base, other_size)| overlaps(other_base, other_size)),
+                "persistent-data area overlaps a firmware/update partition"
+            );
+        }
         ensure!(memory.sedsnet_pool > 0, "sedsnet_pool must be positive");
         ensure!(
             !memory.ram_regions.is_empty(),

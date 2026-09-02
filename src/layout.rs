@@ -201,6 +201,10 @@ pub struct MemoryLayout {
     pub delta_base: Option<u64>,
     #[serde(default)]
     pub delta_size: Option<u64>,
+    #[serde(default)]
+    pub persistent_data_base: Option<u64>,
+    #[serde(default)]
+    pub persistent_data_size: Option<u64>,
     pub erase_size: u64,
     pub write_alignment: u64,
     pub sedsnet_pool: usize,

@@ -82,6 +82,13 @@ pub fn validate(layout: &BoardLayout, root: &Path) -> Result<()> {
         images.factory.len() as u64 <= layout.memory.flash_size,
         "factory image exceeds flash"
     );
+    if let Some(persistent_base) = layout.memory.persistent_data_base {
+        let factory_end = layout.memory.flash_base + images.factory.len() as u64;
+        ensure!(
+            factory_end <= persistent_base,
+            "factory image overlaps persistent board state"
+        );
+    }
     ensure!(
         images.factory.len() >= 8,
         "factory image has no reset vector"
@@ -501,6 +508,8 @@ pub fn self_test(kind: ArchitectureKind) -> Result<()> {
         slot_b_size: None,
         delta_base: Some(0x0800_0000 + arch.default_flash_size - 0x2000),
         delta_size: Some(0x2000),
+        persistent_data_base: None,
+        persistent_data_size: None,
         erase_size: 0x800,
         write_alignment: 8,
         sedsnet_pool: 4096,
