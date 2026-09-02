@@ -106,6 +106,12 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         layout.execution.memory_probe_warmup_samples < layout.execution.sample_count,
         "execution memory_probe_warmup_samples must be less than sample_count"
     );
+    if layout.execution.require_stack_probe {
+        ensure!(
+            layout.execution.satisfies_stack_probe_requirement(),
+            "execution requires a per-thread stack probe with a positive minimum margin"
+        );
+    }
     ensure!(
         layout.execution.hal_tick_step > 0,
         "execution hal_tick_step must be positive"

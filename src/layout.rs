@@ -245,6 +245,8 @@ pub struct ExecutionConfig {
     #[serde(default)]
     pub memory_probe_warmup_samples: usize,
     #[serde(default)]
+    pub require_stack_probe: bool,
+    #[serde(default)]
     pub hal_tick_address: Option<u64>,
     #[serde(default = "default_hal_tick_step")]
     pub hal_tick_step: u32,
@@ -260,10 +262,20 @@ impl Default for ExecutionConfig {
             factory_boot_success_symbol: default_factory_boot_symbol(),
             sample_count: default_sample_count(),
             memory_probe_warmup_samples: 0,
+            require_stack_probe: false,
             hal_tick_address: None,
             hal_tick_step: default_hal_tick_step(),
             memory_probes: Vec::new(),
         }
+    }
+}
+impl ExecutionConfig {
+    pub(crate) fn satisfies_stack_probe_requirement(&self) -> bool {
+        !self.require_stack_probe
+            || self
+                .memory_probes
+                .iter()
+                .any(|probe| probe.name.contains("stack") && probe.minimum.unwrap_or(0) > 0)
     }
 }
 fn default_boot_symbol() -> String {
@@ -462,7 +474,7 @@ pub struct SecurityConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::BoardLayout;
+    use super::{BoardLayout, ExecutionConfig, MemoryProbe};
     use crate::core::McuKind;
     use std::fs;
 
@@ -497,5 +509,24 @@ mod tests {
         );
         assert_eq!(layout.peripherals[0].model.as_deref(), Some("stm32_adc"));
         assert_eq!(layout.peripherals[0].bus.as_deref(), Some("adc1"));
+    }
+
+    #[test]
+    fn required_stack_probe_needs_a_positive_remaining_margin() {
+        let mut execution = ExecutionConfig {
+            require_stack_probe: true,
+            ..ExecutionConfig::default()
+        };
+        assert!(!execution.satisfies_stack_probe_requirement());
+        execution.memory_probes.push(MemoryProbe {
+            name: "telemetry_stack_remaining".into(),
+            symbol: "g_telemetry_stack_remaining".into(),
+            minimum: Some(8192),
+            maximum: None,
+            max_end_drop: None,
+        });
+        assert!(execution.satisfies_stack_probe_requirement());
+        execution.memory_probes[0].minimum = Some(0);
+        assert!(!execution.satisfies_stack_probe_requirement());
     }
 }
