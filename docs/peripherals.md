@@ -1,6 +1,7 @@
 # Peripheral models
 
-Built-in types are `imu`, `barometer`, `gps`, `adc`, and `pressure_transducer`. Every device requires `type` and `name`. Optional common behavior:
+Built-in types are `imu`, `barometer`, `gps`, `adc`, `pressure_transducer`, and
+`storage`. Every device requires `type` and `name`. Optional common behavior:
 
 - `failure_every`: return a deterministic driver error every Nth access
 - `disconnect_after`: behave as disconnected after N accesses
@@ -11,6 +12,11 @@ ADC models accept `bits`, `channels`, per-channel `channel_samples`, and optiona
 deterministic `noise_lsb`; pressure transducers accept `max_psi`. The full test
 exercises ordinary data, intermittent failures, and disconnection without
 relying on hardware.
+
+Removable storage uses the `sd_card` model and accepts `capacity_bytes`, which
+must be a multiple of 512 and defaults to 4 MiB. H5 and U5 attach it to the
+layout bus name `sdmmc1`; the H5 profile maps that logical name to its `sdmmc`
+controller.
 
 ## Add a peripheral
 

@@ -6,10 +6,10 @@ A deterministic Rust orchestrator and Renode execution environment for SEDS embe
 
 - `core/`: STM32G4, STM32H5, and STM32U5 architecture/memory behavior
 - `mcu/catalog.json`: runtime MCU catalog, capacities, CPU models, and profile mappings
-- `peripherals/`: IMU, barometer, GPS, ADC, and pressure-transducer models with deterministic fault injection
+- `peripherals/`: sensor and removable-storage models with deterministic fault injection
 - `renode/platforms/`: reusable STM32G4, STM32H5, and STM32U5 CPU/MMIO profiles
 - `src/`: ELF execution, linked-bay orchestration, traffic stress, flash, boot, and OTA checks
-- `schema/`: board-layout JSON schema
+- `schema/`: board-layout and linked-bay JSON schemas
 - `tests/`: the simulator's own test suite
 
 ## Run
@@ -17,6 +17,8 @@ A deterministic Rust orchestrator and Renode execution environment for SEDS embe
 ```sh
 cargo test --all-targets
 cargo run -- self-test --arch stm32g4
+cargo run -- self-test --arch stm32h5
+cargo run -- self-test --arch stm32u5
 cargo run -- list-mcus
 ```
 
@@ -56,7 +58,7 @@ The organization package administrator must make the `firmwaresimulator` contain
 
 ## Documentation
 
-- [Usage](docs/usage.md)
+- [Usage guide and per-platform examples](docs/usage.md)
 - [Board layouts](docs/board-layouts.md)
 - [Peripheral models](docs/peripherals.md)
 - [Hardware fidelity and explicit limits](docs/hardware-fidelity.md)

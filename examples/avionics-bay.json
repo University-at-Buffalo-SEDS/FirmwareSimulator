@@ -9,9 +9,9 @@
   ],
   "links": [
     {"name": "avionics_can", "kind": "can", "endpoints": [
-      {"node": "flight", "peripheral": "fdcan1"},
-      {"node": "rf", "peripheral": "fdcan2"},
-      {"node": "power", "peripheral": "fdcan2"}
+      {"node": "flight", "peripheral": "fdcan1", "activity_probe": "fdcan_irqs"},
+      {"node": "rf", "peripheral": "fdcan2", "activity_probe": "fdcan_irqs"},
+      {"node": "power", "peripheral": "fdcan2", "activity_probe": "fdcan_irqs"}
     ]}
   ]
 }

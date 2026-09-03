@@ -2,19 +2,20 @@
 
 Each firmware repository owns `sim/board.json`. The file and its referenced artifacts are mounted together; paths under `artifacts` are relative to `--firmware-root`.
 
-Required sections:
+Required top-level fields are `name`, `architecture`, `mcu`, `memory`, and
+`artifacts`. The remaining sections are optional and use deterministic defaults:
 
 - `architecture`: execution profile (`stm32g4`, `stm32h5`, `stm32u5`, or `stm32` for an exact repository-supplied platform)
 - `mcu`: exact silicon line from `firmware-sim list-mcus`, or the name of an inline `mcu_descriptor`; it must match `architecture` and selects the platform at runtime
 - `memory`: BSP flash base/size, every physical RAM bank, bootloader and application partitions, erase/program alignment, and the independent SEDSNet main-pool budget
 - `artifacts`: linked firmware and bootloader ELFs, packaged application, bootloader binary, exact combined factory image, and optional `.seds` OTA file
-- `execution`: virtual runtime, optional PC tracing, and the symbol proving firmware startup completed (defaults to ThreadX `_tx_thread_schedule`)
+- `execution`: virtual runtime, optional PC tracing, memory/stack probes, and the symbol proving firmware startup completed (defaults to ThreadX `_tx_thread_schedule`)
 - `traffic`: deterministic packet count, maximum payload, and dispatch policy
 - `board`: optional clock overrides, signal connections, DMA routing declarations,
   strict-MMIO policy, and security attribution requested by the board
 - `ota`: transport timing, firmware-observable boot outcomes, and power-cut policy
 - `peripherals`: devices, their optional instruction-coupled `model`/`bus`, and
-  devised failure behavior the board must survive
+  configured failure behavior the board must survive
 
 Peripheral implementation code belongs to FirmwareSimulator. Firmware repos
 select it only through `sim/board.json`; the simulator generates and loads the

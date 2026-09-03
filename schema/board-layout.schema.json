@@ -90,6 +90,7 @@
         "factory_boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
         "sample_count": {"type": "integer", "minimum": 1},
         "memory_probe_warmup_samples": {"type": "integer", "minimum": 0},
+        "require_stack_probe": {"type": "boolean"},
         "hal_tick_address": {"type": "integer", "minimum": 0},
         "hal_tick_step": {"type": "integer", "minimum": 1},
         "memory_probes": {
