@@ -41,9 +41,11 @@ fdcan2MessageRAM: Memory.ArrayMemory @ sysbus <0x4000A750, +0x350>
 uart4: UART.STM32F7_USART @ sysbus 0x40004C00
     frequency: 170000000
     IRQ -> nvic@52
-usart2: UART.STM32F7_USART @ sysbus 0x40004400
+usart2: UART.SedsStm32Uart @ sysbus 0x40004400
     frequency: 170000000
     IRQ -> nvic@38
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Uart.cs
 usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 170000000
     IRQ -> nvic@37

@@ -2,12 +2,15 @@ use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayou
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     env, fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
+    os::fd::AsRawFd,
+    os::unix::net::UnixListener,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
+    time::Duration,
 };
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +34,8 @@ pub struct BayTopology {
     pub links: Vec<Link>,
     #[serde(default)]
     pub assertions: Vec<NetworkAssertion>,
+    #[serde(default)]
+    pub host_log_assertions: Vec<HostLogAssertion>,
 }
 #[derive(Debug, Deserialize)]
 pub struct Node {
@@ -59,6 +64,17 @@ pub struct HostNode {
 pub struct HostSerialLink {
     pub link: String,
     pub env: String,
+    #[serde(default)]
+    pub transport: HostLinkTransport,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostLinkTransport {
+    #[default]
+    UartPty,
+    /// Linux I2C transactions on the host side, translated by a Pico-Fi pair
+    /// to framed UART bytes on the firmware side.
+    PicoFiI2cToUart,
 }
 #[derive(Debug, Deserialize)]
 pub struct Link {
@@ -111,6 +127,12 @@ pub struct NetworkAssertion {
     #[serde(default)]
     pub sample: Option<usize>,
 }
+#[derive(Debug, Deserialize)]
+pub struct HostLogAssertion {
+    pub name: String,
+    pub node: String,
+    pub contains: String,
+}
 #[derive(Debug, Serialize)]
 pub struct LinkReport {
     pub name: String,
@@ -144,6 +166,354 @@ pub struct BayReport {
     pub memory_profiles: BTreeMap<String, Vec<MemoryProbeReport>>,
     pub link_reports: Vec<LinkReport>,
     pub assertion_reports: Vec<AssertionReport>,
+}
+
+const PICO_I2C_SLOT_SIZE: usize = 32;
+const PICO_I2C_HEADER_SIZE: usize = 18;
+const PICO_I2C_PAYLOAD_SIZE: usize = PICO_I2C_SLOT_SIZE - PICO_I2C_HEADER_SIZE;
+const PICO_I2C_MAGIC: [u8; 2] = [0x49, 0x32];
+const PICO_I2C_VERSION: u8 = 1;
+const PICO_I2C_DATA: u8 = 1;
+const PICO_I2C_START: u8 = 1;
+const PICO_I2C_END: u8 = 2;
+const PICO_I2C_PACKET_MAX: usize = 4_096;
+const PICO_UART_MAX_FRAME: usize = PICO_I2C_PACKET_MAX + 4;
+const PICO_PACKET_QUEUE_DEPTH: usize = 8;
+const PICO_PACKET_QUEUE_BYTES: usize = 8_192;
+const PICO_UART_BAUD: u64 = 115_200;
+const PICO_UART_BITS_PER_BYTE: u64 = 10;
+const PICO_UART_EMULATION_PACING_SCALE: u64 = 12;
+
+#[derive(Default)]
+struct PicoBridgeState {
+    host_assembly: Option<(u16, usize, Vec<u8>)>,
+    uart_rx: Vec<u8>,
+    uart_tx_packets: VecDeque<Vec<u8>>,
+    uart_tx_offset: usize,
+    uart_tx_bytes: usize,
+    host_reads: VecDeque<[u8; PICO_I2C_SLOT_SIZE]>,
+    next_transfer_id: u16,
+    i2c_to_uart_frames: u32,
+    uart_to_i2c_frames: u32,
+}
+
+fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path) -> Result<()> {
+    let mut uart = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(uart_path)
+        .with_context(|| format!("opening Pico-Fi Gateway UART {}", uart_path.display()))?;
+    configure_raw_nonblocking(uart.as_raw_fd())?;
+    let (mut host, _) = listener
+        .accept()
+        .context("accepting GroundStation I2C endpoint")?;
+    let mut state = PicoBridgeState {
+        next_transfer_id: 1,
+        ..Default::default()
+    };
+    loop {
+        drain_gateway_uart_tx(&mut state, &mut uart)?;
+        let mut operation = [0u8; 1];
+        match host.read_exact(&mut operation) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(error) => return Err(error).context("reading simulated I2C operation"),
+        }
+        match operation[0] {
+            b'W' => {
+                let mut slot = [0u8; PICO_I2C_SLOT_SIZE];
+                host.read_exact(&mut slot)?;
+                match ingest_host_i2c_slot(&mut state, &slot) {
+                    Ok(()) => host.write_all(&[0])?,
+                    Err(error) => {
+                        eprintln!("[SIM] Pico-Fi rejected malformed I2C slot: {error:#}");
+                        host.write_all(&[1])?;
+                    }
+                }
+            }
+            b'R' => {
+                read_gateway_uart(&mut state, &mut uart)?;
+                let slot = state
+                    .host_reads
+                    .pop_front()
+                    .unwrap_or([0; PICO_I2C_SLOT_SIZE]);
+                host.write_all(&slot)?;
+            }
+            other => bail!("unknown simulated I2C operation 0x{other:02x}"),
+        }
+        drain_gateway_uart_tx(&mut state, &mut uart)?;
+        host.flush()?;
+    }
+}
+
+fn configure_raw_nonblocking(fd: std::os::fd::RawFd) -> Result<()> {
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    ensure!(
+        unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } == 0,
+        "tcgetattr failed: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut termios = unsafe { termios.assume_init() };
+    unsafe { libc::cfmakeraw(&mut termios) };
+    ensure!(
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } == 0,
+        "tcsetattr failed: {}",
+        std::io::Error::last_os_error()
+    );
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    ensure!(
+        flags >= 0,
+        "fcntl(F_GETFL) failed: {}",
+        std::io::Error::last_os_error()
+    );
+    ensure!(
+        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0,
+        "fcntl(F_SETFL) failed: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+fn ingest_host_i2c_slot(
+    state: &mut PicoBridgeState,
+    slot: &[u8; PICO_I2C_SLOT_SIZE],
+) -> Result<()> {
+    ensure!(
+        slot[..2] == PICO_I2C_MAGIC,
+        "invalid Pico-Fi I2C slot magic"
+    );
+    ensure!(
+        slot[2] == PICO_I2C_VERSION,
+        "unsupported Pico-Fi I2C slot version"
+    );
+    ensure!(
+        slot[3] == PICO_I2C_DATA,
+        "unsupported Pico-Fi I2C slot kind"
+    );
+    let flags = slot[4];
+    let offset = u32::from_le_bytes(slot[6..10].try_into().unwrap()) as usize;
+    let total = u32::from_le_bytes(slot[10..14].try_into().unwrap()) as usize;
+    let length = u16::from_le_bytes(slot[14..16].try_into().unwrap()) as usize;
+    let transfer_id = u16::from_le_bytes(slot[16..18].try_into().unwrap());
+    ensure!(
+        length <= PICO_I2C_PAYLOAD_SIZE,
+        "oversized Pico-Fi I2C slot"
+    );
+    ensure!(total <= PICO_I2C_PACKET_MAX, "oversized Pico-Fi transfer");
+    if flags & PICO_I2C_START != 0 {
+        ensure!(offset == 0, "Pico-Fi transfer starts at a nonzero offset");
+        state.host_assembly = Some((transfer_id, total, Vec::with_capacity(total)));
+    }
+    let (active_id, active_total, payload) = state
+        .host_assembly
+        .as_mut()
+        .context("Pico-Fi continuation without START")?;
+    ensure!(*active_id == transfer_id, "Pico-Fi transfer id changed");
+    ensure!(*active_total == total, "Pico-Fi transfer length changed");
+    ensure!(
+        payload.len() == offset,
+        "Pico-Fi transfer offset is discontinuous"
+    );
+    payload.extend_from_slice(&slot[PICO_I2C_HEADER_SIZE..PICO_I2C_HEADER_SIZE + length]);
+    ensure!(
+        payload.len() <= total,
+        "Pico-Fi transfer exceeded declared length"
+    );
+    if flags & PICO_I2C_END != 0 {
+        ensure!(payload.len() == total, "Pico-Fi transfer ended early");
+        let (_, _, frame) = state.host_assembly.take().unwrap();
+        // The mailbox logical packet contains its own A5/5A envelope. The
+        // I2C Pico removes it before forwarding raw bytes over the network;
+        // the UART Pico adds a new, independent envelope for the Gateway.
+        let gateway_frame = i2c_request_to_gateway_uart(&frame)?;
+        let gateway_payload_len = gateway_frame.len().saturating_sub(4);
+        enqueue_gateway_uart_packet(state, gateway_frame);
+        state.i2c_to_uart_frames += 1;
+        if state.i2c_to_uart_frames <= 5 || state.i2c_to_uart_frames % 25 == 0 {
+            eprintln!(
+                "[SIM] Pico-Fi I2C->UART frame {} translated ({} payload bytes, head {:02x?})",
+                state.i2c_to_uart_frames,
+                gateway_payload_len,
+                &frame[4..frame.len().min(16)]
+            );
+        }
+        // The physical write acknowledges queue admission. Pico-Fi does not
+        // add an empty mailbox packet, because that packet would compete with
+        // real inbound telemetry in its bounded overwrite queue.
+    }
+    Ok(())
+}
+
+fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
+    let mut scratch = [0u8; 1024];
+    loop {
+        match uart.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(length) => state.uart_rx.extend_from_slice(&scratch[..length]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break
+            }
+            Err(error) => return Err(error).context("reading Gateway UART in Pico-Fi bridge"),
+        }
+    }
+    loop {
+        let Some(sync) = state.uart_rx.windows(2).position(|bytes| {
+            matches!(
+                bytes,
+                [0xA5, 0x5A] | [0x5A, 0xA5] | [0xA6, 0x5B] | [0x5B, 0xA6] | [0xA7, 0x7A]
+            )
+        }) else {
+            state.uart_rx.clear();
+            break;
+        };
+        if sync > 0 {
+            state.uart_rx.drain(..sync);
+        }
+        let Some(frame_length) = complete_uart_frame_length(&state.uart_rx) else {
+            break;
+        };
+        ensure!(
+            frame_length <= PICO_UART_MAX_FRAME,
+            "Gateway UART frame is oversized"
+        );
+        if state.uart_rx.len() < frame_length {
+            break;
+        }
+        let frame: Vec<u8> = state.uart_rx.drain(..frame_length).collect();
+        // UART-side commands are consumed by that Pico and never cross the
+        // network bridge. Only DATA frames become I2C mailbox responses.
+        if let Some(host_frame) = gateway_uart_to_i2c_response(&frame) {
+            enqueue_host_i2c_slots(state, &host_frame);
+            state.uart_to_i2c_frames += 1;
+            if state.uart_to_i2c_frames <= 5 {
+                let preview_len = host_frame.len().min(12);
+                eprintln!(
+                    "[SIM] Pico-Fi UART->I2C frame {} translated ({} payload bytes, head {:02x?})",
+                    state.uart_to_i2c_frames,
+                    host_frame.len(),
+                    &host_frame[..preview_len]
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn complete_uart_frame_length(frame: &[u8]) -> Option<usize> {
+    if frame.len() < 4 {
+        return None;
+    }
+    Some(4 + u16::from_le_bytes([frame[2], frame[3]]) as usize)
+}
+
+fn i2c_request_to_gateway_uart(frame: &[u8]) -> Result<Vec<u8>> {
+    ensure!(frame.len() >= 4, "I2C DATA frame is missing its envelope");
+    ensure!(
+        matches!(&frame[..2], [0xA5, 0x5A] | [0x5A, 0xA5]),
+        "invalid I2C DATA frame sync"
+    );
+    let payload_len = u16::from_le_bytes([frame[2], frame[3]]) as usize;
+    ensure!(
+        payload_len + 4 == frame.len(),
+        "invalid I2C DATA frame length"
+    );
+    ensure!(payload_len <= u16::MAX as usize, "I2C payload is oversized");
+    let payload = &frame[4..];
+    let mut gateway_frame = Vec::with_capacity(frame.len());
+    gateway_frame.extend_from_slice(&[0xA5, 0x5A]);
+    gateway_frame.extend_from_slice(&(payload_len as u16).to_le_bytes());
+    gateway_frame.extend_from_slice(payload);
+    Ok(gateway_frame)
+}
+
+fn gateway_uart_to_i2c_response(frame: &[u8]) -> Option<Vec<u8>> {
+    if complete_uart_frame_length(frame) != Some(frame.len())
+        || !matches!(&frame[..2], [0xA5, 0x5A] | [0x5A, 0xA5])
+    {
+        return None;
+    }
+    // The UART Pico removes this envelope for its network hop; the I2C Pico
+    // creates a fresh envelope before staging the mailbox response.
+    Some(frame.to_vec())
+}
+
+fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
+    while state.uart_tx_packets.len() >= PICO_PACKET_QUEUE_DEPTH
+        || state.uart_tx_bytes + packet.len() > PICO_PACKET_QUEUE_BYTES
+    {
+        let Some(dropped) = state.uart_tx_packets.pop_front() else {
+            break;
+        };
+        state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(dropped.len());
+        state.uart_tx_offset = 0;
+    }
+    state.uart_tx_bytes += packet.len();
+    state.uart_tx_packets.push_back(packet);
+}
+
+fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
+    drain_gateway_uart_tx_paced(state, uart, |delay| thread::sleep(delay))
+}
+
+fn drain_gateway_uart_tx_paced(
+    state: &mut PicoBridgeState,
+    uart: &mut impl Write,
+    mut wait: impl FnMut(Duration),
+) -> Result<()> {
+    let byte_time = Duration::from_nanos(
+        1_000_000_000u64 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
+            / PICO_UART_BAUD,
+    );
+    loop {
+        let Some(packet) = state.uart_tx_packets.front() else {
+            return Ok(());
+        };
+        // A PTY accepts the entire frame immediately, unlike the physical
+        // Pico-Fi UART. Renode advances virtual CPU time more slowly than wall
+        // time in a seven-node bay, so scale the physical 8N1 byte interval to
+        // preserve its interrupt cadence in virtual time instead of queuing a
+        // host burst ahead of the emulated receiver.
+        match uart.write(&packet[state.uart_tx_offset..state.uart_tx_offset + 1]) {
+            Ok(0) => bail!("Gateway UART closed during Pico-Fi transfer"),
+            Ok(length) => {
+                state.uart_tx_offset += length;
+                if state.uart_tx_offset == packet.len() {
+                    let packet = state.uart_tx_packets.pop_front().unwrap();
+                    state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(packet.len());
+                    state.uart_tx_offset = 0;
+                }
+                wait(byte_time);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(error).context("writing Gateway UART in Pico-Fi bridge"),
+        }
+    }
+}
+
+fn enqueue_host_i2c_slots(state: &mut PicoBridgeState, frame: &[u8]) {
+    let transfer_id = state.next_transfer_id.max(1);
+    state.next_transfer_id = transfer_id.wrapping_add(1).max(1);
+    for offset in (0..frame.len()).step_by(PICO_I2C_PAYLOAD_SIZE) {
+        let end = (offset + PICO_I2C_PAYLOAD_SIZE).min(frame.len());
+        let mut slot = [0u8; PICO_I2C_SLOT_SIZE];
+        slot[..2].copy_from_slice(&PICO_I2C_MAGIC);
+        slot[2] = PICO_I2C_VERSION;
+        slot[3] = PICO_I2C_DATA;
+        slot[4] = if offset == 0 { PICO_I2C_START } else { 0 }
+            | if end == frame.len() { PICO_I2C_END } else { 0 };
+        slot[6..10].copy_from_slice(&(offset as u32).to_le_bytes());
+        slot[10..14].copy_from_slice(&(frame.len() as u32).to_le_bytes());
+        slot[14..16].copy_from_slice(&((end - offset) as u16).to_le_bytes());
+        slot[16..18].copy_from_slice(&transfer_id.to_le_bytes());
+        slot[PICO_I2C_HEADER_SIZE..PICO_I2C_HEADER_SIZE + end - offset]
+            .copy_from_slice(&frame[offset..end]);
+        state.host_reads.push_back(slot);
+    }
 }
 
 pub fn run(topology_path: &Path) -> Result<BayReport> {
@@ -197,6 +567,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut script = String::new();
     let mut node_layouts = Vec::new();
     let mut host_serial_paths = BTreeMap::new();
+    let mut renode_pty_paths = Vec::new();
+    let mut pico_bridges = Vec::new();
     for link in &topology.links {
         ensure!(
             link.endpoints.len() >= 2,
@@ -243,7 +615,31 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 safe(&link.name),
                 path.display()
             );
-            host_serial_paths.insert(link.name.clone(), path);
+            renode_pty_paths.push(path.clone());
+            let host_link = topology
+                .host_nodes
+                .iter()
+                .find(|host| host.name == host_endpoint.node)
+                .and_then(|host| {
+                    host.serial_links
+                        .iter()
+                        .find(|serial| serial.link == link.name)
+                });
+            let transport = host_link.map(|serial| serial.transport).unwrap_or_default();
+            if transport == HostLinkTransport::PicoFiI2cToUart {
+                ensure!(
+                    matches!(link.kind, LinkKind::PicoFi),
+                    "host link {} selects Pico-Fi I2C translation but is not pico_fi",
+                    link.name
+                );
+                let socket = scratch
+                    .path()
+                    .join(format!("{}.i2c.sock", safe(&link.name)));
+                host_serial_paths.insert(link.name.clone(), socket.clone());
+                pico_bridges.push((link.name.clone(), path, socket));
+            } else {
+                host_serial_paths.insert(link.name.clone(), path);
+            }
             continue;
         }
         match link.kind {
@@ -311,12 +707,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let configured_platform =
             crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
+        let board_initialization = crate::execution::render_board_initialization_script(&layout);
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
             if layout.board.strict_mmio { "sysbus UnhandledAccessBehaviour ThrowException\n" } else { "" },
+            board_initialization,
             elf.display(),
             firmware_image.display(),
             layout.memory.flash_base,
@@ -407,7 +805,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        for path in host_serial_paths.values() {
+        for path in &renode_pty_paths {
             ensure!(
                 path.exists(),
                 "Renode did not create host UART PTY {}",
@@ -422,6 +820,24 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 fs::set_permissions(path, fs::Permissions::from_mode(0o660))
                     .with_context(|| format!("making host UART PTY usable: {}", path.display()))?;
             }
+        }
+        for (name, uart_path, socket_path) in pico_bridges {
+            let listener = UnixListener::bind(&socket_path).with_context(|| {
+                format!(
+                    "creating simulated Pico-Fi I2C socket {}",
+                    socket_path.display()
+                )
+            })?;
+            let bridge_name = name.clone();
+            thread::spawn(move || {
+                if let Err(error) = run_pico_fi_bridge(listener, &uart_path) {
+                    eprintln!("[SIM] Pico-Fi bridge {bridge_name} failed: {error:#}");
+                }
+            });
+            println!(
+                "[SIM] Pico-Fi {} translating GroundStation I2C slots to Gateway UART frames",
+                name
+            );
         }
         for host in &topology.host_nodes {
             let mut command = Command::new(&host.binary);
@@ -488,6 +904,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let status = child.wait()?;
     let mut host_failures = Vec::new();
     let mut host_diagnostics = BTreeMap::new();
+    let mut host_outputs = BTreeMap::new();
     for (name, mut host, stdout_path, stderr_path) in host_children {
         if let Some(status) = host.try_wait()? {
             let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
@@ -523,6 +940,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 lines[lines.len() - 60..].join("\n")
             )
         };
+        host_outputs.insert(name.clone(), combined_host);
         host_diagnostics.insert(name, diagnostic);
     }
     ensure!(host_failures.is_empty(), "{}", host_failures.join("; "));
@@ -541,12 +959,36 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         || lower.contains("there was an error executing command")
         || lower.contains("parameters did not match")
     {
+        let error_context = combined
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let line = line.to_ascii_lowercase();
+                line.contains("error")
+                    || line.contains("exception")
+                    || line.contains("fatal")
+                    || line.contains("abort")
+            })
+            .flat_map(|(index, _)| {
+                let lines = combined.lines().collect::<Vec<_>>();
+                let start = index.saturating_sub(2);
+                let end = (index + 3).min(lines.len());
+                lines[start..end].to_vec()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "linked bay execution failed:\n{}",
+            "linked bay execution failed (Renode status: {}):\n{}\n\nFinal Renode output:\n{}",
+            status,
+            if error_context.is_empty() {
+                "No explicit Renode error line was emitted."
+            } else {
+                &error_context
+            },
             combined
                 .lines()
                 .rev()
-                .take(100)
+                .take(40)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
@@ -574,16 +1016,22 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     }
     let mut memory_profiles = BTreeMap::new();
     for (node_name, layout) in &node_layouts {
-        memory_profiles.insert(
-            node_name.clone(),
-            parse_memory_profiles(
-                node_name,
-                layout,
-                &combined,
-                topology.sample_count,
-                topology.enforce_end_drop,
-            )?,
-        );
+        let profiles = parse_memory_profiles(
+            node_name,
+            layout,
+            &combined,
+            topology.sample_count,
+            topology.enforce_end_drop,
+        )
+        .map_err(|error| {
+            let host_detail = host_diagnostics
+                .iter()
+                .map(|(name, output)| format!("{name}:\n{output}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            anyhow::anyhow!("{error:#}\n\nHost diagnostics:\n{host_detail}")
+        })?;
+        memory_profiles.insert(node_name.clone(), profiles);
     }
     let mut link_reports = Vec::new();
     let mut link_failures = Vec::new();
@@ -720,6 +1168,20 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     }
     let mut assertion_reports = Vec::new();
     let mut assertion_failures = Vec::new();
+    for assertion in &topology.host_log_assertions {
+        let output = host_outputs.get(&assertion.node).with_context(|| {
+            format!(
+                "host-log assertion {} references unknown host node {}",
+                assertion.name, assertion.node
+            )
+        })?;
+        if !output.contains(&assertion.contains) {
+            assertion_failures.push(format!(
+                "{}: host {} did not report {:?}",
+                assertion.name, assertion.node, assertion.contains
+            ));
+        }
+    }
     for assertion in &topology.assertions {
         let reports = memory_profiles.get(&assertion.node).with_context(|| {
             format!(
@@ -782,15 +1244,54 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         });
     }
     if !assertion_failures.is_empty() {
+        let link_detail = link_reports
+            .iter()
+            .map(|link| {
+                let endpoints = link
+                    .endpoints
+                    .iter()
+                    .map(|endpoint| {
+                        let tx = endpoint
+                            .tx_probe
+                            .as_deref()
+                            .zip(endpoint.tx_observed)
+                            .map(|(probe, value)| format!("{probe}={value}"))
+                            .unwrap_or_else(|| "tx=n/a".to_owned());
+                        let rx = endpoint
+                            .rx_probe
+                            .as_deref()
+                            .zip(endpoint.rx_observed)
+                            .map(|(probe, value)| format!("{probe}={value}"))
+                            .unwrap_or_else(|| "rx=n/a".to_owned());
+                        format!("{}({tx}, {rx})", endpoint.node)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}: {endpoints}", link.name)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let assertion_detail = assertion_reports
+            .iter()
+            .map(|report| {
+                format!(
+                    "{}: {}.{}={}",
+                    report.name, report.node, report.probe, report.observed
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let host_detail = host_diagnostics
             .iter()
             .map(|(name, output)| format!("{name}:\n{output}"))
             .collect::<Vec<_>>()
             .join("\n");
         bail!(
-            "{} network assertion(s) failed:\n- {}\n\nHost diagnostics:\n{}",
+            "{} network assertion(s) failed:\n- {}\n\nLink observations:\n{}\n\nAssertion observations:\n{}\n\nHost diagnostics:\n{}",
             assertion_failures.len(),
             assertion_failures.join("\n- "),
+            link_detail,
+            assertion_detail,
             host_detail
         );
     }
@@ -832,6 +1333,7 @@ fn parse_memory_profiles(
     enforce_end_drop: bool,
 ) -> Result<Vec<MemoryProbeReport>> {
     let mut reports = Vec::new();
+    let mut qualification_failures = Vec::new();
     for probe in &layout.execution.memory_probes {
         let prefix = format!("SEDS_BAY_PROBE {} {} ", safe(node_name), probe.name);
         let mut indexed = Vec::new();
@@ -871,34 +1373,33 @@ fn parse_memory_profiles(
             layout.execution.memory_probe_warmup_samples < samples.len(),
             "node {node_name} memory_probe_warmup_samples must be less than sample_count"
         );
-        let minimum_observed = *samples.iter().min().context("empty bay probe")?;
-        let maximum_observed = *samples.iter().max().context("empty bay probe")?;
+        let qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        let minimum_observed = *qualified_samples.iter().min().context("empty bay probe")?;
+        let maximum_observed = *qualified_samples.iter().max().context("empty bay probe")?;
         let end_drop = i64::from(samples[layout.execution.memory_probe_warmup_samples])
             - i64::from(*samples.last().unwrap());
         if let Some(minimum) = probe.minimum {
-            ensure!(
-                minimum_observed >= minimum,
-                "node {node_name} probe {} fell below {minimum}: {:?}",
-                probe.name,
-                samples
-            );
+            if minimum_observed < minimum {
+                qualification_failures.push(format!(
+                    "{} fell below {minimum}: {:?}",
+                    probe.name, samples
+                ));
+            }
         }
         if let Some(maximum) = probe.maximum {
-            ensure!(
-                maximum_observed <= maximum,
-                "node {node_name} probe {} exceeded {maximum}: {:?}",
-                probe.name,
-                samples
-            );
+            if maximum_observed > maximum {
+                qualification_failures
+                    .push(format!("{} exceeded {maximum}: {:?}", probe.name, samples));
+            }
         }
         if enforce_end_drop {
             if let Some(max_end_drop) = probe.max_end_drop {
-                ensure!(
-                    end_drop <= i64::from(max_end_drop),
-                    "node {node_name} probe {} lost {end_drop} bytes: {:?}",
-                    probe.name,
-                    samples
-                );
+                if end_drop > i64::from(max_end_drop) {
+                    qualification_failures.push(format!(
+                        "{} lost {end_drop} bytes: {:?}",
+                        probe.name, samples
+                    ));
+                }
             }
         }
         reports.push(MemoryProbeReport {
@@ -909,6 +1410,24 @@ fn parse_memory_profiles(
             maximum_observed,
             end_drop,
         });
+    }
+    if !qualification_failures.is_empty() {
+        let observations = reports
+            .iter()
+            .map(|report| {
+                format!(
+                    "{}: min={}, max={}, samples={:?}",
+                    report.name, report.minimum_observed, report.maximum_observed, report.samples
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "node {node_name} failed {} probe threshold(s):\n- {}\n\nAll {node_name} probe observations:\n{}",
+            qualification_failures.len(),
+            qualification_failures.join("\n- "),
+            observations
+        );
     }
     Ok(reports)
 }
@@ -945,4 +1464,75 @@ fn default_true() -> bool {
 }
 fn default_minimum_activity() -> u32 {
     1
+}
+
+#[cfg(test)]
+mod pico_fi_tests {
+    use super::*;
+
+    #[test]
+    fn i2c_mailbox_envelope_is_recreated_for_gateway_uart() {
+        let payload = b"sedsnet packet";
+        let mut mailbox = vec![0xA5, 0x5A, payload.len() as u8, 0];
+        mailbox.extend_from_slice(payload);
+        let translated = i2c_request_to_gateway_uart(&mailbox).unwrap();
+        assert_eq!(&translated[..2], &[0xA5, 0x5A]);
+        assert_eq!(u16::from_le_bytes([translated[2], translated[3]]), 14);
+        assert_eq!(&translated[4..], payload);
+    }
+
+    #[test]
+    fn uart_side_commands_do_not_cross_the_pico_network_bridge() {
+        let data = [0xA5, 0x5A, 3, 0, 1, 2, 3];
+        assert_eq!(gateway_uart_to_i2c_response(&data).unwrap(), data);
+        let command = [0xA6, 0x5B, 3, 0, b'/', b'o', b'k'];
+        assert!(gateway_uart_to_i2c_response(&command).is_none());
+    }
+
+    #[test]
+    fn pico_i2c_mailbox_chunks_match_firmware_slot_layout() {
+        let frame = [
+            0xA5, 0x5A, 16, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        ];
+        let mut state = PicoBridgeState::default();
+        enqueue_host_i2c_slots(&mut state, &frame);
+        assert_eq!(state.host_reads.len(), 2);
+        let first = state.host_reads.pop_front().unwrap();
+        let second = state.host_reads.pop_front().unwrap();
+        assert_eq!(&first[..3], &[0x49, 0x32, 1]);
+        assert_eq!(first[3], PICO_I2C_DATA);
+        assert_eq!(first[4], PICO_I2C_START);
+        assert_eq!(u32::from_le_bytes(first[6..10].try_into().unwrap()), 0);
+        assert_eq!(u16::from_le_bytes(first[14..16].try_into().unwrap()), 14);
+        assert_eq!(second[4], PICO_I2C_END);
+        assert_eq!(u32::from_le_bytes(second[6..10].try_into().unwrap()), 14);
+        assert_eq!(u16::from_le_bytes(second[14..16].try_into().unwrap()), 6);
+    }
+
+    #[test]
+    fn gateway_backpressure_does_not_reject_a_valid_mailbox_packet() {
+        let mut state = PicoBridgeState::default();
+        enqueue_gateway_uart_packet(&mut state, vec![1; 128]);
+        assert_eq!(state.uart_tx_packets.len(), 1);
+        assert_eq!(state.uart_tx_bytes, 128);
+    }
+
+    #[test]
+    fn gateway_uart_delivery_is_paced_at_the_physical_wire_rate() {
+        let packet = vec![0xA5, 0x5A, 3, 0, 1, 2, 3];
+        let mut state = PicoBridgeState::default();
+        enqueue_gateway_uart_packet(&mut state, packet.clone());
+        let mut written = Vec::new();
+        let mut delays = Vec::new();
+
+        drain_gateway_uart_tx_paced(&mut state, &mut written, |delay| delays.push(delay)).unwrap();
+
+        assert_eq!(written, packet);
+        assert_eq!(delays.len(), packet.len());
+        assert!(delays
+            .iter()
+            .all(|delay| *delay >= Duration::from_micros(86)));
+        assert!(state.uart_tx_packets.is_empty());
+        assert_eq!(state.uart_tx_bytes, 0);
+    }
 }

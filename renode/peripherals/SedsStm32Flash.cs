@@ -126,6 +126,15 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             foreach(var cpu in machine.GetSystemBus(this).GetCPUs().OfType<ICPUWithMemoryAccessHooks>())
             {
+                // Every supported STM32 descriptor is single-core. Dirty-page
+                // broadcasting only serves cache coherency between CPUs of the
+                // same architecture; leaving it enabled with the global flash
+                // write hook makes Renode retain an unbounded dirty-address
+                // history during long ThreadX runs.
+                if(cpu is TranslationCPU translationCpu)
+                {
+                    translationCpu.SetBroadcastDirty(false);
+                }
                 cpu.SetHookAtMemoryAccess((MemoryAccessHook)OnMemoryAccess);
             }
         }

@@ -3,7 +3,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=95dde1712915b292d056a60117daebc8eeffabee
+ARG GROUNDSTATION_REF=82ebd310a7c2d1d4ef468231f28ffccb7cc764a5
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
     && git -C /groundstation fetch --depth 1 origin "${GROUNDSTATION_REF}" \

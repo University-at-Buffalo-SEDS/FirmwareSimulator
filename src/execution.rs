@@ -856,7 +856,7 @@ fn render_script(
     format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_reset_macro, firmware_msp, firmware_pc, firmware_vtor, symbol, firmware_fault_hook, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_reset_macro, factory_msp, factory_pc, factory_symbol, factory_fault_hook, tick_hook, outcome_hooks, factory_seconds, ota_script)
 }
 
-fn render_board_initialization_script(layout: &BoardLayout) -> String {
+pub(crate) fn render_board_initialization_script(layout: &BoardLayout) -> String {
     layout
         .board
         .pins
@@ -1039,8 +1039,12 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
                 continue;
             };
             let marker = &line[marker_start..];
-            let sample: usize = marker[prefix.len()..]
-                .trim()
+            let sample_text = marker[prefix.len()..].trim_start();
+            let sample_digits = sample_text
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>();
+            let sample: usize = sample_digits
                 .parse()
                 .with_context(|| format!("parsing probe marker {marker}"))?;
             let value = lines[index + 1..]
@@ -1063,8 +1067,18 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
             layout.execution.sample_count
         );
         let samples: Vec<u32> = indexed.into_iter().map(|(_, value)| value).collect();
-        let minimum_observed = *samples.iter().min().context("empty probe samples")?;
-        let maximum_observed = *samples.iter().max().context("empty probe samples")?;
+        // Samples before the declared warm-up boundary can contain reset-time
+        // sentinel values (commonly zero) before ThreadX creates its pools.
+        // Thresholds qualify steady-state firmware, just like end-drop does.
+        let qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        let minimum_observed = *qualified_samples
+            .iter()
+            .min()
+            .context("empty probe samples")?;
+        let maximum_observed = *qualified_samples
+            .iter()
+            .max()
+            .context("empty probe samples")?;
         let end_drop = i64::from(samples[layout.execution.memory_probe_warmup_samples])
             - i64::from(*samples.last().unwrap());
         if let Some(minimum) = probe.minimum {
@@ -1386,6 +1400,24 @@ mod tests {
     }
 
     #[test]
+    fn memory_probe_parser_tolerates_log_text_joined_to_marker() {
+        let mut board = layout("stm32g4", "[]");
+        board.execution.memory_probes.push(MemoryProbe {
+            name: "pool".into(),
+            symbol: "pool_available".into(),
+            minimum: None,
+            maximum: None,
+            max_end_drop: None,
+        });
+        let report = parse_memory_profile(
+            &board,
+            "SEDS_PROBE pool 0[19:31:53.5528] [INFO] Machine paused.\n0x1234\n",
+        )
+        .unwrap();
+        assert_eq!(report[0].samples, vec![0x1234]);
+    }
+
+    #[test]
     fn firmware_ota_uses_real_uart_receive_method_and_virtual_time() {
         let mut board = layout("stm32g4", "[]");
         board.ota.firmware_driven = true;
@@ -1504,7 +1536,7 @@ mod tests {
             .split("usart1:")
             .next()
             .unwrap();
-        assert!(usart.starts_with(" UART.STM32F7_USART"));
+        assert!(usart.starts_with(" UART.SedsStm32Uart"));
         assert!(usart.contains("frequency: 85000000"));
         assert!(!usart.contains("frequency: 170000000"));
     }
