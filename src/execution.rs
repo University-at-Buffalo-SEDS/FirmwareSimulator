@@ -1110,8 +1110,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
             .iter()
             .max()
             .context("empty probe samples")?;
-        let end_drop = i64::from(samples[layout.execution.memory_probe_warmup_samples])
-            - i64::from(*samples.last().unwrap());
+        let end_drop = sustained_end_drop(qualified_samples);
         if let Some(minimum) = probe.minimum {
             ensure!(
                 minimum_observed >= minimum,
@@ -1133,7 +1132,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         if let Some(max_end_drop) = probe.max_end_drop {
             ensure!(
                 end_drop <= i64::from(max_end_drop),
-                "probe {} lost {} bytes between first and last sample: {:?}",
+                "probe {} sustained a {} byte lower steady-state floor: {:?}",
                 probe.name,
                 end_drop,
                 samples
@@ -1149,6 +1148,21 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         });
     }
     Ok(reports)
+}
+
+/// Compare the low-water floors in the first and second halves of the
+/// qualified sample window. Pools naturally oscillate as periodic work owns
+/// temporary allocations, so comparing two arbitrary endpoints produces
+/// false leak reports. A real leak instead lowers the sustained floor in the
+/// later half of the run.
+fn sustained_end_drop(samples: &[u32]) -> i64 {
+    if samples.len() < 2 {
+        return 0;
+    }
+    let midpoint = samples.len() / 2;
+    let early_floor = samples[..midpoint].iter().copied().min().unwrap();
+    let late_floor = samples[midpoint..].iter().copied().min().unwrap();
+    (i64::from(early_floor) - i64::from(late_floor)).max(0)
 }
 fn marker_lines(output: &str) -> Vec<String> {
     let lines: Vec<_> = output.lines().collect();
@@ -1225,7 +1239,8 @@ mod tests {
     use super::{
         marker_csv, marker_u64, materialize_platform, parse_memory_profile,
         render_board_initialization_script, render_ota_script, render_peripheral_overlay,
-        render_script, render_security_script, ExecutionArtifacts, ExecutionScenario,
+        render_script, render_security_script, sustained_end_drop, ExecutionArtifacts,
+        ExecutionScenario,
     };
     use crate::{
         core::ArchitectureKind,
@@ -1443,6 +1458,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report[0].samples, vec![0x1234]);
+    }
+
+    #[test]
+    fn steady_state_pool_oscillation_is_not_reported_as_a_leak() {
+        let samples = [
+            33_632, 29_800, 28_020, 30_436, 28_020, 30_156, 30_436, 28_020,
+        ];
+        assert_eq!(sustained_end_drop(&samples), 0);
+    }
+
+    #[test]
+    fn sustained_pool_floor_loss_is_reported() {
+        let samples = [
+            32_000, 31_500, 31_000, 31_500, 28_000, 27_500, 27_000, 27_500,
+        ];
+        assert_eq!(sustained_end_drop(&samples), 4_000);
     }
 
     #[test]
