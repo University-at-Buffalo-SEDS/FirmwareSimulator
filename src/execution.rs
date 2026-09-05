@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Serialize)]
@@ -373,6 +373,9 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
 
     let mut combined = String::new();
     let mut execution_fault = false;
+    let started = Instant::now();
+    let mut next_progress = Duration::from_secs(5);
+    eprintln!("[SIM] Renode firmware execution started");
     let status = loop {
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
@@ -387,7 +390,16 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
                     let _ = child.kill();
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let elapsed = started.elapsed();
+                if elapsed >= next_progress {
+                    eprintln!(
+                        "[SIM] Renode firmware execution running ({}s elapsed)",
+                        elapsed.as_secs()
+                    );
+                    next_progress += Duration::from_secs(5);
+                }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {}
         }
         if let Some(status) = child.try_wait().context("polling Renode")? {
@@ -398,6 +410,10 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
         let _ = reader.join();
     }
     combined.extend(receiver.try_iter());
+    eprintln!(
+        "[SIM] Renode firmware execution finished ({}s elapsed)",
+        started.elapsed().as_secs()
+    );
 
     if execution_fault {
         bail!("firmware execution faulted:\n{}", tail(&combined, 80));
@@ -857,7 +873,7 @@ fn render_script(
 }
 
 pub(crate) fn render_board_initialization_script(layout: &BoardLayout) -> String {
-    layout
+    let mut script: String = layout
         .board
         .pins
         .iter()
@@ -866,7 +882,22 @@ pub(crate) fn render_board_initialization_script(layout: &BoardLayout) -> String
             crate::layout::PinState::High => format!("{} DrivePin {} true\n", pin.gpio, pin.pin),
             crate::layout::PinState::Floating => format!("{} ReleasePin {}\n", pin.gpio, pin.pin),
         })
-        .collect()
+        .collect();
+    let acknowledged = if layout.execution.can_acknowledged {
+        "true"
+    } else {
+        "false"
+    };
+    match layout.architecture {
+        ArchitectureKind::Stm32g4 => script.push_str(&format!(
+            "fdcan1 Acknowledged {acknowledged}\nfdcan2 Acknowledged {acknowledged}\n"
+        )),
+        ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5 => {
+            script.push_str(&format!("fdcan1 Acknowledged {acknowledged}\n"))
+        }
+        ArchitectureKind::Stm32 => {}
+    }
+    script
 }
 
 pub(crate) fn non_secure_regions(layout: &BoardLayout) -> Vec<(u64, u64)> {
@@ -1192,9 +1223,9 @@ fn tail(value: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        marker_csv, marker_u64, materialize_platform, parse_memory_profile, render_ota_script,
-        render_peripheral_overlay, render_script, render_security_script, ExecutionArtifacts,
-        ExecutionScenario,
+        marker_csv, marker_u64, materialize_platform, parse_memory_profile,
+        render_board_initialization_script, render_ota_script, render_peripheral_overlay,
+        render_script, render_security_script, ExecutionArtifacts, ExecutionScenario,
     };
     use crate::{
         core::ArchitectureKind,
@@ -1251,6 +1282,21 @@ mod tests {
         assert!(overlay.contains("SedsLtc2990 @ i2c2 0x4c"));
         assert!(!overlay.contains("SedsFlightSensorBus"));
         assert!(!overlay.contains("SedsStm32Adc"));
+    }
+
+    #[test]
+    fn isolated_can_configuration_disables_ack_on_each_physical_controller() {
+        let mut g4 = layout("stm32g4", "[]");
+        g4.execution.can_acknowledged = false;
+        let g4_script = render_board_initialization_script(&g4);
+        assert!(g4_script.contains("fdcan1 Acknowledged false"));
+        assert!(g4_script.contains("fdcan2 Acknowledged false"));
+
+        let mut h5 = layout("stm32h5", "[]");
+        h5.execution.can_acknowledged = false;
+        let h5_script = render_board_initialization_script(&h5);
+        assert!(h5_script.contains("fdcan1 Acknowledged false"));
+        assert!(!h5_script.contains("fdcan2"));
     }
 
     #[test]

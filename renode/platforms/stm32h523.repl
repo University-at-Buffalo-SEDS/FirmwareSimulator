@@ -22,7 +22,7 @@ gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
 // 28 standard filters, 8 extended filters, and three entries in each RX FIFO,
 // TX-event FIFO, and TX FIFO. Generic M_CAN expects firmware to configure a
 // layout that is not configurable on H5 and consequently reports TX full.
-fdcan1: CAN.SedsStm32H5Fdcan @ sysbus 0x4000A400
+fdcan1: CAN.SedsFixedFdcan @ sysbus 0x4000A400
     messageRam: fdcan1MessageRAM
     Int0 -> nvic@39
     Int1 -> nvic@40

@@ -93,6 +93,7 @@
         "require_stack_probe": {"type": "boolean"},
         "hal_tick_address": {"type": "integer", "minimum": 0},
         "hal_tick_step": {"type": "integer", "minimum": 1},
+        "can_acknowledged": {"type": "boolean"},
         "memory_probes": {
           "type": "array",
           "items": {

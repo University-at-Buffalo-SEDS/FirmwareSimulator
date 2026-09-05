@@ -15,9 +15,9 @@ fn every_built_in_mcu_descriptor_is_valid_and_has_a_matching_platform() {
         .unwrap();
         assert!(platform.contains(&format!("cpuType: \"{}\"", descriptor.core_model)));
         let expected_fdcan = match descriptor.architecture {
-            ArchitectureKind::Stm32g4 => "CAN.STM32_FDCAN",
-            ArchitectureKind::Stm32h5 => "CAN.SedsStm32H5Fdcan",
-            ArchitectureKind::Stm32u5 => "CAN.SedsStm32U5Fdcan",
+            ArchitectureKind::Stm32g4 | ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5 => {
+                "CAN.SedsFixedFdcan"
+            }
             ArchitectureKind::Stm32 => continue,
         };
         assert!(

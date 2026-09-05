@@ -24,13 +24,13 @@ dmamux: Miscellaneous.STM32_DMAMUX @ sysbus 0x40020800
 // G4 and L5 use the same fixed-layout FDCAN register/RAM geometry. The
 // STM32-specific model is selected so Cube HAL's compact RX register map is
 // modeled; generic M_CAN silently misses all G4 receive FIFO accesses.
-fdcan1: CAN.STM32_FDCAN @ sysbus 0x40006400
-    series: .L5
+fdcan1: CAN.SedsFixedFdcan @ sysbus 0x40006400
     messageRam: fdcan1MessageRAM
     Int0 -> nvic@21
     Int1 -> nvic@22
-fdcan2: CAN.STM32_FDCAN @ sysbus 0x40006800
-    series: .L5
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32H5Fdcan.cs
+fdcan2: CAN.SedsFixedFdcan @ sysbus 0x40006800
     messageRam: fdcan2MessageRAM
     Int0 -> nvic@86
     Int1 -> nvic@87

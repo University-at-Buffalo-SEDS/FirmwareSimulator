@@ -7,6 +7,18 @@ use firmware_sim::{
 };
 use std::path::PathBuf;
 
+fn configure_unacknowledged_can(layout: &mut BoardLayout) {
+    layout.execution.can_acknowledged = false;
+    for probe in &mut layout.execution.memory_probes {
+        if probe.name == "fdcan_tx_fail" {
+            // Failures are the stimulus in this qualification, not a test
+            // failure. Require proof that the firmware actually observed it.
+            probe.minimum = Some(1);
+            probe.maximum = None;
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(about = "Deterministic STM32 firmware behavior and update simulator")]
 struct Cli {
@@ -32,6 +44,9 @@ enum Command {
         firmware_root: PathBuf,
         #[arg(long, default_value_t = 0x5ed5)]
         seed: u64,
+        /// Model an isolated CAN controller receiving no physical-layer ACKs.
+        #[arg(long)]
+        can_unacknowledged: bool,
     },
     /// Run a longer real-firmware soak with interval allocator sampling.
     Profile {
@@ -47,6 +62,9 @@ enum Command {
         traffic_iterations: usize,
         #[arg(long, default_value_t = 0x5ed5)]
         seed: u64,
+        /// Model an isolated CAN controller receiving no physical-layer ACKs.
+        #[arg(long)]
+        can_unacknowledged: bool,
     },
     /// Execute multiple firmware ELFs in one deterministic, linked avionics bay.
     Bay {
@@ -76,8 +94,12 @@ fn main() -> Result<()> {
             layout,
             firmware_root,
             seed,
+            can_unacknowledged,
         } => {
-            let layout = BoardLayout::load(&layout)?;
+            let mut layout = BoardLayout::load(&layout)?;
+            if can_unacknowledged {
+                configure_unacknowledged_can(&mut layout);
+            }
             match simulator::run(&layout, &firmware_root, seed) {
                 Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),
                 Ok(report) => println!("{}", firmware_sim::report::simulation(&report)),
@@ -97,11 +119,15 @@ fn main() -> Result<()> {
             sample_count,
             traffic_iterations,
             seed,
+            can_unacknowledged,
         } => {
             let mut layout = BoardLayout::load(&layout)?;
             layout.execution.virtual_time_ms = virtual_time_ms;
             layout.execution.sample_count = sample_count;
             layout.traffic.iterations = traffic_iterations;
+            if can_unacknowledged {
+                configure_unacknowledged_can(&mut layout);
+            }
             match simulator::run(&layout, &firmware_root, seed) {
                 Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),
                 Ok(report) => println!("{}", firmware_sim::report::simulation(&report)),

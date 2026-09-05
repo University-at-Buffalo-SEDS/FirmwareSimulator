@@ -167,3 +167,8 @@ stimuli, not an electrical SPICE model.
 For soak profiling, set `execution.sample_count` and add `execution.memory_probes`. Each probe reads an exported 32-bit firmware symbol at equal virtual-time intervals. `minimum`, `maximum`, and `max_end_drop` turn allocator reserve, failure counters, panic counters, and sustained pool loss into hard failures. Set `memory_probe_warmup_samples` to exclude a known number of initial samples only from the start-to-end drop calculation; minima, maxima, and failure counters still cover every sample. Probe real allocator state; the synthetic `memory.sedsnet_pool` traffic budget is complementary, is reported as `behavioral_pool_model`, and is not evidence about the firmware's ThreadX pools or total physical RAM. To exercise network traffic through firmware, connect real nodes in a bay topology; bay execution samples and enforces each node's probes while the CAN/UART link is active.
 
 Set `execution.require_stack_probe` to `true` for RTOS firmware. The layout is then rejected unless at least one probe whose name contains `stack` has a positive `minimum`. Export a high-water remaining-byte counter from each critical task; aggregate ELF RAM and allocator-pool checks cannot detect a single task crossing its stack boundary.
+
+Set `execution.can_acknowledged` to `false` to qualify an isolated H5 board.
+The FDCAN model then retains its three hardware TX slots and reports ACK errors
+instead of declaring transmission complete. Stack, allocator, panic, and
+liveness probes must remain healthy while firmware handles the full FIFO.

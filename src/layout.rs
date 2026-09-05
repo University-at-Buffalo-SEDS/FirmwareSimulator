@@ -252,6 +252,9 @@ pub struct ExecutionConfig {
     pub hal_tick_step: u32,
     #[serde(default)]
     pub memory_probes: Vec<MemoryProbe>,
+    /// Whether CAN transmissions receive a physical-layer ACK.
+    #[serde(default = "default_true")]
+    pub can_acknowledged: bool,
 }
 impl Default for ExecutionConfig {
     fn default() -> Self {
@@ -266,6 +269,7 @@ impl Default for ExecutionConfig {
             hal_tick_address: None,
             hal_tick_step: default_hal_tick_step(),
             memory_probes: Vec::new(),
+            can_acknowledged: true,
         }
     }
 }
@@ -292,6 +296,9 @@ fn default_sample_count() -> usize {
 }
 fn default_hal_tick_step() -> u32 {
     1
+}
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]
