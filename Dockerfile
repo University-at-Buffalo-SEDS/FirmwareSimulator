@@ -3,11 +3,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=75397c018e38661774852f2e6cdc382e905e8628
+ARG GROUNDSTATION_REF=45954376fc21dd0b5ed4ada752f74e8433f35233
+ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.17
+ARG GROUNDSTATION_SEDSNET_GIT_REV=94dac0d76574771a051cb7a4166037d65df3176d
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
     && git -C /groundstation fetch --depth 1 origin "${GROUNDSTATION_REF}" \
     && git -C /groundstation checkout --detach FETCH_HEAD \
+    && if [ -n "${GROUNDSTATION_SEDSNET_GIT_REV}" ]; then \
+         cargo add --manifest-path /groundstation/backend/Cargo.toml \
+           SEDSnet --git https://github.com/Rylan-Meilutis/SEDSnet.git \
+           --rev "${GROUNDSTATION_SEDSNET_GIT_REV}"; \
+       else \
+         cargo update --manifest-path /groundstation/Cargo.toml \
+           -p SEDSnet --precise "${GROUNDSTATION_SEDSNET_RELEASE}"; \
+       fi \
     && cargo build --manifest-path /groundstation/Cargo.toml \
          -p groundstation_backend --release --features hitl_mode
 

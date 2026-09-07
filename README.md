@@ -39,6 +39,11 @@ The simulation executes the linked ARM ELF for deterministic virtual time and re
 
 Multiple firmware images can execute together in a single synchronized Renode process. `firmware-sim bay --topology examples/avionics-bay.json` creates one machine per node and connects its declared CAN/UART controllers through shared virtual buses. One Renode process is intentional: it gives the entire bay a common deterministic virtual clock. The Docker image is the supported executor and can be replicated for independent bays; native execution remains an unsupported development option.
 
+Bay topologies can schedule retained-flash firmware resets with `reboots`. This resets the selected
+MCU after a completed sample while its peers and host processes keep running, reloads debugger
+symbols, and preserves the modeled physical flash. Pair the event with persistence and liveness
+probes to verify local state restoration before network resynchronization and successful rejoin.
+
 One repository-linked image containing every bundled descriptor and platform profile is built and tested by GitHub Actions. Board repositories expose this through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts.
 
 To qualify the complete system from a fresh simulator checkout without manually

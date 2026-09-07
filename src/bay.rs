@@ -36,6 +36,17 @@ pub struct BayTopology {
     pub assertions: Vec<NetworkAssertion>,
     #[serde(default)]
     pub host_log_assertions: Vec<HostLogAssertion>,
+    /// Cold-reset selected firmware nodes after a completed sample. Physical
+    /// flash is retained, allowing board persistence to be verified while the
+    /// rest of the linked network remains online.
+    #[serde(default)]
+    pub reboots: Vec<RebootEvent>,
+}
+#[derive(Debug, Deserialize)]
+pub struct RebootEvent {
+    pub node: String,
+    /// One-based sample number after which the reset is applied.
+    pub after_sample: usize,
 }
 #[derive(Debug, Deserialize)]
 pub struct Node {
@@ -562,10 +573,24 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             host.binary.display()
         );
     }
+    for reboot in &topology.reboots {
+        ensure!(
+            topology.nodes.iter().any(|node| node.name == reboot.node),
+            "reboot references unknown firmware node {}",
+            reboot.node
+        );
+        ensure!(
+            reboot.after_sample > 0 && reboot.after_sample < topology.sample_count,
+            "reboot for {} must occur after samples 1..{}",
+            reboot.node,
+            topology.sample_count.saturating_sub(1)
+        );
+    }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
     let mut script = String::new();
     let mut node_layouts = Vec::new();
+    let mut node_reset_vectors = BTreeMap::new();
     let mut host_serial_paths = BTreeMap::new();
     let mut renode_pty_paths = Vec::new();
     let mut pico_bridges = Vec::new();
@@ -738,6 +763,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             }
         }
         node_layouts.push((node.name.clone(), layout));
+        node_reset_vectors.insert(
+            node.name.clone(),
+            (firmware_msp, firmware_pc, firmware_vtor, elf),
+        );
     }
     if !topology.host_nodes.is_empty() {
         script += "echo \"SEDS_HOST_ENDPOINTS_READY\"\nsleep 5\n";
@@ -770,6 +799,17 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             sample + 1,
             topology.sample_count
         );
+        for reboot in topology
+            .reboots
+            .iter()
+            .filter(|event| event.after_sample == sample + 1)
+        {
+            let (msp, pc, vtor, elf) = &node_reset_vectors[&reboot.node];
+            script += &format!(
+                "mach set \"{}\"\nmachine Reset\nsysbus LoadSymbolsFrom @{}\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\necho \"SEDS_BAY_REBOOT {} {}\"\n",
+                safe(&reboot.node), elf.display(), msp, pc, vtor, safe(&reboot.node), sample + 1
+            );
+        }
     }
     for node in &topology.nodes {
         script += &format!(

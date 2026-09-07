@@ -310,6 +310,34 @@ Firmware endpoint probe names must exist in the corresponding board layout. A
 host endpoint's `peripheral` is descriptive; its connection is provided by the
 `serial_links` environment-variable mapping.
 
+### Retained-flash reboot testing
+
+A bay can reset selected firmware nodes without stopping their peers or host
+processes. `after_sample` is one-based and must be earlier than the final sample:
+
+```json
+{
+  "virtual_time_ms": 10000,
+  "sample_count": 5,
+  "reboots": [
+    {"node": "flight", "after_sample": 2},
+    {"node": "power", "after_sample": 2}
+  ],
+  "assertions": [
+    {"name": "FC restored underglow", "node": "flight",
+     "probe": "underglow_boot_restore_valid", "minimum": 1},
+    {"name": "FC rejoined", "node": "flight",
+     "probe": "network_ready", "sample": 4, "minimum": 1}
+  ]
+}
+```
+
+The simulator issues a machine reset, retains modeled physical flash, restores
+the firmware reset vector, and reloads ELF symbols so post-reset probes and
+fault diagnostics remain available. Firmware should expose a boot-only probe
+for the value read from persistent storage; checking only the eventual GPIO or
+network cache can hide a failed local restore after network synchronization.
+
 ## Complete seven-board qualification
 
 From a clean FirmwareSimulator checkout, obtain the seven firmware migration
