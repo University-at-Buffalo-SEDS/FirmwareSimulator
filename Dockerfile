@@ -5,7 +5,7 @@ RUN apt-get update \
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
 ARG GROUNDSTATION_REF=45954376fc21dd0b5ed4ada752f74e8433f35233
 ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.17
-ARG GROUNDSTATION_SEDSNET_GIT_REV=94dac0d76574771a051cb7a4166037d65df3176d
+ARG GROUNDSTATION_SEDSNET_GIT_REV=6c3f37281610b7e7ce3eb44b79d8f96c329259b4
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
     && git -C /groundstation fetch --depth 1 origin "${GROUNDSTATION_REF}" \
