@@ -2,20 +2,63 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use firmware_sim::{
     core::{mcu_catalog, ArchitectureKind},
-    layout::BoardLayout,
+    layout::{BoardLayout, MemoryProbe},
     simulator,
 };
 use std::path::PathBuf;
 
 fn configure_unacknowledged_can(layout: &mut BoardLayout) {
     layout.execution.can_acknowledged = false;
-    for probe in &mut layout.execution.memory_probes {
+    configure_unacknowledged_can_probes(&mut layout.execution.memory_probes);
+}
+
+fn configure_unacknowledged_can_probes(probes: &mut [MemoryProbe]) {
+    for probe in probes {
         if probe.name == "fdcan_tx_fail" {
-            // Failures are the stimulus in this qualification, not a test
-            // failure. Require proof that the firmware actually observed it.
-            probe.minimum = Some(1);
+            // STM32 HAL reports successful FIFO enqueue even while FDCAN
+            // retries a frame that receives no physical-layer ACK. A HAL
+            // failure is therefore valid but is not required proof of the
+            // disconnected-bus stimulus.
+            probe.minimum = None;
             probe.maximum = None;
         }
+        if probe.name == "fdcan_tx_ok" {
+            // Prove the firmware exercised its CAN transmit path; the rest of
+            // the profile verifies it remains alive and memory-bounded.
+            probe.minimum = Some(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configure_unacknowledged_can_probes;
+    use firmware_sim::layout::MemoryProbe;
+
+    fn probe(name: &str, minimum: Option<u32>, maximum: Option<u32>) -> MemoryProbe {
+        MemoryProbe {
+            name: name.into(),
+            symbol: name.into(),
+            minimum,
+            maximum,
+            max_end_drop: None,
+        }
+    }
+
+    #[test]
+    fn disconnected_can_requires_tx_activity_without_inventing_a_hal_failure() {
+        let mut probes = vec![
+            probe("fdcan_tx_fail", Some(1), Some(5)),
+            probe("fdcan_tx_ok", None, None),
+            probe("allocator_failures", None, Some(0)),
+        ];
+
+        configure_unacknowledged_can_probes(&mut probes);
+
+        assert_eq!(probes[0].minimum, None);
+        assert_eq!(probes[0].maximum, None);
+        assert_eq!(probes[1].minimum, Some(1));
+        assert_eq!(probes[2].maximum, Some(0));
     }
 }
 
