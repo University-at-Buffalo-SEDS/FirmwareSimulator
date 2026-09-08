@@ -973,10 +973,16 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let diagnostic = if lines.len() <= 120 {
             lines.join("\n")
         } else {
+            let validation = lines
+                .iter()
+                .copied()
+                .filter(|line| line.contains("full-bay"))
+                .collect::<Vec<_>>();
             format!(
-                "{}\n... {} host log lines omitted ...\n{}",
+                "{}\n... {} host log lines omitted ...\n{}\n{}",
                 lines[..60].join("\n"),
                 lines.len() - 120,
+                validation.join("\n"),
                 lines[lines.len() - 60..].join("\n")
             )
         };
