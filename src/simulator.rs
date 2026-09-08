@@ -24,6 +24,7 @@ pub struct SimulationReport {
     pub devices: Vec<DeviceReport>,
     pub traffic: TrafficReport,
     pub update: UpdateReport,
+    pub ota_restart_accepted: bool,
     pub execution: ExecutionReport,
     pub fidelity: HardwareFidelityReport,
 }
@@ -346,21 +347,26 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
 pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationReport> {
     validate(layout, root).context("artifact_validation")?;
     let images = load_images(layout, root).context("artifact_mapping")?;
-    let execution = execution::run(layout, root).context("instruction_execution")?;
     let devices = peripherals::exercise_all(&layout.peripherals, 1_000, seed)
         .context("peripheral_execution")?;
     let traffic = traffic::run(&layout.traffic, layout.memory.sedsnet_pool, seed)
         .context("sedsnet_traffic")?;
-    let mut fallback_updated = images.firmware.clone();
-    let middle = fallback_updated.len() / 2;
-    fallback_updated[middle] ^= 1;
-    let updated = images
-        .updated_firmware
-        .as_deref()
-        .unwrap_or(&fallback_updated);
+    // When a layout does not provide a separate next-version artifact, model
+    // the currently packaged image as the OTA target and a one-byte-different
+    // predecessor as the installed image. This makes the completed update
+    // byte-identical to the application that the factory boot executes,
+    // instead of boot-testing one image while the update model installs a
+    // synthetic, invalid mutation of it.
+    let mut fallback_original = images.firmware.clone();
+    let middle = fallback_original.len() / 2;
+    fallback_original[middle] ^= 1;
+    let (original, updated) = match images.updated_firmware.as_deref() {
+        Some(updated) => (images.firmware.as_slice(), updated),
+        None => (fallback_original.as_slice(), images.firmware.as_slice()),
+    };
     let transfer = images.ota.as_deref().unwrap_or(updated);
     let mut update = update::interruption_matrix(
-        &images.firmware,
+        original,
         updated,
         transfer,
         &layout.memory,
@@ -368,6 +374,10 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
     )
     .context("ota_recovery")?;
     update.updated_image_from_artifact = images.updated_firmware.is_some();
+    // Run the actual application and combined LaunchCore factory image only
+    // after the update model has reconstructed and verified the target. The
+    // factory boot therefore serves as the post-install cold restart check.
+    let execution = execution::run(layout, root).context("instruction_execution")?;
     if layout.ota.firmware_driven
         && (layout.ota.power_cuts.every_flash_operation || !layout.ota.power_cuts.events.is_empty())
     {
@@ -421,6 +431,10 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
         && (layout.ota.power_cuts.every_flash_operation
             || !layout.ota.power_cuts.events.is_empty())
         && update.cpu_reboots_executed;
+    let ota_restart_accepted = images.ota.is_some()
+        && updated == images.firmware.as_slice()
+        && update.new_image_boot_points > 0
+        && execution.factory_boot_reached;
     Ok(SimulationReport {
         board: layout.name.clone(),
         architecture: layout.architecture,
@@ -439,6 +453,7 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
         devices,
         traffic,
         update,
+        ota_restart_accepted,
         execution,
         fidelity: HardwareFidelityReport {
             exact_mcu: layout.mcu().to_string(),

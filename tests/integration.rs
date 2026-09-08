@@ -86,6 +86,7 @@ fn file_defined_board_and_firmware_run_end_to_end() {
     assert_eq!(report.traffic.pool.bytes_in_use, 0);
     assert_ne!(report.update.original_sha256, report.update.updated_sha256);
     assert_eq!(report.ota_bytes, Some(2048));
+    assert!(report.ota_restart_accepted);
     assert!(report.execution.instruction_execution_observed);
     let rendered = report::simulation(&report);
     assert!(rendered.contains("Fault test"));

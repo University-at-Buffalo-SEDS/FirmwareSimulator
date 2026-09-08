@@ -81,6 +81,12 @@ pub fn simulation(report: &SimulationReport) -> String {
                 ),
             ],
             vec![
+                "OTA install and restart".into(),
+                pass(report.ota_restart_accepted),
+                "chunked target reconstructed; LaunchCore accepted and booted it after reset"
+                    .into(),
+            ],
+            vec![
                 "Firmware memory probes".into(),
                 "PASS".into(),
                 format!(
