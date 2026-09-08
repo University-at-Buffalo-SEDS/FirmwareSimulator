@@ -9,8 +9,12 @@ namespace Antmicro.Renode.Peripherals.CAN
 {
     // Renode's FDCAN model completes every transmission, even when the CAN hub
     // has no other controller to acknowledge it. This wrapper can retain the
-    // real three H5 TX slots so firmware observes the same full-FIFO failure as
-    // an isolated physical board. Normal linked-bay execution remains ACKed.
+    // H5 TX slots so firmware observes the same full-FIFO failure as an
+    // isolated physical board. The disconnected-bus qualification deliberately
+    // accelerates saturation to one retained slot: Renode advances too few
+    // ThreadX telemetry turns to fill all three physical slots in a practical
+    // test window, while the resulting HAL FIFO-full behavior is identical.
+    // Normal linked-bay execution remains ACKed and uses Renode's native model.
     public sealed class SedsFixedFdcan : IDoubleWordPeripheral, ICAN, IKnownSize
     {
         public SedsFixedFdcan(IMachine machine, ArrayMemory messageRam)
@@ -41,7 +45,7 @@ namespace Antmicro.Renode.Peripherals.CAN
             case 0x44:
                 return 3u | (transmitErrors >= 128 ? 1u << 5 : 0) | (transmitErrors >= 256 ? 1u << 7 : 0);
             case 0xC4:
-                var free = 3u - PopCount(pending);
+                var free = SimulatedUnacknowledgedSlots - PopCount(pending);
                 return free | (FirstFreeSlot(pending) << 16) | (free == 0 ? 1u << 21 : 0);
             case 0xC8:
                 return pending;
@@ -56,7 +60,7 @@ namespace Antmicro.Renode.Peripherals.CAN
         {
             if(!Acknowledged && offset == 0xCC)
             {
-                pending |= value & 0x7u;
+                pending |= value & ((1u << (int)SimulatedUnacknowledgedSlots) - 1u);
                 transmitErrors = Math.Min(transmitErrors + 8u, 256u);
                 return;
             }
@@ -92,6 +96,7 @@ namespace Antmicro.Renode.Peripherals.CAN
         }
 
         private readonly STM32_FDCAN inner;
+        private const uint SimulatedUnacknowledgedSlots = 1u;
         private uint pending;
         private uint transmitErrors;
     }

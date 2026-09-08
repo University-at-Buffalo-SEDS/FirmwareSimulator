@@ -1312,6 +1312,9 @@ mod tests {
         let h5_script = render_board_initialization_script(&h5);
         assert!(h5_script.contains("fdcan1 Acknowledged false"));
         assert!(!h5_script.contains("fdcan2"));
+        let h5_model = include_str!("../renode/peripherals/SedsStm32H5Fdcan.cs");
+        assert!(h5_model.contains("SimulatedUnacknowledgedSlots = 1u"));
+        assert!(h5_model.contains("free == 0 ? 1u << 21"));
     }
 
     #[test]

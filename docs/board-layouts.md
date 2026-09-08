@@ -174,6 +174,10 @@ and any later network-converged value; see `docs/usage.md` for a complete exampl
 Set `execution.require_stack_probe` to `true` for RTOS firmware. The layout is then rejected unless at least one probe whose name contains `stack` has a positive `minimum`. Export a high-water remaining-byte counter from each critical task; aggregate ELF RAM and allocator-pool checks cannot detect a single task crossing its stack boundary.
 
 Set `execution.can_acknowledged` to `false` to qualify an isolated H5 board.
-The FDCAN model then retains its three hardware TX slots and reports ACK errors
-instead of declaring transmission complete. Stack, allocator, panic, and
-liveness probes must remain healthy while firmware handles the full FIFO.
+The FDCAN model then retains an unacknowledged TX request and reports the same
+FIFO-full HAL status as hardware instead of declaring transmission complete.
+This fault-injection mode accelerates saturation to one retained slot because
+Renode executes ThreadX turns much more slowly than the MCU; normal linked-bay
+mode retains the native three-entry H5 layout. Stack, allocator, panic,
+backpressure, unexpected-error, and liveness probes must remain healthy while
+firmware handles the full FIFO.

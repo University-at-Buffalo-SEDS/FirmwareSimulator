@@ -4,7 +4,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
 ARG GROUNDSTATION_REF=402bd5b4b33c9558068cc891dd4eda2de7815b49
-ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.19
+ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.20
 ARG GROUNDSTATION_SEDSNET_GIT_REV=
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \

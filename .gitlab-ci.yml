@@ -1,0 +1,68 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+stages:
+  - test
+  - image
+  - publish
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  DOCKER_TLS_CERTDIR: "/certs"
+
+cache:
+  key: cargo
+  paths:
+    - .cargo/registry/
+    - target/
+
+rust-tests:
+  stage: test
+  image: rust:1.85-bookworm
+  before_script:
+    - rustup component add rustfmt clippy
+  script:
+    - cargo test --locked --all-targets
+    - cargo fmt --check
+    - cargo clippy --locked --all-targets -- -D warnings
+
+image-tests:
+  stage: image
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      command: ["--mtu=1450"]
+  needs: [rust-tests]
+  before_script:
+    - docker info
+  script:
+    - docker build --platform linux/amd64 -t firmware-simulator:ci .
+    - scripts/test-image.sh firmware-simulator:ci
+
+publish-image:
+  stage: publish
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      command: ["--mtu=1450"]
+  needs: [image-tests]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker buildx create --use
+    - export IMAGE_VERSION="${CI_COMMIT_TAG:-$CI_COMMIT_SHA}"
+  script:
+    - >-
+      docker buildx build
+      --platform linux/amd64,linux/arm64
+      --label "org.opencontainers.image.source=$CI_PROJECT_URL"
+      --tag "$CI_REGISTRY_IMAGE:$IMAGE_VERSION"
+      --tag "$CI_REGISTRY_IMAGE:latest"
+      --push .

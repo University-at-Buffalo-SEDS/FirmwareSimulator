@@ -285,6 +285,7 @@ fn configure_raw_nonblocking(fd: std::os::fd::RawFd) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::manual_is_multiple_of)] // Keep compatibility with Rust 1.85.
 fn ingest_host_i2c_slot(
     state: &mut PicoBridgeState,
     slot: &[u8; PICO_I2C_SLOT_SIZE],
@@ -468,7 +469,7 @@ fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
 }
 
 fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
-    drain_gateway_uart_tx_paced(state, uart, |delay| thread::sleep(delay))
+    drain_gateway_uart_tx_paced(state, uart, thread::sleep)
 }
 
 fn drain_gateway_uart_tx_paced(
