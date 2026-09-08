@@ -44,7 +44,7 @@ MCU after a completed sample while its peers and host processes keep running, re
 symbols, and preserves the modeled physical flash. Pair the event with persistence and liveness
 probes to verify local state restoration before network resynchronization and successful rejoin.
 
-One repository-linked image containing every bundled descriptor and platform profile is built and tested by GitHub Actions. Board repositories expose this through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts.
+One repository-linked image containing every bundled descriptor and platform profile is built and tested by GitHub Actions. Board repositories use its `latest` tag through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image embeds GroundStation with the stable SEDSNet v4.0.18 crates.io release so the linked-bay test exercises the same public dependency used by normal GroundStation builds.
 
 To qualify the complete system from a fresh simulator checkout without manually
 cloning any board repositories, run:

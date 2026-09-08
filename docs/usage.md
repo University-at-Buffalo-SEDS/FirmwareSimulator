@@ -19,8 +19,9 @@ Set an image name once for the examples below:
 SIM_IMAGE=ghcr.io/university-at-buffalo-seds/firmwaresimulator:latest
 ```
 
-For release qualification, pin `SIM_IMAGE` to the version tested by the
-firmware repository instead of relying on the moving `latest` tag.
+Firmware repositories intentionally use the moving `latest` tag so simulator
+fixes are picked up without board-code changes. Pin a version only while
+reproducing a historical test result.
 
 ## Firmware repository workflow
 
