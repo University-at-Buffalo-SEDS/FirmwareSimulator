@@ -118,6 +118,7 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
                 | ("barometer", "bmp390")
                 | ("adc", "ltc2990")
                 | ("adc", "stm32_adc")
+                | ("adc", "mcp3564r")
                 | ("pressure_transducer", "stm32_adc")
                 | ("storage", "sd_card")
         );
@@ -136,8 +137,8 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
         }
         "adc" => {
             ensure!(
-                (1..=16).contains(&spec.bits.unwrap_or(12)),
-                "ADC bits must be 1..=16"
+                (1..=24).contains(&spec.bits.unwrap_or(12)),
+                "ADC bits must be 1..=24"
             );
             ensure!(spec.channels.unwrap_or(1) > 0, "ADC needs a channel");
             let maximum = (1_u32 << spec.bits.unwrap_or(12)) - 1;

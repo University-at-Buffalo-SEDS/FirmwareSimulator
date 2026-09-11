@@ -74,6 +74,13 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
     assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
     assert_eq!(report.assertion_reports.len(), 2);
+    // Renode stays at its prompt after an invalid platform include. Holding
+    // stdin open must not hide that error indefinitely from the caller.
+    fs::write(&renode, "#!/bin/sh\necho \"There was an error executing command 'include @bad.repl'\"\nread ignored\n").unwrap();
+    let start = std::time::Instant::now();
+    let error = bay::run(&topology).unwrap_err().to_string();
+    assert!(error.contains("include @bad.repl"), "{error}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();

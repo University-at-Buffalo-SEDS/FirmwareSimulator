@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Antmicro.Renode.Core;
+using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.SPI;
 
 namespace Antmicro.Renode.Peripherals.Sensors
@@ -161,6 +162,100 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private int position;
         private ulong transactions;
         private bool faulted;
+        private readonly ulong failureEvery;
+        private readonly ulong disconnectAfter;
+    }
+
+    // MCP3564R 24-bit sigma-delta ADC. The firmware exercises the real SPI
+    // command/configuration path and reads deterministic, slowly varying raw
+    // conversion values through the STM32 SPI/DMA peripherals.
+    public sealed class SedsMcp3564r : ISPIPeripheral, IGPIOReceiver
+    {
+        public SedsMcp3564r(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, bool externalChipSelect = false)
+        {
+            this.externalChipSelect = externalChipSelect;
+            this.failureEvery = failureEvery;
+            this.disconnectAfter = disconnectAfter;
+            Reset();
+        }
+
+        public byte Transmit(byte value)
+        {
+            if(externalChipSelect && !selected) return 0xff;
+            if(position == 0)
+            {
+                transactions++;
+                faulted = transactions > disconnectAfter
+                    || (failureEvery != 0 && transactions % failureEvery == 0);
+                command = value;
+                reading = (value & 0x03) == 0x01;
+                if(value == 0x78) ResetRegisters();
+                position++;
+                return faulted ? (byte)0xff : (byte)0;
+            }
+
+            if(faulted) return 0xff;
+            if(reading)
+            {
+                var shift = 16 - 8 * Math.Min(position - 1, 2);
+                var result = (byte)((sample >> shift) & 0xff);
+                position++;
+                if(position > 3)
+                {
+                    sample = (sample + 17u) & 0x00ffffffu;
+                }
+                return result;
+            }
+
+            // Configuration writes are retained so subsequent transactions
+            // observe the same register state as the physical ADC.
+            var address = (byte)((command >> 2) & 0x0f);
+            registers[((int)address << 2) + Math.Min(position - 1, 3)] = value;
+            position++;
+            return 0;
+        }
+
+        public void FinishTransmission()
+        {
+            // HAL splits command and DMA data into controller transfers while
+            // the GPIO-controlled chip select remains low throughout.
+            if(externalChipSelect) return;
+            position = 0;
+            reading = false;
+        }
+
+        public void OnGPIO(int number, bool value)
+        {
+            if(number != 0) throw new ArgumentOutOfRangeException(nameof(number));
+            selected = !value;
+            if(value) { position = 0; reading = false; }
+        }
+
+        public void Reset()
+        {
+            selected = !externalChipSelect;
+            transactions = 0;
+            faulted = false;
+            position = 0;
+            reading = false;
+            ResetRegisters();
+        }
+
+        private void ResetRegisters()
+        {
+            registers.Clear();
+            sample = 0x100000u;
+        }
+
+        private readonly Dictionary<int, byte> registers = new Dictionary<int, byte>();
+        private readonly bool externalChipSelect;
+        private bool selected;
+        private byte command;
+        private int position;
+        private bool reading;
+        private bool faulted;
+        private uint sample;
+        private ulong transactions;
         private readonly ulong failureEvery;
         private readonly ulong disconnectAfter;
     }

@@ -18,6 +18,22 @@ must be a multiple of 512 and defaults to 4 MiB. H5 and U5 attach it to the
 layout bus name `sdmmc1`; the H5 profile maps that logical name to its `sdmmc`
 controller.
 
+The SDMMC instruction model supports polling/FIFO block reads and writes,
+including FileX provisioning and log writes. Command-start is self-clearing and
+reported CSD capacity follows the backing card. This is not validation of card
+wear, real write latency, or every DMA mode. Assert firmware write/drop counters;
+the behavioral storage count alone does not prove a file was written correctly.
+
+STM32U5 SPI uses the CFG1/CFG2 register generation. Its DMA connections are
+`spi2.DMARecieve` (the upstream spelling) and `spi2.DMATransmit`. GPDMA channels
+start at offset `0x50` with stride `0x80`; peripheral-source requests transfer one
+beat, and completion occurs at the block boundary. The U5 profile also models
+DCACHE1 command completion at `0x40031400`. Linked-list DMA is not yet covered.
+
+ADC `channel_samples` indexes are physical channel numbers, not positions in a
+firmware scan list. For example, DAQ's battery measurement uses ADC1 channel 5;
+an unrealistic voltage there intentionally triggers firmware power-loss logic.
+
 ## Add a peripheral
 
 `model` plus `bus` declares that the device is attached to the emulated CPU bus.

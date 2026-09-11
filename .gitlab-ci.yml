@@ -23,7 +23,7 @@ cache:
 
 rust-tests:
   stage: test
-  image: rust:1.85-bookworm
+  image: rust:1.98-bookworm
   before_script:
     - rustup component add rustfmt clippy
   script:
@@ -65,4 +65,7 @@ publish-image:
       --label "org.opencontainers.image.source=$CI_PROJECT_URL"
       --tag "$CI_REGISTRY_IMAGE:$IMAGE_VERSION"
       --tag "$CI_REGISTRY_IMAGE:latest"
+      --tag "$CI_REGISTRY_IMAGE:stm32g4"
+      --tag "$CI_REGISTRY_IMAGE:stm32h5"
+      --tag "$CI_REGISTRY_IMAGE:stm32u5"
       --push .

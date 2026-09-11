@@ -17,7 +17,7 @@ REPOSITORIES = (
     "RFBoard26",
     "PowerBoard26",
     "FlightComputer26",
-    "gateway-board",
+    "gateway-board26",
     "ActuatorBoard26",
     "ValveBoard26",
     "DAQ-Board",
@@ -118,7 +118,7 @@ def main() -> int:
         command = [sys.executable, "build.py", "test", "--all"]
         if not args.debug:
             command.append("--release")
-        run(command, cwd=roots["gateway-board"], env=environment)
+        run(command, cwd=roots["gateway-board26"], env=environment)
         rows.append(("Linked seven-board system", "PASS"))
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         rows.append(("Full-system qualification", "FAIL"))

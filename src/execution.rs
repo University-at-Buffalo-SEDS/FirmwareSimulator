@@ -199,12 +199,20 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         tail(&combined, 80)
     );
     ensure!(
-        !observed_marker(&combined, "SEDS_FIRMWARE_HARDFAULT"),
+        !observed_marker_after(
+            &combined,
+            "SEDS_FIRMWARE_BOOT_REACHED",
+            "SEDS_FIRMWARE_HARDFAULT",
+        ),
         "firmware entered HardFault_Handler after its boot marker:\n{}",
         tail(&combined, 80)
     );
     ensure!(
-        !observed_marker(&combined, "SEDS_FACTORY_HARDFAULT"),
+        !observed_marker_after(
+            &combined,
+            "SEDS_FACTORY_BOOT_REACHED",
+            "SEDS_FACTORY_HARDFAULT",
+        ),
         "factory image entered HardFault_Handler after its boot marker:\n{}",
         tail(&combined, 80)
     );
@@ -410,6 +418,20 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
         let _ = reader.join();
     }
     combined.extend(receiver.try_iter());
+    // Opt-in raw transcript for diagnosing missing/interleaved monitor output.
+    // Use a fresh filename for each run; never overwrite an existing log.
+    if let Some(path) = std::env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
+        use std::io::Write;
+        let mut file = tempfile::Builder::new()
+            .prefix("renode-")
+            .suffix(".log")
+            .tempfile_in(&path)
+            .context("creating requested Renode diagnostic log")?;
+        file.write_all(combined.as_bytes())
+            .context("saving Renode diagnostic log")?;
+        let (_, saved) = file.keep().context("retaining Renode diagnostic log")?;
+        eprintln!("[SIM] raw Renode transcript: {}", saved.display());
+    }
     eprintln!(
         "[SIM] Renode firmware execution finished ({}s elapsed)",
         started.elapsed().as_secs()
@@ -663,6 +685,15 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     flight_sensor_bus_added = true;
                 }
             }
+            (ArchitectureKind::Stm32u5, "mcp3564r", "spi2") => {
+                overlay.push_str(&format!(
+                    "layoutDevice{index}: Sensors.SedsMcp3564r @ spi2\n    failureEvery: {}\n    disconnectAfter: {}\n    externalChipSelect: {}\n    preinit:\n        include @{}\n",
+                    peripheral.failure_every.unwrap_or(0),
+                    peripheral.disconnect_after.unwrap_or(u64::MAX),
+                    layout.board.connections.iter().any(|wire| wire.to == format!("layoutDevice{index}@0")),
+                    source_root.join("SedsSpiSensors.cs").display(),
+                ));
+            }
             (ArchitectureKind::Stm32g4, "stm32_adc", "adc1" | "adc2" | "adc3") => {
                 let address = match bus {
                     "adc1" => 0x5000_0000_u64,
@@ -800,6 +831,30 @@ fn render_script(
             profile_script.push_str(&format!(
                 "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
                 probe.name, sample, probe.symbol
+            ));
+        }
+    }
+    if let Some(directory) = std::env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
+        if layout
+            .peripherals
+            .iter()
+            .any(|p| p.model.as_deref() == Some("sd_card"))
+        {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path =
+                PathBuf::from(directory).join(format!("sd-{}-{stamp}.img", std::process::id()));
+            let controller = if layout.architecture == ArchitectureKind::Stm32h5 {
+                "sdmmc"
+            } else {
+                "sdmmc1"
+            };
+            profile_script.push_str(&format!(
+                "{controller} SaveCardImage {}\n",
+                serde_json::to_string(&path.to_string_lossy())
+                    .expect("serializing SD capture path")
             ));
         }
     }
@@ -1083,8 +1138,19 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
                 .take_while(|line| !line.contains("SEDS_PROBE "))
                 .map(|line| line.trim())
                 .find_map(|line| {
-                    let hex = line.strip_prefix("0x")?;
-                    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
+                    // Renode and Docker can coalesce an asynchronous log
+                    // prefix with a monitor result on the same line. Accept
+                    // the first complete hexadecimal token instead of
+                    // requiring the value to begin at column zero.
+                    line.split_whitespace().find_map(|token| {
+                        let token = token
+                            .trim_matches(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X');
+                        let hex = token
+                            .strip_prefix("0x")
+                            .or_else(|| token.strip_prefix("0X"))?;
+                        (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
+                            .then_some(hex)
+                    })
                 })
                 .context("memory probe value is missing")?;
             indexed.push((sample, u32::from_str_radix(value, 16)?));
@@ -1101,7 +1167,16 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         // Samples before the declared warm-up boundary can contain reset-time
         // sentinel values (commonly zero) before ThreadX creates its pools.
         // Thresholds qualify steady-state firmware, just like end-drop does.
-        let qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        let mut qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        if probe.ignore_leading_zeroes {
+            let first_initialized = qualified_samples
+                .iter()
+                .position(|value| *value != 0)
+                .with_context(|| {
+                    format!("probe {} never produced an initialized value", probe.name)
+                })?;
+            qualified_samples = &qualified_samples[first_initialized..];
+        }
         let minimum_observed = *qualified_samples
             .iter()
             .min()
@@ -1111,6 +1186,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
             .max()
             .context("empty probe samples")?;
         let end_drop = sustained_end_drop(qualified_samples);
+        validate_counter_progress(&probe.name, qualified_samples, probe.minimum_interval_gain)?;
         if let Some(minimum) = probe.minimum {
             ensure!(
                 minimum_observed >= minimum,
@@ -1155,7 +1231,27 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
 /// temporary allocations, so comparing two arbitrary endpoints produces
 /// false leak reports. A real leak instead lowers the sustained floor in the
 /// later half of the run.
-fn sustained_end_drop(samples: &[u32]) -> i64 {
+pub(crate) fn validate_counter_progress(
+    name: &str,
+    samples: &[u32],
+    minimum: Option<u32>,
+) -> Result<()> {
+    if let Some(minimum) = minimum {
+        ensure!(
+            samples.len() >= 2,
+            "probe {name} needs at least two qualified samples to check progress"
+        );
+        for (interval, pair) in samples.windows(2).enumerate() {
+            let gain = pair[1].wrapping_sub(pair[0]);
+            ensure!(gain >= minimum && gain <= i32::MAX as u32,
+                "probe {name} stalled or reset at interval {interval}: {} -> {} (required gain {minimum})",
+                pair[0], pair[1]);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn sustained_end_drop(samples: &[u32]) -> i64 {
     if samples.len() < 2 {
         return 0;
     }
@@ -1182,6 +1278,20 @@ fn observed_marker(output: &str, marker: &str) -> bool {
         let line = line.trim();
         line == marker || (line.ends_with(marker) && line.contains("[INFO]"))
     })
+}
+
+fn observed_marker_after(output: &str, preceding: &str, marker: &str) -> bool {
+    let mut preceding_seen = false;
+    for line in output.lines().map(str::trim) {
+        let matches =
+            |wanted: &str| line == wanted || (line.ends_with(wanted) && line.contains("[INFO]"));
+        if matches(preceding) {
+            preceding_seen = true;
+        } else if preceding_seen && matches(marker) {
+            return true;
+        }
+    }
+    false
 }
 fn marker_u64(output: &str, marker: &str) -> Option<u64> {
     let lines: Vec<_> = output.lines().collect();
@@ -1237,7 +1347,7 @@ fn tail(value: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        marker_csv, marker_u64, materialize_platform, parse_memory_profile,
+        marker_csv, marker_u64, materialize_platform, observed_marker_after, parse_memory_profile,
         render_board_initialization_script, render_ota_script, render_peripheral_overlay,
         render_script, render_security_script, sustained_end_drop, ExecutionArtifacts,
         ExecutionScenario,
@@ -1328,6 +1438,31 @@ mod tests {
         );
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert_eq!(overlay.matches("SedsFlightSensorBus @ spi1").count(), 1);
+    }
+
+    #[test]
+    fn u5_external_loadcell_adc_uses_spi_wire_model() {
+        let mut board = layout(
+            "stm32u5",
+            r#"[{"type":"adc","name":"loadcell","model":"mcp3564r","bus":"spi2","bits":24,"channel_samples":[1048576]}]"#,
+        );
+        board
+            .board
+            .connections
+            .push(crate::layout::ConnectionConfig {
+                from: "gpio.28".into(),
+                to: "layoutDevice0@0".into(),
+                active_low: false,
+            });
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("SedsMcp3564r @ spi2"));
+        assert!(overlay.contains("externalChipSelect: true"));
+        assert!(overlay.contains("28 -> layoutDevice0@0"));
+        assert!(include_str!("../renode/peripherals/SedsSpiSensors.cs")
+            .contains("public sealed class SedsMcp3564r"));
+        assert!(
+            include_str!("../renode/peripherals/SedsStm32Adc.cs").contains("value &= ~(1u << 2)")
+        );
     }
 
     #[test]
@@ -1454,6 +1589,8 @@ mod tests {
             minimum: None,
             maximum: None,
             max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
         });
         let report = parse_memory_profile(
             &board,
@@ -1480,6 +1617,17 @@ mod tests {
     }
 
     #[test]
+    fn counter_progress_rejects_plateaus_and_unexpected_resets() {
+        use super::validate_counter_progress;
+        assert!(validate_counter_progress("adc", &[10, 20, 30], Some(1)).is_ok());
+        assert!(validate_counter_progress("adc", &[10, 20, 20], Some(1)).is_err());
+        assert!(validate_counter_progress("adc", &[20, 0, 10], Some(1)).is_err());
+        assert!(validate_counter_progress("adc", &[10], Some(1)).is_err());
+        assert!(validate_counter_progress("adc", &[u32::MAX - 1, 2, 5], Some(1)).is_ok());
+        assert!(validate_counter_progress("gauge", &[20, 10], None).is_ok());
+    }
+
+    #[test]
     fn memory_probe_parser_tolerates_log_text_joined_to_marker() {
         let mut board = layout("stm32g4", "[]");
         board.execution.memory_probes.push(MemoryProbe {
@@ -1488,10 +1636,32 @@ mod tests {
             minimum: None,
             maximum: None,
             max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
         });
         let report = parse_memory_profile(
             &board,
             "SEDS_PROBE pool 0[19:31:53.5528] [INFO] Machine paused.\n0x1234\n",
+        )
+        .unwrap();
+        assert_eq!(report[0].samples, vec![0x1234]);
+    }
+
+    #[test]
+    fn memory_probe_parser_accepts_value_after_async_log_prefix() {
+        let mut board = layout("stm32g4", "[]");
+        board.execution.memory_probes.push(MemoryProbe {
+            name: "pool".into(),
+            symbol: "pool_available".into(),
+            minimum: None,
+            maximum: None,
+            max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
+        });
+        let report = parse_memory_profile(
+            &board,
+            "SEDS_PROBE pool 0\n[INFO] monitor output 0x00001234\n",
         )
         .unwrap();
         assert_eq!(report[0].samples, vec![0x1234]);
@@ -1724,5 +1894,22 @@ mod tests {
         assert!(overlay.contains("SedsSignalInverter"));
         assert!(overlay.contains("Output -> gpio@1"));
         assert!(overlay.contains("gpio:\n    0 -> layoutSignalInverter0@0"));
+    }
+
+    #[test]
+    fn hardfault_is_only_fatal_after_a_successful_boot_marker() {
+        let transient = "[INFO] SEDS_FACTORY_HARDFAULT\n[INFO] SEDS_FACTORY_BOOT_REACHED\n";
+        assert!(!observed_marker_after(
+            transient,
+            "SEDS_FACTORY_BOOT_REACHED",
+            "SEDS_FACTORY_HARDFAULT"
+        ));
+
+        let fatal = "[INFO] SEDS_FACTORY_BOOT_REACHED\n[INFO] SEDS_FACTORY_HARDFAULT\n";
+        assert!(observed_marker_after(
+            fatal,
+            "SEDS_FACTORY_BOOT_REACHED",
+            "SEDS_FACTORY_HARDFAULT"
+        ));
     }
 }

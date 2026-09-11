@@ -311,6 +311,14 @@ pub struct MemoryProbe {
     pub maximum: Option<u32>,
     #[serde(default)]
     pub max_end_drop: Option<u32>,
+    /// Minimum counter advancement between every pair of post-warmup samples.
+    /// Use only for continuously running counters, not across a board reset.
+    #[serde(default)]
+    pub minimum_interval_gain: Option<u32>,
+    /// Ignore reset-time zero sentinels until this probe has published its
+    /// first real sample. If it never initializes, qualification still fails.
+    #[serde(default)]
+    pub ignore_leading_zeroes: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -531,6 +539,8 @@ mod tests {
             minimum: Some(8192),
             maximum: None,
             max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
         });
         assert!(execution.satisfies_stack_probe_requirement());
         execution.memory_probes[0].minimum = Some(0);

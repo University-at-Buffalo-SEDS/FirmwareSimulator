@@ -1,10 +1,10 @@
-FROM rust:1.88-bookworm AS groundstation
+FROM rust:1.98-bookworm AS groundstation
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=402bd5b4b33c9558068cc891dd4eda2de7815b49
-ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.20
+ARG GROUNDSTATION_REF=f21ce48866912f95ad200a2befbf6b48154d54a5
+ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.27
 ARG GROUNDSTATION_SEDSNET_GIT_REV=
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
@@ -21,7 +21,7 @@ RUN git init /groundstation \
     && cargo build --manifest-path /groundstation/Cargo.toml \
          -p groundstation_backend --release --features hitl_mode
 
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
 COPY src src

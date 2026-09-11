@@ -9,23 +9,28 @@ use std::path::PathBuf;
 
 fn configure_unacknowledged_can(layout: &mut BoardLayout) {
     layout.execution.can_acknowledged = false;
-    configure_unacknowledged_can_probes(&mut layout.execution.memory_probes);
+    configure_unacknowledged_can_probes(
+        &mut layout.execution.memory_probes,
+        layout.architecture == ArchitectureKind::Stm32u5,
+    );
 }
 
-fn configure_unacknowledged_can_probes(probes: &mut [MemoryProbe]) {
+fn configure_unacknowledged_can_probes(probes: &mut [MemoryProbe], enqueue_before_ack: bool) {
     for probe in probes {
         if probe.name == "fdcan_tx_fail" {
-            // STM32 HAL reports successful FIFO enqueue even while FDCAN
-            // retries a frame that receives no physical-layer ACK. A HAL
-            // failure is therefore valid but is not required proof of the
-            // disconnected-bus stimulus.
-            probe.minimum = None;
+            // The disconnected-controller model reports the missing ACK as
+            // transport backpressure. Require at least one observed attempt
+            // while allowing the counter to grow during the profile.
+            // U5's HAL reports enqueue success before the controller observes
+            // a missing ACK. Its enqueue counter proves attempted traffic;
+            // a synchronous HAL error is not required for this controller.
+            probe.minimum = if enqueue_before_ack { None } else { Some(1) };
             probe.maximum = None;
         }
         if probe.name == "fdcan_tx_ok" {
-            // Prove the firmware exercised its CAN transmit path; the rest of
-            // the profile verifies it remains alive and memory-bounded.
-            probe.minimum = Some(1);
+            // A successful enqueue is not guaranteed by the injected model;
+            // fdcan_tx_fail above is the proof that TX was exercised.
+            probe.minimum = if enqueue_before_ack { Some(1) } else { None };
         }
     }
 }
@@ -42,19 +47,35 @@ mod tests {
             minimum,
             maximum,
             max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
         }
     }
 
     #[test]
-    fn disconnected_can_requires_tx_activity_without_inventing_a_hal_failure() {
+    fn disconnected_can_requires_observed_backpressure() {
         let mut probes = vec![
             probe("fdcan_tx_fail", Some(1), Some(5)),
             probe("fdcan_tx_ok", None, None),
             probe("allocator_failures", None, Some(0)),
         ];
 
-        configure_unacknowledged_can_probes(&mut probes);
+        configure_unacknowledged_can_probes(&mut probes, false);
 
+        assert_eq!(probes[0].minimum, Some(1));
+        assert_eq!(probes[0].maximum, None);
+        assert_eq!(probes[1].minimum, None);
+        assert_eq!(probes[2].maximum, Some(0));
+    }
+
+    #[test]
+    fn u5_disconnected_can_requires_enqueue_activity_and_keeps_fault_limits() {
+        let mut probes = vec![
+            probe("fdcan_tx_fail", Some(1), Some(0)),
+            probe("fdcan_tx_ok", None, None),
+            probe("allocator_failures", None, Some(0)),
+        ];
+        configure_unacknowledged_can_probes(&mut probes, true);
         assert_eq!(probes[0].minimum, None);
         assert_eq!(probes[0].maximum, None);
         assert_eq!(probes[1].minimum, Some(1));

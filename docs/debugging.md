@@ -1,5 +1,15 @@
 # Crash and register debugging
 
+For raw monitor-output diagnostics, mount a writable directory into Docker and
+set `FIRMWARE_SIM_DIAGNOSTICS_DIR` to that container path. Each standalone Renode
+execution saves a uniquely named `renode-*.log` without overwriting earlier runs.
+The directory must already exist and be writable by the container user. These
+transcripts complement the CPU/probe report; they are not instruction traces.
+Layouts with an SD card also save `sd-*.img` before the standalone firmware
+machine is cleared. Inspect that FAT image using filesystem tools to validate
+file contents, timestamps and recorded values; write counters alone cannot do so.
+The capture contains completed sector writes, not data still buffered in firmware.
+
 When a simulated phase fails after loading a layout, the CLI prints a JSON crash diagnostic before exiting. It contains the failing phase, causal error chain, and recent simulated events. CPU/fault registers are included only when they were read from Renode; later behavioral phases never fabricate register values.
 
 Keep the JSON with the failing CI artifact and rerun with the same `--seed`. The PC is constrained to the configured application slot and stack pointers to the configured RAM size, which makes invalid layout/register state easy to spot.

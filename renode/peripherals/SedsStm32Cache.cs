@@ -8,6 +8,7 @@ namespace Antmicro.Renode.Peripherals.Memory
     // complete synchronously and preserve firmware-visible ordering/status.
     public sealed class SedsStm32Cache : IDoubleWordPeripheral, IKnownSize
     {
+        public SedsStm32Cache(bool dataCache = false) { this.dataCache = dataCache; }
         public uint ReadDoubleWord(long offset)
         {
             switch(offset)
@@ -28,6 +29,11 @@ namespace Antmicro.Renode.Peripherals.Memory
             case 0x00:
                 control = value & ~(1u << 1);
                 if((value & (1u << 1)) != 0) { invalidations++; status |= 1u << 1; }
+                if(dataCache && (value & (1u << 11)) != 0)
+                {
+                    control &= ~(1u << 11);
+                    status |= 1u << 4;
+                }
                 break;
             case 0x08: interruptEnable = value; break;
             case 0x0c: status &= ~value; break;
@@ -42,6 +48,7 @@ namespace Antmicro.Renode.Peripherals.Memory
         public void Reset() { control = status = interruptEnable = hitMonitor = missMonitor = 0; invalidations = 0; }
 
         private uint control, status, interruptEnable, hitMonitor, missMonitor;
+        private readonly bool dataCache;
         private ulong invalidations;
     }
 }

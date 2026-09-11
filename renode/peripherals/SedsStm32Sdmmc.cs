@@ -44,7 +44,10 @@ namespace Antmicro.Renode.Peripherals.Storage
             {
             case 0x08: argument = value; break;
             case 0x0c:
-                registers[offset] = value;
+                // The command state machine finishes synchronously here.
+                // CPSMEN clears on completion; subsequent CMDTRANS updates
+                // must not issue the previous command a second time.
+                registers[offset] = value & ~(1u << 12);
                 // STM32 H5/U5 SDMMC v2 enables the command-path state machine
                 // with CMD.CPSMEN bit 12 (older STM32 blocks used bit 10).
                 if((value & (1u << 12)) != 0) ExecuteCommand(value & 0x3f);
@@ -57,6 +60,7 @@ namespace Antmicro.Renode.Peripherals.Storage
             case 0x54: idmaBufferSize = value; registers[offset] = value; break;
             case 0x58: idmaBase = value; registers[offset] = value; break;
             case 0x5c: idmaBase1 = value; registers[offset] = value; break;
+            case 0x80: WriteFifoWord(value); break;
             default: registers[offset] = value; break;
             }
             UpdateInterrupt();
@@ -100,6 +104,15 @@ namespace Antmicro.Renode.Peripherals.Storage
         }
 
         public bool GetCardPresent() { return cardPresent; }
+        public void SaveCardImage(string path)
+        {
+            // Retain actual firmware-written FAT sectors for host inspection.
+            // Never replace an earlier diagnostic capture.
+            using(var output = new System.IO.FileStream(path, System.IO.FileMode.CreateNew))
+            {
+                output.Write(card, 0, card.Length);
+            }
+        }
         public ulong GetCommandsExecuted() { return commands; }
         public ulong GetBytesRead() { return bytesRead; }
         public ulong CardCapacityBytes
@@ -138,6 +151,7 @@ namespace Antmicro.Renode.Peripherals.Storage
             selected = false;
             applicationCommand = false;
             IRQ.Set(false);
+            writing = false;
         }
 
         private void ExecuteCommand(uint index)
@@ -181,7 +195,9 @@ namespace Antmicro.Renode.Peripherals.Storage
                 break;
             case 9: // SEND_CSD
                 response[0] = 0x400e0032; response[1] = 0x5b590000;
-                response[2] = 0x7f800a40; response[3] = 0x00400000;
+                var capacity = (uint)Math.Max(1, card.Length / (512 * 1024)) - 1;
+                response[1] |= (capacity >> 16) & 0x3f;
+                response[2] = (capacity << 16) | 0x0a40; response[3] = 0x00400000;
                 status |= CommandResponse;
                 break;
             case 12: // STOP_TRANSMISSION
@@ -198,6 +214,14 @@ namespace Antmicro.Renode.Peripherals.Storage
             case 18: // READ_MULTIPLE_BLOCK
                 status |= CommandResponse;
                 PrepareRead(argument, Math.Max(1u, dataLength / BlockSize));
+                break;
+            case 24: // WRITE_SINGLE_BLOCK
+            case 25: // WRITE_MULTIPLE_BLOCK
+                status |= CommandResponse;
+                writeOffset = highCapacity ? (ulong)argument * BlockSize : argument;
+                remainingData = index == 24 ? BlockSize : dataLength;
+                writing = selected && remainingData != 0 && writeOffset + remainingData <= (ulong)card.Length;
+                if(!writing) { remainingData = 0; status |= DataTimeout; }
                 break;
             case 55: // APP_CMD
                 applicationCommand = true;
@@ -295,11 +319,29 @@ namespace Antmicro.Renode.Peripherals.Storage
             return value;
         }
 
+        private void WriteFifoWord(uint value)
+        {
+            if(!writing) return;
+            for(var i = 0; i < 4 && remainingData != 0; i++)
+            {
+                card[(int)writeOffset++] = (byte)(value >> (8 * i));
+                remainingData--;
+            }
+            if(remainingData == 0)
+            {
+                writing = false;
+                status |= DataEnd | DataBlockEnd;
+            }
+            UpdateInterrupt();
+        }
+
         private uint StatusValue
         {
             get
             {
                 var value = status;
+                if(writing) value |= 1u << 14; // TXFIFOHE
+                if(fifo.Count == 0) value |= 1u << 19; // RXFIFOE
                 if(fifo.Count > 0) value |= ReceiveDataAvailable;
                 if(fifo.Count >= 32) value |= ReceiveFifoHalfFull;
                 return value;
@@ -318,6 +360,8 @@ namespace Antmicro.Renode.Peripherals.Storage
         private bool highCapacity;
         private bool selected;
         private bool applicationCommand;
+        private bool writing;
+        private ulong writeOffset;
         private uint argument;
         private uint responseCommand;
         private uint status;

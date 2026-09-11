@@ -52,6 +52,16 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 // Calibration completes synchronously. Enabling sets ADRDY;
                 // starting a conversion sets EOC/EOS and exposes a new sample.
                 value &= ~(1u << 31);
+                // Hardware self-clears disable/stop commands and clears the
+                // corresponding start bits once an immediate modeled
+                // conversion has completed. Retaining ADSTP made the U5 HAL
+                // reject the next channel in a polling sequence.
+                if((value & (1u << 1)) != 0)
+                    value &= ~((1u << 1) | 1u);
+                if((value & (1u << 4)) != 0)
+                    value &= ~((1u << 4) | (1u << 2));
+                if((value & (1u << 5)) != 0)
+                    value &= ~((1u << 5) | (1u << 3));
                 if((value & 1u) != 0) status |= 1u;
                 if((value & (1u << 2)) != 0)
                 {
@@ -59,6 +69,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                     if(conversions > disconnectAfter) status &= ~((1u << 2) | (1u << 3));
                     else if(failureEvery != 0 && conversions % failureEvery == 0) status |= 1u << 4;
                     else status |= (1u << 2) | (1u << 3);
+                    value &= ~(1u << 2);
                 }
             }
             registers[offset] = value;

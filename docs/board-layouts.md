@@ -181,3 +181,13 @@ Renode executes ThreadX turns much more slowly than the MCU; normal linked-bay
 mode retains the native three-entry H5 layout. Stack, allocator, panic,
 backpressure, unexpected-error, and liveness probes must remain healthy while
 firmware handles the full FIFO.
+
+For continuous acquisition or storage counters, set `minimum_interval_gain`
+to a positive integer. Every adjacent pair of post-warmup observations must
+advance by at least that amount; a nonzero counter that later stalls fails.
+At least two qualified observations are required. Normal 32-bit counter wrap
+is accepted, but a backwards reset is rejected. Do not apply this constraint
+across intentional firmware resets. Choose observation spacing longer than
+the task's normal batch/flush interval. Network-only outage tests should keep
+onboard ADCs connected and enforce these probes for acquisition and SD writes,
+without requiring network-send counters to advance during the outage itself.

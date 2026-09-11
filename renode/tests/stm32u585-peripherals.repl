@@ -11,6 +11,10 @@ physicalFlash: MTD.SedsStm32FlashController @ sysbus 0x40022000
 sdmmc1:
     FailureEvery: 3
     DisconnectAfter: 10
+mcpSmoke: Sensors.SedsMcp3564r @ spi2
+    externalChipSelect: true
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs
 adcSmoke: Sensors.SedsStm32Adc @ sysbus 0x42028000
     bits: 14
     channels: 4

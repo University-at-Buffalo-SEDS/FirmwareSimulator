@@ -41,11 +41,35 @@ artifact, then validate and simulate them in Docker:
 Use `./build.py test --all --release` for release artifacts. `--full` remains a
 compatibility alias for `--all`.
 
+Add `--ultra-soak` to run the separate ten-minute linked-network qualification
+after the normal suite. The soak disconnects and rejoins selected CAN peers and
+requires transport, discovery, and allocator probes to keep advancing in the
+final observation window. It also sends a routed Valve command after every
+healthy sample (including immediately after fault recovery and board reboot)
+and requires its board execution and returned GroundStation ACK before the
+following sample, including the final 9:10–10:00 window; a running RTOS
+thread alone is not considered a pass. Set `SEDS_FIRMWARE_SIM_SOAK_MS` only for simulator development—the
+qualification default is 600000 ms of emulated firmware time.
+
+The ultra soak also power-cycles the GroundStation host process. Its configured
+network-variable cache is retained, the radio PTY and Pico-Fi bridge reconnect,
+and discovery plus per-board traffic attribution must complete again. This
+tests host restart behavior without resetting either embedded network.
+
+The linked qualification also inspects GroundStation's network-graph snapshot:
+all seven autonomous sender IDs must have their canonical board label and their
+own nonzero application-packet count. A relay-side aggregate cannot satisfy
+this check. The Valve round trip correlates the pilot-open command with the
+returned pilot-open state and enforces the configured acknowledgement latency.
+
 The board bridge first pulls the repository-linked image. If the registry is
 unavailable, it reuses a previously built local image or shallow-clones
 `FirmwareSimulator/main` and builds one. A sibling checkout is not selected
 implicitly. Set `SEDS_FIRMWARE_SIM_IMAGE` to select another published image, or
 `SEDS_FIRMWARE_SIM_SOURCE` to build a particular local checkout.
+On restricted Docker installations that cannot create bridge interfaces, set
+`SEDS_FIRMWARE_SIM_DOCKER_NETWORK=host`; normal Docker hosts should leave it
+unset.
 
 ## Board layout
 

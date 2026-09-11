@@ -33,12 +33,17 @@ fdcan1MessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x350>
 usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 160000000
     IRQ -> nvic@61
-spi2: SPI.STM32SPI @ sysbus 0x40003800
-    series: .L5
+// U5 uses the same CFG1/CFG2/CR1 SPI register generation as H7. The older
+// STM32SPI/L5 model does not expose the transfer-start semantics used by the
+// STM32U5 HAL and causes every blocking transfer to time out.
+spi2: SPI.SedsStm32U5Spi @ sysbus 0x40003800
     IRQ -> nvic@60
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32U5Spi.cs
 timer2: Timers.STM32_Timer @ sysbus 0x40000000
     frequency: 160000000
     initialLimit: 0xFFFFFFFF
+    IRQ -> nvic@45
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 160000000
     initialLimit: 0xFFFF
@@ -67,5 +72,7 @@ gpdma: DMA.SedsStm32Gpdma @ sysbus 0x40020000
 cache: Memory.SedsStm32Cache @ sysbus 0x40030400
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Cache.cs
+dcache1: Memory.SedsStm32Cache @ sysbus 0x40031400
+    dataCache: true
 syscfg: Miscellaneous.SedsStm32Syscfg @ sysbus 0x46020000
     variant: "u5"

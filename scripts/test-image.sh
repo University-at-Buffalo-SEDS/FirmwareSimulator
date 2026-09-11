@@ -2,12 +2,16 @@
 set -euo pipefail
 
 image="${1:?usage: test-image.sh IMAGE}"
+docker_network=()
+if [[ -n "${SEDS_FIRMWARE_SIM_DOCKER_NETWORK:-}" ]]; then
+    docker_network=(--network "$SEDS_FIRMWARE_SIM_DOCKER_NETWORK")
+fi
 
 check_renode() {
     local command="$1"
     shift
     local output
-    output="$(docker run --rm --entrypoint /opt/renode/renode "$image" \
+    output="$(docker run "${docker_network[@]}" --rm --entrypoint /opt/renode/renode "$image" \
         --disable-xwt --console --execute "$command" 2>&1)"
     printf '%s\n' "$output"
     if printf '%s\n' "$output" | grep -Eiq \
@@ -23,7 +27,7 @@ check_renode() {
     done
 }
 
-catalog="$(docker run --rm "$image" list-mcus)"
+catalog="$(docker run "${docker_network[@]}" --rm "$image" list-mcus)"
 for mcu in \
     stm32g431 stm32g441 stm32g471 stm32g473 stm32g474 stm32g483 stm32g484 stm32g491 stm32g4a1 \
     stm32h523 stm32h533 stm32h543 stm32h553 stm32h562 stm32h563 stm32h573 \
@@ -32,7 +36,7 @@ for mcu in \
 done
 
 for arch in stm32 stm32g4 stm32h5 stm32u5; do
-    docker run --rm "$image" self-test --arch "$arch"
+    docker run "${docker_network[@]}" --rm "$image" self-test --arch "$arch"
 done
 
 for mcu in stm32g491 stm32h523 stm32u585; do
@@ -57,6 +61,9 @@ check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/re
 # register rather than accepting a platform that merely reserves the address.
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; sysbus WriteDoubleWord 0x40004400 0x25; usart2 WriteChar 0x5A; sysbus ReadDoubleWord 0xE000E204; sysbus ReadDoubleWord 0x40004424; quit' '0x00000040' '0x0000005A'
 
+# DAQ uses the U5 data cache and SDMMC FIFO writes for FileX provisioning.
+check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; dcache1 WriteDoubleWord 0 0xB01; dcache1 ReadDoubleWord 4; sdmmc1 CardCapacityBytes 4194304; sysbus WriteDoubleWord 0x420C8008 0x10000; sysbus WriteDoubleWord 0x420C800C 0x1007; sysbus WriteDoubleWord 0x420C8028 4; sysbus WriteDoubleWord 0x420C8008 0; sysbus WriteDoubleWord 0x420C800C 0x1019; sysbus WriteDoubleWord 0x420C8080 0x44332211; sysbus WriteDoubleWord 0x420C800C 0x1011; sysbus ReadDoubleWord 0x420C8080; quit' '0x00000010' '0x44332211'
+
 # Every fixed-layout controller must expose all three TX entries as free after
 # reset. G4 has two instances; H5 and U5 have one. All bundled part numbers map
 # to one of these three runtime-checked platform profiles.
@@ -71,10 +78,12 @@ check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/re
 
 check_renode 'emulation CreateCANHub "fdcan-test" false; mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl; connector Connect sysbus.fdcan1 fdcan-test; sysbus ReadDoubleWord 0x4000A4C4; sysbus WriteDoubleWord 0x4000A418 0; sysbus WriteDoubleWord 0x4000A4CC 1; sysbus ReadDoubleWord 0x4000A4D4; quit' '0x00000003' '0x00000001'
 
-check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/gpdma-cache-contract.repl; sysbus WriteDoubleWord 0x20000000 0x44332211; sysbus WriteDoubleWord 0x40020110 0x4040; sysbus WriteDoubleWord 0x40020118 4; sysbus WriteDoubleWord 0x4002011c 0x20000000; sysbus WriteDoubleWord 0x40020120 0x20000020; sysbus WriteDoubleWord 0x40020100 1; sysbus ReadDoubleWord 0x20000020; cache WriteDoubleWord 0 2; cache GetInvalidations; quit' '0x44332211' '0x0000000000000001'
+# STM32H5/U5 CMSIS: channel 0 starts at +0x50, CTR1 at +0x90,
+# CCR at +0x64. Exercise incrementing byte copies and W1C completion.
+check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/gpdma-cache-contract.repl; sysbus WriteDoubleWord 0x20000000 0x44332211; sysbus WriteDoubleWord 0x40020090 0x80008; sysbus WriteDoubleWord 0x40020094 0x200; sysbus WriteDoubleWord 0x40020098 4; sysbus WriteDoubleWord 0x4002009c 0x20000000; sysbus WriteDoubleWord 0x400200a0 0x20000020; sysbus WriteDoubleWord 0x40020064 0x101; sysbus ReadDoubleWord 0x20000020; sysbus ReadDoubleWord 0x40020060; sysbus WriteDoubleWord 0x4002005c 0x100; sysbus ReadDoubleWord 0x40020060; cache WriteDoubleWord 0 2; cache GetInvalidations; quit' '0x44332211' '0x00000100' '0x00000000' '0x0000000000000001'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/adc-contract.repl; sysbus WriteDoubleWord 0x50000030 0x80; sysbus WriteDoubleWord 0x50000008 5; sysbus ReadDoubleWord 0x50000040; quit' '0x00000FFF'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/trustzone-contract.repl; cpu SAURegionNumber 0; cpu SAURegionBaseAddress 0x08002000; cpu SAURegionLimitAddress 0x08002FE1; cpu SAUControl 1; cpu TrustZoneEnabled; cpu SAUControl; quit' 'True' '0x00000001'
 
-check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; sdmmc CardCapacityBytes 4096; sdmmc GetCardPresent; sysbus WriteDoubleWord 0x46008008 512; sysbus WriteDoubleWord 0x4600800C 0x1010; sysbus ReadDoubleWord 0x46008010; sysbus ReadDoubleWord 0x46008014; sysbus ReadDoubleWord 0x46008034; python "monitor.Machine[\"sysbus.usb\"].InjectPacket(System.Array[System.Byte]([1,2,3]), 1)"; usb GetBytesInjected; quit' 'True' '0x00000010' '0x00000040' '0x0000000000000003'
+check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; sdmmc CardCapacityBytes 4096; sdmmc GetCardPresent; sysbus WriteDoubleWord 0x46008008 512; sysbus WriteDoubleWord 0x4600800C 0x1010; sysbus ReadDoubleWord 0x46008010; sysbus ReadDoubleWord 0x46008014; sysbus ReadDoubleWord 0x46008034; python "monitor.Machine[\"sysbus.usb\"].InjectPacket(System.Array[System.Byte]([1,2,3]), 1)"; usb GetBytesInjected; quit' 'True' '0x00000010' '0x00080040' '0x0000000000000003'

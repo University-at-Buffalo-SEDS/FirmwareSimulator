@@ -39,12 +39,19 @@ The simulation executes the linked ARM ELF for deterministic virtual time and re
 
 Multiple firmware images can execute together in a single synchronized Renode process. `firmware-sim bay --topology examples/avionics-bay.json` creates one machine per node and connects its declared CAN/UART controllers through shared virtual buses. One Renode process is intentional: it gives the entire bay a common deterministic virtual clock. The Docker image is the supported executor and can be replicated for independent bays; native execution remains an unsupported development option.
 
-Bay topologies can schedule retained-flash firmware resets with `reboots`. This resets the selected
-MCU after a completed sample while its peers and host processes keep running, reloads debugger
-symbols, and preserves the modeled physical flash. Pair the event with persistence and liveness
-probes to verify local state restoration before network resynchronization and successful rejoin.
+Bay topologies can schedule retained-flash resets with `reboots`. Firmware nodes reset the selected
+MCU, reload debugger symbols, and preserve modeled physical flash. Host nodes restart the selected
+process while retaining its configured network-variable cache; serial and Pico-Fi links accept the
+replacement process without resetting their peer. Pair the event with persistence, rediscovery, and
+liveness probes to verify restoration before network resynchronization and successful rejoin.
 
-One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories use its `latest` tag through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest. The image embeds GroundStation with the stable SEDSNet v4.0.20 crates.io release so the linked-bay test exercises the same public dependency used by normal GroundStation builds.
+One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories use its `latest` tag through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest. The image embeds GroundStation with the stable SEDSNet v4.0.27 crates.io release so the linked-bay test exercises the same public dependency used by normal GroundStation builds.
+
+The linked gate requires GroundStation to discover and canonically label all
+seven board nodes, assign nonzero application traffic to each originating
+sender, and correlate a routed Valve command with its matching returned state
+ACK. On Docker hosts that cannot create bridge interfaces, set
+`SEDS_FIRMWARE_SIM_DOCKER_NETWORK=host` when invoking a board test.
 
 To qualify the complete system from a fresh simulator checkout without manually
 cloning any board repositories, run:

@@ -69,9 +69,9 @@ jobs:
           IMAGE="${IMAGE,,}"
           tags=(-t "$IMAGE:${GITHUB_SHA}")
           if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            tags+=(-t "$IMAGE:latest")
+            tags+=(-t "$IMAGE:latest" -t "$IMAGE:stm32g4" -t "$IMAGE:stm32h5" -t "$IMAGE:stm32u5")
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tags+=(-t "$IMAGE:${GITHUB_REF_NAME}" -t "$IMAGE:latest")
+            tags+=(-t "$IMAGE:${GITHUB_REF_NAME}" -t "$IMAGE:latest" -t "$IMAGE:stm32g4" -t "$IMAGE:stm32h5" -t "$IMAGE:stm32u5")
           fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \

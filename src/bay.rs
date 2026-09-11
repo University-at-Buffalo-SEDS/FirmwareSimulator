@@ -2,16 +2,32 @@ use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayou
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
+    fs::OpenOptions,
     io::{BufRead, BufReader, Read, Write},
     os::fd::AsRawFd,
     os::unix::net::UnixListener,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::mpsc,
     thread,
     time::Duration,
 };
+
+fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
+    child
+        .stdin
+        .take()
+        .context("retaining the Renode console stdin guard")
+}
+
+fn console_execution_failed(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("there was an error executing command")
+        || lower.contains("parameters did not match")
+        || lower.contains("fatal error")
+}
 
 #[derive(Debug, Deserialize)]
 pub struct BayTopology {
@@ -41,12 +57,25 @@ pub struct BayTopology {
     /// rest of the linked network remains online.
     #[serde(default)]
     pub reboots: Vec<RebootEvent>,
+    /// Change whether an emulated CAN controller sees link-layer ACKs after a
+    /// sample. This models a disconnected peer or transient physical-bus
+    /// outage without stopping the firmware or its scheduler.
+    #[serde(default)]
+    pub can_ack_events: Vec<CanAckEvent>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RebootEvent {
     pub node: String,
     /// One-based sample number after which the reset is applied.
     pub after_sample: usize,
+}
+#[derive(Debug, Deserialize)]
+pub struct CanAckEvent {
+    pub node: String,
+    pub peripheral: String,
+    /// One-based sample number after which the state is changed.
+    pub after_sample: usize,
+    pub acknowledged: bool,
 }
 #[derive(Debug, Deserialize)]
 pub struct Node {
@@ -54,7 +83,7 @@ pub struct Node {
     pub layout: PathBuf,
     pub firmware_root: PathBuf,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct HostNode {
     pub name: String,
     pub binary: PathBuf,
@@ -71,7 +100,7 @@ pub struct HostNode {
     pub network_variable_cache: Option<PathBuf>,
     pub serial_links: Vec<HostSerialLink>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct HostSerialLink {
     pub link: String,
     pub env: String,
@@ -137,12 +166,80 @@ pub struct NetworkAssertion {
     /// Check one zero-based sample rather than the maximum across the run.
     #[serde(default)]
     pub sample: Option<usize>,
+    /// Require the probe to advance by at least this amount between two
+    /// zero-based samples. This detects a live RTOS thread whose transport has
+    /// stopped making progress late in a soak.
+    #[serde(default)]
+    pub minimum_gain: Option<u32>,
+    #[serde(default)]
+    pub from_sample: Option<usize>,
+    #[serde(default)]
+    pub to_sample: Option<usize>,
 }
 #[derive(Debug, Deserialize)]
 pub struct HostLogAssertion {
     pub name: String,
     pub node: String,
     pub contains: String,
+    #[serde(default = "default_minimum_activity")]
+    pub minimum_occurrences: u32,
+}
+
+struct HostRuntime {
+    name: String,
+    child: Child,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+fn spawn_host_node(
+    host: &HostNode,
+    base: &Path,
+    scratch: &Path,
+    sample_path: &Path,
+    host_serial_paths: &BTreeMap<String, PathBuf>,
+    append_logs: bool,
+) -> Result<HostRuntime> {
+    let mut command = Command::new(&host.binary);
+    command.args(&host.args).envs(&host.env);
+    if let Some(cwd) = &host.cwd {
+        command.current_dir(cwd);
+    }
+    for serial in &host.serial_links {
+        command.env(&serial.env, &host_serial_paths[&serial.link]);
+    }
+    let variable_cache = host
+        .network_variable_cache
+        .as_ref()
+        .map(|path| base.join(path))
+        .unwrap_or_else(|| scratch.join(format!("{}-network-variables.json", safe(&host.name))));
+    if let Some(parent) = variable_cache.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating host state directory {}", parent.display()))?;
+    }
+    command.env("GS_NETWORK_VARIABLE_CACHE", variable_cache);
+    command.env("FIRMWARE_SIM_SAMPLE_FILE", sample_path);
+    let stdout_path = scratch.join(format!("{}-stdout.log", safe(&host.name)));
+    let stderr_path = scratch.join(format!("{}-stderr.log", safe(&host.name)));
+    let open_log = |path: &Path| {
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append_logs)
+            .truncate(!append_logs)
+            .open(path)
+    };
+    let child = command
+        .stdout(Stdio::from(open_log(&stdout_path)?))
+        .stderr(Stdio::from(open_log(&stderr_path)?))
+        .spawn()
+        .with_context(|| format!("starting host node {}", host.name))?;
+    Ok(HostRuntime {
+        name: host.name.clone(),
+        child,
+        stdout_path,
+        stderr_path,
+    })
 }
 #[derive(Debug, Serialize)]
 pub struct LinkReport {
@@ -215,45 +312,59 @@ fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path) -> Result<()> {
         .open(uart_path)
         .with_context(|| format!("opening Pico-Fi Gateway UART {}", uart_path.display()))?;
     configure_raw_nonblocking(uart.as_raw_fd())?;
-    let (mut host, _) = listener
-        .accept()
-        .context("accepting GroundStation I2C endpoint")?;
     let mut state = PicoBridgeState {
         next_transfer_id: 1,
         ..Default::default()
     };
     loop {
-        drain_gateway_uart_tx(&mut state, &mut uart)?;
-        let mut operation = [0u8; 1];
-        match host.read_exact(&mut operation) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
-            Err(error) => return Err(error).context("reading simulated I2C operation"),
-        }
-        match operation[0] {
-            b'W' => {
-                let mut slot = [0u8; PICO_I2C_SLOT_SIZE];
-                host.read_exact(&mut slot)?;
-                match ingest_host_i2c_slot(&mut state, &slot) {
-                    Ok(()) => host.write_all(&[0])?,
-                    Err(error) => {
-                        eprintln!("[SIM] Pico-Fi rejected malformed I2C slot: {error:#}");
-                        host.write_all(&[1])?;
+        let (mut host, _) = listener
+            .accept()
+            .context("accepting GroundStation I2C endpoint")?;
+        // A GroundStation process restart disconnects only the host-facing
+        // I2C controller. Keep the Pico/Gateway UART and queued device state
+        // alive, then accept the replacement process on the same socket.
+        loop {
+            drain_gateway_uart_tx(&mut state, &mut uart)?;
+            let mut operation = [0u8; 1];
+            match host.read_exact(&mut operation) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error).context("reading simulated I2C operation"),
+            }
+            match operation[0] {
+                b'W' => {
+                    let mut slot = [0u8; PICO_I2C_SLOT_SIZE];
+                    host.read_exact(&mut slot)?;
+                    match ingest_host_i2c_slot(&mut state, &slot) {
+                        Ok(()) => host.write_all(&[0])?,
+                        Err(error) => {
+                            eprintln!("[SIM] Pico-Fi rejected malformed I2C slot: {error:#}");
+                            host.write_all(&[1])?;
+                        }
                     }
                 }
+                b'R' => {
+                    read_gateway_uart(&mut state, &mut uart)?;
+                    let slot = state
+                        .host_reads
+                        .pop_front()
+                        .unwrap_or([0; PICO_I2C_SLOT_SIZE]);
+                    host.write_all(&slot)?;
+                }
+                other => bail!("unknown simulated I2C operation 0x{other:02x}"),
             }
-            b'R' => {
-                read_gateway_uart(&mut state, &mut uart)?;
-                let slot = state
-                    .host_reads
-                    .pop_front()
-                    .unwrap_or([0; PICO_I2C_SLOT_SIZE]);
-                host.write_all(&slot)?;
-            }
-            other => bail!("unknown simulated I2C operation 0x{other:02x}"),
+            drain_gateway_uart_tx(&mut state, &mut uart)?;
+            host.flush()?;
         }
-        drain_gateway_uart_tx(&mut state, &mut uart)?;
-        host.flush()?;
     }
 }
 
@@ -576,8 +687,12 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     }
     for reboot in &topology.reboots {
         ensure!(
-            topology.nodes.iter().any(|node| node.name == reboot.node),
-            "reboot references unknown firmware node {}",
+            topology.nodes.iter().any(|node| node.name == reboot.node)
+                || topology
+                    .host_nodes
+                    .iter()
+                    .any(|node| node.name == reboot.node),
+            "reboot references unknown node {}",
             reboot.node
         );
         ensure!(
@@ -585,6 +700,31 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             "reboot for {} must occur after samples 1..{}",
             reboot.node,
             topology.sample_count.saturating_sub(1)
+        );
+    }
+    for event in &topology.can_ack_events {
+        ensure!(
+            topology.nodes.iter().any(|node| node.name == event.node),
+            "CAN ACK event references unknown firmware node {}",
+            event.node
+        );
+        ensure!(
+            event.after_sample > 0 && event.after_sample < topology.sample_count,
+            "CAN ACK event for {}.{} must occur after samples 1..{}",
+            event.node,
+            event.peripheral,
+            topology.sample_count.saturating_sub(1)
+        );
+        ensure!(
+            topology.links.iter().any(|link| {
+                matches!(link.kind, LinkKind::Can)
+                    && link.endpoints.iter().any(|endpoint| {
+                        endpoint.node == event.node && endpoint.peripheral == event.peripheral
+                    })
+            }),
+            "CAN ACK event references unlinked CAN endpoint {}.{}",
+            event.node,
+            event.peripheral
         );
     }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
@@ -795,22 +935,40 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 );
             }
         }
-        script += &format!(
-            "echo \"SEDS_BAY_SAMPLE_DONE {} {}\"\n",
-            sample + 1,
-            topology.sample_count
-        );
-        for reboot in topology
-            .reboots
+        for event in topology
+            .can_ack_events
             .iter()
             .filter(|event| event.after_sample == sample + 1)
         {
+            script += &format!(
+                "mach set \"{}\"\nsysbus.{} Acknowledged {}\necho \"SEDS_BAY_CAN_ACK {} {} {} {}\"\n",
+                safe(&event.node),
+                safe(&event.peripheral),
+                if event.acknowledged { "true" } else { "false" },
+                safe(&event.node),
+                safe(&event.peripheral),
+                event.after_sample,
+                event.acknowledged
+            );
+        }
+        for reboot in topology.reboots.iter().filter(|event| {
+            event.after_sample == sample + 1
+                && topology.nodes.iter().any(|node| node.name == event.node)
+        }) {
             let (msp, pc, vtor, elf) = &node_reset_vectors[&reboot.node];
             script += &format!(
                 "mach set \"{}\"\nmachine Reset\nsysbus LoadSymbolsFrom @{}\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\necho \"SEDS_BAY_REBOOT {} {}\"\n",
                 safe(&reboot.node), elf.display(), msp, pc, vtor, safe(&reboot.node), sample + 1
             );
         }
+        // Publish the sample only after its fault/recovery and reboot events
+        // have been applied. Host validators can then inject work into the
+        // exact post-event interval without racing the simulator monitor.
+        script += &format!(
+            "echo \"SEDS_BAY_SAMPLE_DONE {} {}\"\n",
+            sample + 1,
+            topology.sample_count
+        );
     }
     for node in &topology.nodes {
         script += &format!(
@@ -831,13 +989,20 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         topology.links.len(),
         topology.virtual_time_ms
     );
+    let sample_path = scratch.path().join("network-sample.txt");
+    fs::write(&sample_path, "0\n").context("creating linked-bay sample marker")?;
     let mut child = Command::new(&renode)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script_path.display()))
+        // Renode's redirected console input handler must not observe EOF during
+        // a long run. Child::wait closes an internally owned stdin handle, so
+        // take and retain this private pipe below until emulation completes.
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("starting Renode")?;
+    let _renode_stdin_guard = keep_console_stdin_open(&mut child)?;
     let mut host_children = Vec::new();
     if !topology.host_nodes.is_empty() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
@@ -881,52 +1046,36 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             );
         }
         for host in &topology.host_nodes {
-            let mut command = Command::new(&host.binary);
-            command.args(&host.args).envs(&host.env);
-            if let Some(cwd) = &host.cwd {
-                command.current_dir(cwd);
-            }
-            for serial in &host.serial_links {
-                command.env(&serial.env, &host_serial_paths[&serial.link]);
-            }
-            let variable_cache = host
-                .network_variable_cache
-                .as_ref()
-                .map(|path| base.join(path))
-                .unwrap_or_else(|| {
-                    scratch
-                        .path()
-                        .join(format!("{}-network-variables.json", safe(&host.name)))
-                });
-            if let Some(parent) = variable_cache.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!("creating host state directory {}", parent.display())
-                })?;
-            }
-            command.env("GS_NETWORK_VARIABLE_CACHE", variable_cache);
-            let stdout_path = scratch
-                .path()
-                .join(format!("{}-stdout.log", safe(&host.name)));
-            let stderr_path = scratch
-                .path()
-                .join(format!("{}-stderr.log", safe(&host.name)));
-            let child = command
-                .stdout(Stdio::from(fs::File::create(&stdout_path)?))
-                .stderr(Stdio::from(fs::File::create(&stderr_path)?))
-                .spawn()
-                .with_context(|| format!("starting host node {}", host.name))?;
+            let child = spawn_host_node(
+                host,
+                base,
+                scratch.path(),
+                &sample_path,
+                &host_serial_paths,
+                false,
+            )?;
             println!("[SIM] host node {} started", host.name);
-            host_children.push((host.name.clone(), child, stdout_path, stderr_path));
+            host_children.push(child);
         }
     }
     let stdout = child.stdout.take().context("capturing Renode stdout")?;
     let stderr = child.stderr.take().context("capturing Renode stderr")?;
+    let progress_sample_path = sample_path.clone();
+    let (console_failure_tx, console_failure_rx) = mpsc::channel();
+    let stderr_failure_tx = console_failure_tx.clone();
     let stdout_reader = thread::spawn(move || -> Result<String> {
         let mut captured = String::new();
         for line in BufReader::new(stdout).lines() {
             let line = line?;
+            if console_execution_failed(&line) {
+                let _ = console_failure_tx.send(line.clone());
+            }
             if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
                 println!("[SIM] network sample {progress} complete");
+                if let Some(sample) = progress.split_whitespace().next() {
+                    fs::write(&progress_sample_path, format!("{sample}\n"))
+                        .context("updating linked-bay sample marker")?;
+                }
             }
             captured.push_str(&line);
             captured.push('\n');
@@ -937,21 +1086,76 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let mut captured = String::new();
         for line in BufReader::new(stderr).lines() {
             let line = line?;
+            if console_execution_failed(&line) {
+                let _ = stderr_failure_tx.send(line.clone());
+            }
             captured.push_str(&line);
             captured.push('\n');
         }
         Ok(captured)
     });
-    let status = child.wait()?;
+    let mut completed_host_reboots = BTreeSet::new();
+    let status = loop {
+        if let Ok(error) = console_failure_rx.try_recv() {
+            eprintln!("[SIM] Renode execution failed: {error}");
+            // A failed include can leave the interactive console alive with
+            // stdin held open. Stop it so diagnostics reach the test runner.
+            let _ = child.kill();
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let completed_sample = fs::read_to_string(&sample_path)
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        for (event_index, reboot) in topology.reboots.iter().enumerate() {
+            if reboot.after_sample > completed_sample
+                || completed_host_reboots.contains(&event_index)
+                || !topology
+                    .host_nodes
+                    .iter()
+                    .any(|host| host.name == reboot.node)
+            {
+                continue;
+            }
+            let runtime = host_children
+                .iter_mut()
+                .find(|runtime| runtime.name == reboot.node)
+                .with_context(|| format!("host reboot references inactive node {}", reboot.node))?;
+            let _ = runtime.child.kill();
+            let _ = runtime.child.wait();
+            let host = topology
+                .host_nodes
+                .iter()
+                .find(|host| host.name == reboot.node)
+                .expect("validated host reboot");
+            *runtime = spawn_host_node(
+                host,
+                base,
+                scratch.path(),
+                &sample_path,
+                &host_serial_paths,
+                true,
+            )?;
+            completed_host_reboots.insert(event_index);
+            println!(
+                "[SIM] host node {} power-cycled after sample {} (persistent state retained)",
+                reboot.node, reboot.after_sample
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
     let mut host_failures = Vec::new();
     let mut host_diagnostics = BTreeMap::new();
     let mut host_outputs = BTreeMap::new();
-    for (name, mut host, stdout_path, stderr_path) in host_children {
-        if let Some(status) = host.try_wait()? {
-            let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-            let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    for mut runtime in host_children {
+        if let Some(status) = runtime.child.try_wait()? {
+            let stdout = fs::read_to_string(&runtime.stdout_path).unwrap_or_default();
+            let stderr = fs::read_to_string(&runtime.stderr_path).unwrap_or_default();
             host_failures.push(format!(
-                "host node {name} exited early with {status}; verify its serial-port and layout configuration\n{}",
+                "host node {} exited early with {status}; verify its serial-port and layout configuration\n{}",
+                runtime.name,
                 [stdout, stderr]
                     .concat()
                     .lines()
@@ -964,11 +1168,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     .join("\n")
             ));
         } else {
-            let _ = host.kill();
-            let _ = host.wait();
+            let _ = runtime.child.kill();
+            let _ = runtime.child.wait();
         }
-        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let stdout = fs::read_to_string(&runtime.stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&runtime.stderr_path).unwrap_or_default();
         let combined_host = [stdout, stderr].concat();
         let lines = combined_host.lines().collect::<Vec<_>>();
         let diagnostic = if lines.len() <= 120 {
@@ -987,8 +1191,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 lines[lines.len() - 60..].join("\n")
             )
         };
-        host_outputs.insert(name.clone(), combined_host);
-        host_diagnostics.insert(name, diagnostic);
+        host_outputs.insert(runtime.name.clone(), combined_host);
+        host_diagnostics.insert(runtime.name, diagnostic);
     }
     ensure!(host_failures.is_empty(), "{}", host_failures.join("; "));
     let stdout = stdout_reader
@@ -1222,10 +1426,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 assertion.name, assertion.node
             )
         })?;
-        if !output.contains(&assertion.contains) {
+        let observed = output.matches(&assertion.contains).count() as u32;
+        if observed < assertion.minimum_occurrences {
             assertion_failures.push(format!(
-                "{}: host {} did not report {:?}",
-                assertion.name, assertion.node, assertion.contains
+                "{}: host {} reported {:?} {} time(s), below {}",
+                assertion.name,
+                assertion.node,
+                assertion.contains,
+                observed,
+                assertion.minimum_occurrences
             ));
         }
     }
@@ -1245,7 +1454,57 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     assertion.name, assertion.probe, assertion.node
                 )
             })?;
-        let observed = if let Some(sample) = assertion.sample {
+        ensure!(
+            assertion.minimum_gain.is_none()
+                || (assertion.from_sample.is_some() && assertion.to_sample.is_some()),
+            "assertion {} with minimum_gain requires from_sample and to_sample",
+            assertion.name
+        );
+        let observed = if let Some(minimum_gain) = assertion.minimum_gain {
+            let from_sample = assertion.from_sample.unwrap();
+            let to_sample = assertion.to_sample.unwrap();
+            ensure!(
+                from_sample < to_sample,
+                "assertion {} requires from_sample < to_sample",
+                assertion.name
+            );
+            let from = *report.samples.get(from_sample).with_context(|| {
+                format!(
+                    "assertion {} requests from_sample {}, but {}.{} has {} samples",
+                    assertion.name,
+                    from_sample,
+                    assertion.node,
+                    assertion.probe,
+                    report.samples.len()
+                )
+            })?;
+            let to = *report.samples.get(to_sample).with_context(|| {
+                format!(
+                    "assertion {} requests to_sample {}, but {}.{} has {} samples",
+                    assertion.name,
+                    to_sample,
+                    assertion.node,
+                    assertion.probe,
+                    report.samples.len()
+                )
+            })?;
+            let gain = to.saturating_sub(from);
+            if gain < minimum_gain {
+                assertion_failures.push(format!(
+                    "{}: {}.{} advanced {} ({} -> {}) between samples {} and {}, below {}",
+                    assertion.name,
+                    assertion.node,
+                    assertion.probe,
+                    gain,
+                    from,
+                    to,
+                    from_sample,
+                    to_sample,
+                    minimum_gain
+                ));
+            }
+            gain
+        } else if let Some(sample) = assertion.sample {
             *report.samples.get(sample).with_context(|| {
                 format!(
                     "assertion {} requests sample {}, but {}.{} has {} samples",
@@ -1259,28 +1518,30 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         } else {
             report.maximum_observed
         };
-        if let Some(minimum) = assertion.minimum {
-            if observed < minimum {
-                assertion_failures.push(format!(
-                    "{}: {}.{} maximum {} is below {}",
-                    assertion.name, assertion.node, assertion.probe, observed, minimum
-                ));
+        if assertion.minimum_gain.is_none() {
+            if let Some(minimum) = assertion.minimum {
+                if observed < minimum {
+                    assertion_failures.push(format!(
+                        "{}: {}.{} maximum {} is below {}",
+                        assertion.name, assertion.node, assertion.probe, observed, minimum
+                    ));
+                }
             }
-        }
-        if let Some(maximum) = assertion.maximum {
-            if observed > maximum {
-                assertion_failures.push(format!(
-                    "{}: {}.{} maximum {} exceeds {}",
-                    assertion.name, assertion.node, assertion.probe, observed, maximum
-                ));
+            if let Some(maximum) = assertion.maximum {
+                if observed > maximum {
+                    assertion_failures.push(format!(
+                        "{}: {}.{} maximum {} exceeds {}",
+                        assertion.name, assertion.node, assertion.probe, observed, maximum
+                    ));
+                }
             }
-        }
-        if let Some(required_bits) = assertion.required_bits {
-            if observed & required_bits != required_bits {
-                assertion_failures.push(format!(
-                    "{}: {}.{} observed 0x{observed:08x}, requires 0x{required_bits:08x}",
-                    assertion.name, assertion.node, assertion.probe
-                ));
+            if let Some(required_bits) = assertion.required_bits {
+                if observed & required_bits != required_bits {
+                    assertion_failures.push(format!(
+                        "{}: {}.{} observed 0x{observed:08x}, requires 0x{required_bits:08x}",
+                        assertion.name, assertion.node, assertion.probe
+                    ));
+                }
             }
         }
         assertion_reports.push(AssertionReport {
@@ -1420,11 +1681,31 @@ fn parse_memory_profiles(
             layout.execution.memory_probe_warmup_samples < samples.len(),
             "node {node_name} memory_probe_warmup_samples must be less than sample_count"
         );
-        let qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        let mut qualified_samples = &samples[layout.execution.memory_probe_warmup_samples..];
+        if probe.ignore_leading_zeroes {
+            let Some(first_initialized) = qualified_samples.iter().position(|value| *value != 0)
+            else {
+                qualification_failures.push(format!(
+                    "{} never produced an initialized value: {:?}",
+                    probe.name, samples
+                ));
+                continue;
+            };
+            qualified_samples = &qualified_samples[first_initialized..];
+        }
         let minimum_observed = *qualified_samples.iter().min().context("empty bay probe")?;
         let maximum_observed = *qualified_samples.iter().max().context("empty bay probe")?;
-        let end_drop = i64::from(samples[layout.execution.memory_probe_warmup_samples])
-            - i64::from(*samples.last().unwrap());
+        // Use the same sustained-floor comparison as the single-board
+        // profiler. Comparing two arbitrary endpoints falsely classifies a
+        // healthy allocator's periodic high/low oscillation as a leak.
+        let end_drop = crate::execution::sustained_end_drop(qualified_samples);
+        if let Err(error) = crate::execution::validate_counter_progress(
+            &probe.name,
+            qualified_samples,
+            probe.minimum_interval_gain,
+        ) {
+            qualification_failures.push(error.to_string());
+        }
         if let Some(minimum) = probe.minimum {
             if minimum_observed < minimum {
                 qualification_failures.push(format!(
@@ -1518,6 +1799,40 @@ mod pico_fi_tests {
     use super::*;
 
     #[test]
+    fn console_command_failure_is_fatal_but_injected_device_errors_are_not() {
+        assert!(console_execution_failed(
+            "There was an error executing command 'include @board.repl'"
+        ));
+        assert!(console_execution_failed(
+            "Parameters did not match the signature"
+        ));
+        assert!(!console_execution_failed(
+            "[WARNING] ADC injected read error"
+        ));
+        assert!(!console_execution_failed(
+            "SEDS_BAY_PROBE daq sd_write_errors 0"
+        ));
+    }
+
+    #[test]
+    fn console_stdin_guard_prevents_eof_during_long_emulation() {
+        let mut child = Command::new("sh")
+            .args(["-c", "read _line"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let guard = keep_console_stdin_open(&mut child).unwrap();
+
+        thread::sleep(Duration::from_millis(25));
+        assert!(child.try_wait().unwrap().is_none());
+
+        drop(guard);
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+    }
+
+    #[test]
     fn i2c_mailbox_envelope_is_recreated_for_gateway_uart() {
         let payload = b"sedsnet packet";
         let mut mailbox = vec![0xA5, 0x5A, payload.len() as u8, 0];
@@ -1581,5 +1896,43 @@ mod pico_fi_tests {
             .all(|delay| *delay >= Duration::from_micros(86)));
         assert!(state.uart_tx_packets.is_empty());
         assert_eq!(state.uart_tx_bytes, 0);
+    }
+
+    #[test]
+    fn topology_accepts_can_ack_faults_and_late_progress_assertions() {
+        let topology: BayTopology = serde_json::from_value(serde_json::json!({
+            "name": "fault-rejoin-soak",
+            "virtual_time_ms": 600000,
+            "sample_count": 12,
+            "nodes": [],
+            "can_ack_events": [
+                {"node": "rf", "peripheral": "fdcan2", "after_sample": 3,
+                 "acknowledged": false},
+                {"node": "rf", "peripheral": "fdcan2", "after_sample": 4,
+                 "acknowledged": true}
+            ],
+            "assertions": [{
+                "name": "late transport progress",
+                "node": "rf",
+                "probe": "fdcan_tx_ok",
+                "minimum_gain": 1,
+                "from_sample": 9,
+                "to_sample": 11
+            }],
+            "host_log_assertions": [{
+                "name": "every soak command returned",
+                "node": "groundstation",
+                "contains": "soak command acknowledged",
+                "minimum_occurrences": 11
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(topology.can_ack_events.len(), 2);
+        assert!(!topology.can_ack_events[0].acknowledged);
+        assert_eq!(topology.assertions[0].minimum_gain, Some(1));
+        assert_eq!(topology.assertions[0].from_sample, Some(9));
+        assert_eq!(topology.assertions[0].to_sample, Some(11));
+        assert_eq!(topology.host_log_assertions[0].minimum_occurrences, 11);
     }
 }
