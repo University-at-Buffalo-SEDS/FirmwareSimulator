@@ -18,8 +18,15 @@ below is being released for continued testing; its final linked soak is still pe
 - The latest standalone run passed 20/21 stages: RF memory profiling intermittently
   captured 19/20 monitor samples. Five diagnostic reruns captured every sample.
   This remains a test-capture issue under investigation, not a waived pass.
-- The full 600-second release-pinned network run is pending. The incomplete
-  restart/soak attempts below must not be reported as passes.
+- The release-pinned 600-second run on Jupiter failed its first periodic Valve
+  command at sample 1 (50 seconds simulated): GroundStation observed no matching
+  ACK within its 2,500 ms normalized test-clock limit. Ordered end-to-end retries
+  were also exhausted. FC/RF telemetry continued, so this was not a total CPU
+  crash. The command-test task returned after the failure; the run was stopped
+  early, not completed or passed. Logs are retained in the Jupiter qualification
+  directory as `release-0411-soak.log` and `release-0411-soak-groundstation.log`.
+  Root cause is not yet established. The earlier restart/soak attempts below
+  must not be reported as passes either.
 
 ## Current candidate validation
 
