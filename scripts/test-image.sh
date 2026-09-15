@@ -2,16 +2,16 @@
 set -euo pipefail
 
 image="${1:?usage: test-image.sh IMAGE}"
-docker_network=()
+docker_command=(docker run)
 if [[ -n "${SEDS_FIRMWARE_SIM_DOCKER_NETWORK:-}" ]]; then
-    docker_network=(--network "$SEDS_FIRMWARE_SIM_DOCKER_NETWORK")
+    docker_command+=(--network "$SEDS_FIRMWARE_SIM_DOCKER_NETWORK")
 fi
 
 check_renode() {
     local command="$1"
     shift
     local output
-    if ! output="$(docker run "${docker_network[@]}" --rm --entrypoint /opt/renode/renode "$image" \
+    if ! output="$("${docker_command[@]}" --rm --entrypoint /opt/renode/renode "$image" \
         --disable-xwt --console --execute "$command" 2>&1)"; then
         printf '%s\n' "$output"
         return 1
@@ -30,7 +30,7 @@ check_renode() {
     done
 }
 
-catalog="$(docker run "${docker_network[@]}" --rm "$image" list-mcus)"
+catalog="$("${docker_command[@]}" --rm "$image" list-mcus)"
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; cpu IsHalted true; sysbus WriteDoubleWord 0x4000440c 17000; sysbus WriteDoubleWord 0x40004400 9; sysbus WriteDoubleWord 0x40004428 0x42; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 0; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0; print(\"UART_TX_PENDING_PASS\")"; emulation RunFor "0.002s"; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 1; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0xc0; print(\"UART_TX_BAUD_TIMING_PASS\")"; quit' 'UART_TX_PENDING_PASS' 'UART_TX_BAUD_TIMING_PASS'
 # RX frames must not accumulate before HAL starts the controller. Exercise
 # the actual IRQ line and retained FIFO behavior across stop/restart.
@@ -63,7 +63,7 @@ for mcu in \
 done
 
 for arch in stm32 stm32g4 stm32h5 stm32u5; do
-    docker run "${docker_network[@]}" --rm "$image" self-test --arch "$arch"
+    "${docker_command[@]}" --rm "$image" self-test --arch "$arch"
 done
 
 for mcu in stm32g491 stm32h523 stm32u585; do
