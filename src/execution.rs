@@ -364,10 +364,14 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
     let mut child = Command::new(renode)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script.display()))
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("starting Renode at {}", renode.display()))?;
+    // Standalone profiles need the same live console pipe as linked runs.
+    // An inherited EOF must not terminate the monitor before the last sample.
+    let _stdin_guard = crate::bay::keep_console_stdin_open(&mut child)?;
 
     let (sender, receiver) = mpsc::channel();
     let mut readers = Vec::new();
@@ -392,9 +396,14 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
                 if lower.contains("cpu abort")
                     || lower.contains("fatal error")
                     || lower.contains("there was an error executing command")
+                    || lower.contains("no such command or device")
                     || lower.contains("parameters did not match")
                 {
                     execution_fault = true;
+                    // Renode emits the command heading before the underlying
+                    // exception. Let pipe readers capture that diagnostic
+                    // before terminating an otherwise idle monitor.
+                    std::thread::sleep(Duration::from_millis(250));
                     let _ = child.kill();
                 }
             }
@@ -449,6 +458,7 @@ fn run_renode_script(renode: &Path, script: &Path) -> Result<String> {
             && !lower.contains("cpu abort")
             && !lower.contains("[error]")
             && !lower.contains("there was an error executing command")
+            && !lower.contains("no such command or device")
             && !lower.contains("parameters did not match"),
         "firmware execution faulted:\n{}",
         tail(&combined, 80)
@@ -835,6 +845,13 @@ fn render_script(
         }
     }
     if let Some(directory) = std::env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
+        if layout
+            .peripherals
+            .iter()
+            .any(|p| p.model.as_deref() == Some("bmp390"))
+        {
+            profile_script.push_str("sysbus.spi1.layoutFlightSensors GetAcquisitionState\n");
+        }
         if layout
             .peripherals
             .iter()

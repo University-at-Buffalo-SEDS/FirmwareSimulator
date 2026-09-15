@@ -33,7 +33,14 @@ namespace Antmicro.Renode.Peripherals.CAN
             remove => inner.FrameSent -= value;
         }
 
-        public void OnFrameReceived(CANMessageFrame message) => inner.OnFrameReceived(message);
+        public void OnFrameReceived(CANMessageFrame message)
+        {
+            // A controller in INIT is not participating in bus reception.
+            // The underlying model otherwise fills RX FIFOs before firmware
+            // initialization, asserting IRQs while HAL still reports READY.
+            if((inner.ReadDoubleWord(0x18) & 1u) != 0) return;
+            inner.OnFrameReceived(message);
+        }
 
         public uint ReadDoubleWord(long offset)
         {

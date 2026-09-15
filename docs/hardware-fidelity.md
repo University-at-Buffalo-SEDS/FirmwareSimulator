@@ -2,7 +2,36 @@
 
 FirmwareSimulator is a deterministic virtual platform, not a cycle-accurate electrical model. Each run emits a `fidelity` object so CI cannot confuse modeled behavior with hardware certification.
 
+### Flight Computer sensor acquisition
+
+The H523 model connects GPIO chip-selects, register-configured data-ready
+timers, port-selected EXTI edges, and SPI RX/TX requests to GPDMA. Channels
+0–7 use H523 IRQs 27–34. CS remains asserted across separate HAL SPI calls;
+controller-level transfer completion does not terminate the sensor transaction.
+The BMP390 trim/sample values exercise the firmware's compensation math.
+SPI byte/halfword/word packing and master receive-only clock generation are
+modeled: the barometer's split transmit/receive HAL calls must read a real chip
+ID before it can configure conversions. Docker contracts cover that sequence.
+
+Earlier FC instrumented firmware injected IMU packets from its telemetry thread;
+those runs qualify transport only. The injector is removed. Qualification must
+require actual DMA-delivered samples and both IMU and barometer publications,
+then separately measure their arrival cadence at GroundStation. An observed
+boot or a live networking thread alone does not establish sensor health.
+
+The SPI controller retains Renode's unbounded transmit FIFO and immediate wire
+transfer behavior; it is not a cycle-accurate SPI bandwidth model. This early
+completion case exposed a firmware lost-wakeup race, now covered by the FC's
+production-code completion test. Electrical sensor noise remains synthetic.
+
 ## Executed behavior
+
+CAN reception is disabled while CCCR.INIT is set, including before firmware
+startup and while stopped. Earlier wrapper versions incorrectly accumulated
+pre-initialization frames. On U5 this could trigger an RX interrupt while HAL
+was still READY, clear the event without draining the FIFO, and strand the
+interrupt-driven receiver. Docker contracts check INIT suppression, started
+reception, IRQ delivery, W1C clearing, and stop/restart behavior.
 
 - Cortex-M4F/M33 instructions execute in pinned Renode virtual time.
 - An exact `mcu` selects a bundled or inline silicon descriptor and constrains CPU model, platform, total flash/RAM capacity, flash geometry, security, and modeled OTA controllers. G491, H523, and U585 have real-board validation; other bundled descriptors have platform-contract validation.
@@ -45,3 +74,19 @@ These limits must not be treated as passed tests. Hardware release qualification
 ## Adding fidelity
 
 Implement the smallest reference-manual surface required by a real board. Add a Renode smoke overlay under `renode/tests`, a Rust contract test, and a real linked-firmware probe. An unsupported register should be visible and attributable; broad zero-returning ranges must not be described as modeled peripherals.
+# Persistent Pico-Fi link and Gateway UART timing
+
+The UART Pico and I2C Pico are independent, continuously running devices.
+GroundStation restart replaces only its host I2C session; UART reception and
+transmission continue without that host. Partial I2C operations and broken replies
+must not terminate the bridge. Unexpected bridge errors fail the bay run instead
+of leaving a blocked terminal write and an indefinitely waiting time source.
+
+The I2C mailbox follows `pico-fi/src/bridge/overwrite_queue.rs` (8 queued packets,
+8,192 bytes, overwrite oldest on pressure) and `i2c_task::stage_response_packet`
+(stage the newest queued packet when the current multi-slot transfer finishes).
+It is not an unlimited lossless telemetry queue. Split UART sync bytes survive
+nonblocking reads. Host-to-Gateway pacing services the reverse direction between
+bytes; the Gateway USART model uses its configured BRR and an 8N1 TX timer/FIFO
+in virtual time. The existing host-to-UART pacing scale remains an approximation,
+not a model of RF interference or Pico Wi-Fi radio physics.

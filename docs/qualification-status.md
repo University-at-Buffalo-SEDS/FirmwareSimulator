@@ -1,11 +1,72 @@
-# Unreleased qualification work
+# v0.4.11 qualification status
 
-This is a work log, not a claim of hardware qualification. At the user's request,
-the current work is committed and pushed for hardware testing before the gates
-below are complete. This checkpoint is not a qualified release; no new package
-publication or release tag is authorized by that request.
+This is a work log, not a claim of hardware qualification. The earlier checkpoint
+was pushed for hardware testing before all gates were complete. The candidate
+below is being released for continued testing; its final linked soak is still pending.
 
-## Current baseline (2026-09-11)
+## Release checkpoint (2026-09-15)
+
+- All seven board host/Python suites and GoogleTests pass after release pinning.
+- SEDSNet 4.0.28 passed its full built-in test suite through the existing publishing
+  script. It contains the ordered-ACK and compact discovery changes below.
+- The simulator Docker Rust tests and the 16-second seven-board network gate pass
+  with the persistent Pico-Fi transport, malformed-frame resynchronization,
+  baud-timed Gateway UART, real FC sensors, and reset-aware progress assertions.
+- The Pico-Fi pair remains running independently of GroundStation. Disconnecting
+  the host does not reset its UART or device queues; three host reconnects pass
+  in the Linux PTY regression.
+- The latest standalone run passed 20/21 stages: RF memory profiling intermittently
+  captured 19/20 monitor samples. Five diagnostic reruns captured every sample.
+  This remains a test-capture issue under investigation, not a waived pass.
+- The full 600-second release-pinned network run is pending. The incomplete
+  restart/soak attempts below must not be reported as passes.
+
+## Current candidate validation
+
+- GroundStation uses the current `ef9a39d` development baseline plus the pending
+  telemetry-cadence checks. SEDSNet includes unpublished ordered-ACK and compact
+  discovery fixes after 4.0.27; `build.py test full` passed on Jupiter. Testing a
+  patched checkout is not evidence that the published 4.0.27 contains these fixes.
+- All seven boards' host suites and GoogleTests pass. All 21 standalone stages
+  (boot/OTA artifacts, memory profile, and disconnected CAN for each board) pass
+  with `seds-firmware-simulator:can-init-fixed-20260911`.
+- The real seven-board/GroundStation 16-second network gate passes with the
+  latest source snapshots: named discovery, attribution, command/ACK and
+  managed-variable bounds, FC IMU and barometer 5 Hz, RF GPS 1 Hz, Power's
+  five-second stream, and DAQ raw-value telemetry at 50 Hz.
+- FC telemetry injection is removed. GPIO CS, configured sensor conversions,
+  EXTI, packed/RX-only SPI accesses and GPDMA exercise actual acquisition.
+  Firmware now retains DMA completion with a semaphore instead of losing an
+  early interrupt before `tx_thread_sleep`.
+- A stale DAQ polling-driver copy was detected and replaced before the final
+  gate. The current interrupt driver starts HAL before enabling notifications,
+  drains overflow-only events, and yields during bounded CAN TX backpressure.
+  The simulator no longer accepts RX frames while CCCR.INIT is set. Tests cover
+  these cases, including zero SD drops without a CAN acknowledger.
+- A new ten-second DAQ SD capture contains readable `DAQ_48_000.CSV` with
+  calibration metadata, 32,119 raw records (3,571.047 Hz) and 450 replay rows
+  (49.961 Hz). Raw/calibrated fields parse correctly and timestamps are
+  monotonic. The last portion is still buffered until flush; writer counts
+  must not be mistaken for durable records. This isolated capture has no
+  network time source and does not prove calibration changes/restart boundaries.
+- The 600-second run reached the 400-second restart point with six periodic
+  valve ACKs at 39–65 ms, but failed GroundStation radio reopen: Linux retained
+  TIOCEXCL on Renode's live PTY after the host was killed. The failed run was
+  stopped; it is not a soak pass. A simulator-only cleanup and Linux regression
+  now clear that flag after reaping the old host. Restart and full-soak retests
+  are pending. Older soaks using injected FC data or the stale DAQ driver do not
+  qualify this candidate either.
+- The shorter restart retest reopened the radio, but exposed a second simulator
+  defect: a broken I2C reply pipe terminated the Pico-Fi bridge. Gateway then
+  blocked inside Renode's UART host write and all seven virtual CPUs stopped
+  advancing. A captured .NET stack identifies that blocked write. Pico-Fi now
+  remains independent of GroundStation sessions, drains UART while the host is
+  absent, retains bounded device queues, and reconnects after partial operations.
+  Linux socket/PTY regression tests pass. Applying the real Pico-Fi newest-packet
+  mailbox policy also exposed unrealistically instantaneous Gateway UART bursts;
+  a baud-timed TX FIFO model and linked-network retests are in progress.
+
+## Earlier checkpoint (2026-09-11; historical results)
 
 - GroundStation checkpoint: `f21ce48866912f95ad200a2befbf6b48154d54a5`, including
   compile-time telemetry-rate migration and preferred-master checks.
@@ -33,10 +94,10 @@ publication or release tag is authorized by that request.
 
 ## Remaining gates
 
-1. Finish `build.py test --all --release` on every board using the current image.
-   Run linked tests serially when using Docker host networking.
-2. Pass the complete seven-board + GroundStation 16-second linked gate before
-   the 600-second linked soak. Require discovery/attribution, normal telemetry
+1. Preserve the passing board/unit/peripheral and 16-second linked checks when
+   updating dependency releases. Run linked tests serially when sharing a
+   GroundStation listen address under Docker host networking.
+2. Finish the 600-second linked soak. Require discovery/attribution, normal telemetry
    cadence, bounded command/ACK latency, restart/rejoin and command progress
    throughout the soak, including the final interval.
 3. Finish SD-content validation, not only writer counters: export/read actual

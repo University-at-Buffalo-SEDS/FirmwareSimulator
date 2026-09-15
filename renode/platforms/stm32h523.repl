@@ -30,8 +30,18 @@ fdcan1: CAN.SedsFixedFdcan @ sysbus 0x4000A400
         include @/opt/firmware-sim/renode/peripherals/SedsStm32H5Fdcan.cs
 fdcan1MessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x350>
     size: 0x350
-spi1: SPI.STM32H7_SPI @ sysbus 0x40013000
+spi1: SPI.SedsStm32Spi @ sysbus 0x40013000
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Spi.cs
     IRQ -> nvic@55
+exti: IRQControllers.SedsStm32Exti @ sysbus 0x44022000
+    0 -> nvic@11
+    1 -> nvic@12
+    4 -> nvic@15
+    5 -> nvic@16
+    7 -> nvic@18
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Exti.cs
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 250000000
     initialLimit: 0xFFFF
@@ -46,15 +56,15 @@ usb: USB.SedsStm32Usb @ sysbus 0x40040000
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Usb.cs
 gpdma: DMA.SedsStm32Gpdma @ sysbus 0x40020000
-    channels: 16
-    0 -> nvic@29
-    1 -> nvic@30
-    2 -> nvic@31
-    3 -> nvic@32
-    4 -> nvic@33
-    5 -> nvic@34
-    6 -> nvic@35
-    7 -> nvic@36
+    channels: 8
+    0 -> nvic@27
+    1 -> nvic@28
+    2 -> nvic@29
+    3 -> nvic@30
+    4 -> nvic@31
+    5 -> nvic@32
+    6 -> nvic@33
+    7 -> nvic@34
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpdma.cs
 cache: Memory.SedsStm32Cache @ sysbus 0x40030400

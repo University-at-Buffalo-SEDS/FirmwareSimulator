@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.UART;
+using Antmicro.Renode.Time;
+using Antmicro.Renode.Peripherals.Timers;
 
 namespace Antmicro.Renode.Peripherals.UART
 {
@@ -11,10 +13,22 @@ namespace Antmicro.Renode.Peripherals.UART
     // before the firmware's ReceiveToIdle DMA/parser can observe them.
     public sealed class SedsStm32Uart : IDoubleWordPeripheral, IKnownSize, IUART
     {
-        public SedsStm32Uart(uint frequency = 170000000)
+        public SedsStm32Uart(IMachine machine, uint frequency = 170000000)
         {
             this.frequency = frequency;
             IRQ = new GPIO();
+            transmitTimer = new LimitTimer(machine.ClockSource, frequency, this,
+                "uartTx", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
+            transmitTimer.LimitReached += () => {
+                if(transmitFifo.Count > 0)
+                {
+                    var value = transmitFifo.Dequeue();
+                    transmittedBytes++;
+                    CharReceived?.Invoke(value);
+                }
+                transmitTimer.Enabled = transmitFifo.Count > 0;
+                UpdateInterrupt();
+            };
             Reset();
         }
 
@@ -27,8 +41,9 @@ namespace Antmicro.Renode.Peripherals.UART
             case 0x08: return control3;
             case 0x0c: return baudRate;
             case 0x1c:
-                // TXE/TXFNF, TC, TEACK and REACK are immediately available.
-                return (1u << 7) | (1u << 6) | (1u << 21) | (1u << 22)
+                return (TxAvailable ? 1u << 7 : 0u)
+                    | (transmitFifo.Count == 0 ? 1u << 6 : 0u)
+                    | (1u << 21) | (1u << 22)
                     | (receiveFifo.Count > 0 ? 1u << 5 : 0u);
             case 0x24:
                 if(receiveFifo.Count == 0) return 0;
@@ -52,7 +67,19 @@ namespace Antmicro.Renode.Peripherals.UART
                 if((value & (1u << 3)) != 0) receiveFifo.Clear(); // RXFRQ
                 break;
             case 0x28:
-                CharReceived?.Invoke((byte)value);
+                if((control1 & 9) == 9 && TxAvailable && baudRate != 0)
+                {
+                    transmitFifo.Enqueue((byte)value);
+                    if(!transmitTimer.Enabled)
+                    {
+                        // Model the configured 8N1 wire time in virtual time.
+                        // Instant TXE previously collapsed a burst into one
+                        // Pico mailbox poll and caused artificial overwrites.
+                        transmitTimer.Limit = Math.Max(1ul, (ulong)baudRate * 10);
+                        transmitTimer.Value = 0;
+                        transmitTimer.Enabled = true;
+                    }
+                }
                 break;
             case 0x2c: prescaler = value; break;
             }
@@ -68,6 +95,10 @@ namespace Antmicro.Renode.Peripherals.UART
         public void Reset()
         {
             receiveFifo.Clear();
+            transmitFifo.Clear();
+            transmitTimer.Reset();
+            transmitTimer.Enabled = false;
+            transmittedBytes = 0;
             control1 = 0;
             control2 = 0;
             control3 = 0;
@@ -79,7 +110,9 @@ namespace Antmicro.Renode.Peripherals.UART
         private void UpdateInterrupt()
         {
             // RXNEIE/RXFNEIE is bit 5 in CR1 on STM32G4.
-            IRQ.Set(receiveFifo.Count > 0 && (control1 & (1u << 5)) != 0);
+            IRQ.Set((receiveFifo.Count > 0 && (control1 & (1u << 5)) != 0)
+                || (TxAvailable && (control1 & (1u << 7)) != 0)
+                || (transmitFifo.Count == 0 && (control1 & (1u << 6)) != 0));
         }
 
         public event Action<byte> CharReceived;
@@ -88,8 +121,13 @@ namespace Antmicro.Renode.Peripherals.UART
         public uint BaudRate { get { return baudRate == 0 ? 0 : frequency / baudRate; } }
         public Bits StopBits { get { return Bits.One; } }
         public Parity ParityBit { get { return Parity.None; } }
+        public uint TransmittedBytes { get { return transmittedBytes; } }
+        private bool TxAvailable { get { return transmitFifo.Count < ((control1 & (1u << 29)) != 0 ? 16 : 1); } }
 
         private readonly uint frequency;
+        private readonly LimitTimer transmitTimer;
+        private readonly Queue<byte> transmitFifo = new Queue<byte>();
+        private uint transmittedBytes;
         private readonly Queue<byte> receiveFifo = new Queue<byte>();
         private uint control1;
         private uint control2;

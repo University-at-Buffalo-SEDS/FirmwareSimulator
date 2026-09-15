@@ -3,36 +3,49 @@ using System.Collections.Generic;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.SPI;
+using Antmicro.Renode.Peripherals.Timers;
 
 namespace Antmicro.Renode.Peripherals.Sensors
 {
     // Deterministic SPI models used by the real board drivers. These models
     // intentionally implement wire/register behavior, not a HAL shortcut.
-    public sealed class SedsFlightSensorBus : ISPIPeripheral
+    public sealed class SedsFlightSensorBus : ISPIPeripheral, IGPIOReceiver, INumberedGPIOOutput
     {
         private enum Device { Barometer, Gyroscope, Accelerometer }
 
-        public SedsFlightSensorBus(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
+        public SedsFlightSensorBus(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
         {
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
+            Connections = new Dictionary<int, IGPIO> { {0, new GPIO()}, {1, new GPIO()}, {2, new GPIO()} };
+            timers = new LimitTimer[3];
+            for(var i = 0; i < 3; i++)
+            {
+                var sensor = i;
+                timers[i] = new LimitTimer(machine.ClockSource, 3200000, this,
+                    "conversion" + i, limit: 32000, enabled: false, eventEnabled: true);
+                timers[i].LimitReached += () => {
+                    conversions[sensor]++;
+                    if(transactions <= disconnectAfter) Connections[sensor].Set(true);
+                };
+            }
             Reset();
         }
 
         public byte Transmit(byte value)
         {
+            if(!selected) return 0xff;
+            if(device == Device.Barometer && initializationTrace.Count < 64)
+                initializationTrace.Add(string.Format("{0}:{1:X2}", position, value));
             if(position == 0)
             {
                 transactions++;
                 faulted = transactions > disconnectAfter || (failureEvery != 0 && transactions % failureEvery == 0);
                 address = (byte)(value & 0x7f);
                 reading = (value & 0x80) != 0;
-                if(reading && address == 0)
-                {
-                    zeroReads++;
-                    if(zeroReads == 2) device = Device.Gyroscope;
-                    else if(zeroReads >= 3) device = Device.Accelerometer;
-                }
+                sampleRead = reading && ((device == Device.Barometer && address == 4)
+                    || (device == Device.Gyroscope && address == 2)
+                    || (device == Device.Accelerometer && address == 0x12));
                 position++;
                 return 0;
             }
@@ -42,6 +55,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(!reading)
             {
                 registers[Key(device, address)] = value;
+                UpdateTimer(device);
                 address++;
                 position++;
                 return 0;
@@ -61,22 +75,87 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
         public void FinishTransmission()
         {
-            position = 0;
+            // HAL splits a register read into command/dummy/data transfers.
+            // Only the physical GPIO CS edge terminates the transaction.
+        }
+
+        public void OnGPIO(int number, bool value)
+        {
+            if(number < 0 || number > 2) throw new ArgumentOutOfRangeException(nameof(number));
+            if(!value) { device = (Device)number; selected = true; position = 0; sampleRead = false; }
+            else if(selected && device == (Device)number)
+            {
+                if(sampleRead && !faulted) { samples[number]++; Connections[number].Set(false); }
+                selected = false;
+                position = 0;
+            }
+        }
+
+        public IReadOnlyDictionary<int, IGPIO> Connections { get; private set; }
+
+        public string GetAcquisitionState()
+        {
+            return string.Format("baro power={0:X2} odr={1:X2} int={2:X2}; conversions={3},{4},{5}; reads={6},{7},{8}",
+                Get(Device.Barometer, 0x1b), Get(Device.Barometer, 0x1d), Get(Device.Barometer, 0x19),
+                conversions[0], conversions[1], conversions[2], samples[0], samples[1], samples[2])
+                + "; baro SPI init=" + string.Join(",", initializationTrace);
+        }
+
+        private void UpdateTimer(Device sensor)
+        {
+            var timer = timers[(int)sensor];
+            if(sensor == Device.Barometer)
+            {
+                timer.Limit = 16000UL << Math.Min(17, (int)Get(sensor, 0x1d));
+                timer.Enabled = (Get(sensor, 0x1b) & 0x30) == 0x30 && (Get(sensor, 0x19) & 0x40) != 0;
+            }
+            else if(sensor == Device.Gyroscope)
+            {
+                var rates = new uint[] {2000, 2000, 1000, 400, 200, 100, 200, 100};
+                timer.Limit = 3200000 / rates[Get(sensor, 0x10) & 7];
+                timer.Enabled = (Get(sensor, 0x15) & 0x80) != 0;
+            }
+            else
+            {
+                var odr = Get(sensor, 0x40) & 15;
+                timer.Limit = 256000UL >> Math.Min(7, Math.Max(0, odr - 5));
+                timer.Enabled = (Get(sensor, 0x58) & 4) != 0 && (Get(sensor, 0x7d) & 4) != 0;
+            }
+        }
+
+        private byte Get(Device sensor, byte reg)
+        {
+            byte value;
+            return registers.TryGetValue(Key(sensor, reg), out value) ? value : (byte)0;
         }
 
         public void Reset()
         {
             registers.Clear();
+            initializationTrace.Clear();
             device = Device.Barometer;
             address = 0;
             position = 0;
-            zeroReads = 0;
+            selected = false;
+            sampleRead = false;
             reading = false;
             transactions = 0;
             faulted = false;
-            // BMP390 calibration bytes: deterministic non-zero coefficients.
+            Array.Clear(conversions, 0, conversions.Length);
+            Array.Clear(samples, 0, samples.Length);
+            foreach(var timer in timers) { timer.Reset(); timer.Enabled = false; }
+            foreach(var output in Connections.Values) output.Set(false);
+            // A deterministic valid trim set: 25 C and 100000 Pa for the raw
+            // sample below, through the firmware's actual compensation math.
             for(byte register = 0x31; register <= 0x45; register++)
-                registers[Key(Device.Barometer, register)] = (byte)(0x20 + register);
+                registers[Key(Device.Barometer, register)] = 0;
+            registers[Key(Device.Barometer, 0x31)] = 0xa8;
+            registers[Key(Device.Barometer, 0x32)] = 0x61;
+            registers[Key(Device.Barometer, 0x34)] = 0x40;
+            registers[Key(Device.Barometer, 0x37)] = 0x40;
+            registers[Key(Device.Barometer, 0x39)] = 0x40;
+            registers[Key(Device.Barometer, 0x3c)] = 0xd4;
+            registers[Key(Device.Barometer, 0x3d)] = 0x30;
         }
 
         private byte ReadRegister(Device selected, byte register)
@@ -90,7 +169,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(selected == Device.Barometer && register == 0x03) return 0x60;
             // Stable approximately-resting raw samples.
             if(selected == Device.Barometer && register >= 0x04 && register <= 0x09)
-                return new byte[] { 0x00, 0x80, 0x65, 0x00, 0x80, 0x65 }[register - 0x04];
+                return new byte[] { 0x00, 0x80, 0x65, 0x00, 0x6a, 0x31 }[register - 0x04];
             if(selected == Device.Accelerometer && register >= 0x12 && register <= 0x17)
                 return new byte[] { 0, 0, 0, 0, 0x00, 0x40 }[register - 0x12];
             if(selected == Device.Gyroscope && register >= 0x02 && register <= 0x07)
@@ -108,7 +187,12 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private Device device;
         private byte address;
         private int position;
-        private int zeroReads;
+        private bool selected;
+        private bool sampleRead;
+        private readonly LimitTimer[] timers;
+        private readonly ulong[] conversions = new ulong[3];
+        private readonly ulong[] samples = new ulong[3];
+        private readonly List<string> initializationTrace = new List<string>();
         private bool reading;
         private bool faulted;
         private ulong transactions;

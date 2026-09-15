@@ -7,7 +7,7 @@ use std::{
     fs::OpenOptions,
     io::{BufRead, BufReader, Read, Write},
     os::fd::AsRawFd,
-    os::unix::net::UnixListener,
+    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc,
@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
+pub(crate) fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
     child
         .stdin
         .take()
@@ -25,8 +25,20 @@ fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
 fn console_execution_failed(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     lower.contains("there was an error executing command")
+        || lower.contains("no such command or device")
         || lower.contains("parameters did not match")
         || lower.contains("fatal error")
+}
+
+fn release_host_pty_exclusive(guard: &fs::File) -> Result<()> {
+    // SIGKILL cannot run serialport's Drop/TIOCNXCL. Unlike a real machine
+    // reboot, the simulator keeps the PTY master alive in Renode, so TIOCEXCL
+    // survives the dead host. Clear it only after that host has been reaped.
+    let result = unsafe { libc::ioctl(guard.as_raw_fd(), libc::TIOCNXCL) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error()).context("releasing rebooted host UART PTY");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,13 +311,25 @@ struct PicoBridgeState {
     uart_tx_packets: VecDeque<Vec<u8>>,
     uart_tx_offset: usize,
     uart_tx_bytes: usize,
+    next_uart_tx: Option<std::time::Instant>,
     host_reads: VecDeque<[u8; PICO_I2C_SLOT_SIZE]>,
+    host_packets: VecDeque<Vec<u8>>,
+    host_packet_bytes: usize,
     next_transfer_id: u16,
     i2c_to_uart_frames: u32,
     uart_to_i2c_frames: u32,
+    uart_framing_errors: u32,
 }
 
 fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path) -> Result<()> {
+    run_pico_fi_bridge_until(listener, uart_path, || false)
+}
+
+fn run_pico_fi_bridge_until(
+    listener: UnixListener,
+    uart_path: &Path,
+    mut stop: impl FnMut() -> bool,
+) -> Result<()> {
     let mut uart = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -316,55 +340,106 @@ fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path) -> Result<()> {
         next_transfer_id: 1,
         ..Default::default()
     };
-    loop {
-        let (mut host, _) = listener
-            .accept()
-            .context("accepting GroundStation I2C endpoint")?;
-        // A GroundStation process restart disconnects only the host-facing
-        // I2C controller. Keep the Pico/Gateway UART and queued device state
-        // alive, then accept the replacement process on the same socket.
-        loop {
-            drain_gateway_uart_tx(&mut state, &mut uart)?;
-            let mut operation = [0u8; 1];
-            match host.read_exact(&mut operation) {
-                Ok(()) => {}
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::UnexpectedEof
-                            | std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::BrokenPipe
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => return Err(error).context("reading simulated I2C operation"),
+    listener.set_nonblocking(true)?;
+    let mut host: Option<PicoHostSession> = None;
+    while !stop() {
+        // The Pico UART remains active without an I2C controller. Never let a
+        // dead/idle host fill the PTY and block Renode's Gateway CPU thread.
+        read_gateway_uart(&mut state, &mut uart)?;
+        drain_gateway_uart_tx(&mut state, &mut uart)?;
+        if host.is_none() {
+            match listener.accept() {
+                Ok((stream, _)) => host = Some(PicoHostSession::new(stream)?),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error).context("accepting GroundStation I2C endpoint"),
             }
-            match operation[0] {
-                b'W' => {
-                    let mut slot = [0u8; PICO_I2C_SLOT_SIZE];
-                    host.read_exact(&mut slot)?;
-                    match ingest_host_i2c_slot(&mut state, &slot) {
-                        Ok(()) => host.write_all(&[0])?,
-                        Err(error) => {
-                            eprintln!("[SIM] Pico-Fi rejected malformed I2C slot: {error:#}");
-                            host.write_all(&[1])?;
-                        }
-                    }
-                }
-                b'R' => {
-                    read_gateway_uart(&mut state, &mut uart)?;
-                    let slot = state
-                        .host_reads
-                        .pop_front()
-                        .unwrap_or([0; PICO_I2C_SLOT_SIZE]);
-                    host.write_all(&slot)?;
-                }
-                other => bail!("unknown simulated I2C operation 0x{other:02x}"),
-            }
-            drain_gateway_uart_tx(&mut state, &mut uart)?;
-            host.flush()?;
         }
+        if let Some(session) = &mut host {
+            match session.service(&mut state) {
+                Ok(true) => {}
+                Ok(false) => {
+                    host = None;
+                    state.host_assembly = None;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[SIM] Pico-Fi I2C host disconnected: {error}; accepting replacement"
+                    );
+                    host = None;
+                    state.host_assembly = None;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+
+struct PicoHostSession {
+    stream: UnixStream,
+    incoming: Vec<u8>,
+    reply: Vec<u8>,
+    reply_offset: usize,
+}
+
+impl PicoHostSession {
+    fn new(stream: UnixStream) -> std::io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            incoming: Vec::with_capacity(33),
+            reply: Vec::with_capacity(32),
+            reply_offset: 0,
+        })
+    }
+
+    fn service(&mut self, state: &mut PicoBridgeState) -> std::io::Result<bool> {
+        if self.reply.is_empty() {
+            // Read exactly one operation, retaining partial slots across polls.
+            let needed = if self.incoming.first() == Some(&b'W') {
+                33
+            } else {
+                1
+            };
+            let mut bytes = [0; 33];
+            match self.stream.read(&mut bytes[..needed - self.incoming.len()]) {
+                Ok(0) => return Ok(false),
+                Ok(count) => self.incoming.extend_from_slice(&bytes[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(true),
+                Err(error) => return Err(error),
+            }
+            match self.incoming[0] {
+                b'W' if self.incoming.len() < 33 => return Ok(true),
+                b'W' => {
+                    let slot = self.incoming[1..].try_into().expect("complete I2C slot");
+                    self.reply
+                        .push(if ingest_host_i2c_slot(state, slot).is_ok() {
+                            0
+                        } else {
+                            1
+                        });
+                }
+                b'R' => self.reply.extend_from_slice(&next_host_i2c_slot(state)),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "unknown I2C operation",
+                    ))
+                }
+            }
+            self.incoming.clear();
+        }
+        match self.stream.write(&self.reply[self.reply_offset..]) {
+            Ok(0) => return Ok(false),
+            Ok(count) => self.reply_offset += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(true),
+            Err(error) => return Err(error),
+        }
+        if self.reply_offset == self.reply.len() {
+            self.reply.clear();
+            self.reply_offset = 0;
+        }
+        Ok(true)
     }
 }
 
@@ -484,6 +559,10 @@ fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result
             Err(error) => return Err(error).context("reading Gateway UART in Pico-Fi bridge"),
         }
     }
+    process_gateway_uart_rx(state)
+}
+
+fn process_gateway_uart_rx(state: &mut PicoBridgeState) -> Result<()> {
     loop {
         let Some(sync) = state.uart_rx.windows(2).position(|bytes| {
             matches!(
@@ -491,7 +570,17 @@ fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result
                 [0xA5, 0x5A] | [0x5A, 0xA5] | [0xA6, 0x5B] | [0x5B, 0xA6] | [0xA7, 0x7A]
             )
         }) else {
+            // Nonblocking reads can split the two-byte sync marker. Preserve
+            // a possible first byte for the next UART service iteration.
+            let trailing = state
+                .uart_rx
+                .last()
+                .copied()
+                .filter(|byte| matches!(byte, 0xA5 | 0x5A | 0xA6 | 0x5B | 0xA7));
             state.uart_rx.clear();
+            if let Some(byte) = trailing {
+                state.uart_rx.push(byte);
+            }
             break;
         };
         if sync > 0 {
@@ -500,10 +589,18 @@ fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result
         let Some(frame_length) = complete_uart_frame_length(&state.uart_rx) else {
             break;
         };
-        ensure!(
-            frame_length <= PICO_UART_MAX_FRAME,
-            "Gateway UART frame is oversized"
-        );
+        if frame_length > PICO_UART_MAX_FRAME {
+            // pico-fi read_uart_request_frame consumes the four-byte header
+            // and retries on an oversized length. A malformed UART frame is
+            // not a reason to kill either independent Pico or their link.
+            state.uart_framing_errors += 1;
+            if state.uart_framing_errors <= 10 {
+                eprintln!("[SIM] Pico-Fi UART framing error {}: length {}, header {:02x?}; resynchronizing",
+                    state.uart_framing_errors, frame_length, &state.uart_rx[..4]);
+            }
+            state.uart_rx.drain(..4);
+            continue;
+        }
         if state.uart_rx.len() < frame_length {
             break;
         }
@@ -511,7 +608,7 @@ fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result
         // UART-side commands are consumed by that Pico and never cross the
         // network bridge. Only DATA frames become I2C mailbox responses.
         if let Some(host_frame) = gateway_uart_to_i2c_response(&frame) {
-            enqueue_host_i2c_slots(state, &host_frame);
+            enqueue_host_packet(state, host_frame.clone());
             state.uart_to_i2c_frames += 1;
             if state.uart_to_i2c_frames <= 5 {
                 let preview_len = host_frame.len().min(12);
@@ -580,9 +677,45 @@ fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
 }
 
 fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
-    drain_gateway_uart_tx_paced(state, uart, thread::sleep)
+    step_gateway_uart_tx(state, uart, std::time::Instant::now())
 }
 
+fn step_gateway_uart_tx(
+    state: &mut PicoBridgeState,
+    uart: &mut impl Write,
+    now: std::time::Instant,
+) -> Result<()> {
+    if state.next_uart_tx.is_some_and(|deadline| now < deadline) {
+        return Ok(());
+    }
+    let Some(packet) = state.uart_tx_packets.front() else {
+        return Ok(());
+    };
+    match uart.write(&packet[state.uart_tx_offset..state.uart_tx_offset + 1]) {
+        Ok(0) => bail!("Gateway UART closed during Pico-Fi transfer"),
+        Ok(length) => {
+            state.uart_tx_offset += length;
+            if state.uart_tx_offset == packet.len() {
+                let packet = state.uart_tx_packets.pop_front().unwrap();
+                state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(packet.len());
+                state.uart_tx_offset = 0;
+            }
+            state.next_uart_tx = Some(
+                now + Duration::from_nanos(
+                    1_000_000_000 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
+                        / PICO_UART_BAUD,
+                ),
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => return Err(error).context("writing Gateway UART in Pico-Fi bridge"),
+    }
+    // Never sleep through a whole UART frame: service the independent UART
+    // receive and host I2C directions between bytes.
+    Ok(())
+}
+
+#[cfg(test)]
 fn drain_gateway_uart_tx_paced(
     state: &mut PicoBridgeState,
     uart: &mut impl Write,
@@ -637,6 +770,41 @@ fn enqueue_host_i2c_slots(state: &mut PicoBridgeState, frame: &[u8]) {
             .copy_from_slice(&frame[offset..end]);
         state.host_reads.push_back(slot);
     }
+}
+
+fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
+    // Match pico-fi's OverwriteQueue: the independent I2C Pico remains
+    // bounded even if GroundStation never polls its mailbox.
+    if frame.len() > PICO_PACKET_QUEUE_BYTES {
+        return;
+    }
+    while state.host_packets.len() >= PICO_PACKET_QUEUE_DEPTH
+        || state.host_packet_bytes + frame.len() > PICO_PACKET_QUEUE_BYTES
+    {
+        let Some(old) = state.host_packets.pop_front() else {
+            break;
+        };
+        state.host_packet_bytes -= old.len();
+    }
+    state.host_packet_bytes += frame.len();
+    state.host_packets.push_back(frame);
+}
+
+fn next_host_i2c_slot(state: &mut PicoBridgeState) -> [u8; PICO_I2C_SLOT_SIZE] {
+    if state.host_reads.is_empty() {
+        // pico-fi i2c_task::stage_response_packet uses try_pop_latest. Keep
+        // an active multi-slot transfer intact; select the newest queued
+        // packet only when staging the next transfer.
+        if let Some(frame) = state.host_packets.pop_back() {
+            state.host_packets.clear();
+            state.host_packet_bytes = 0;
+            enqueue_host_i2c_slots(state, &frame);
+        }
+    }
+    state
+        .host_reads
+        .pop_front()
+        .unwrap_or([0; PICO_I2C_SLOT_SIZE])
 }
 
 pub fn run(topology_path: &Path) -> Result<BayReport> {
@@ -1003,7 +1171,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .spawn()
         .context("starting Renode")?;
     let _renode_stdin_guard = keep_console_stdin_open(&mut child)?;
+    let (console_failure_tx, console_failure_rx) = mpsc::channel();
     let mut host_children = Vec::new();
+    let mut host_pty_guards = BTreeMap::new();
     if !topology.host_nodes.is_empty() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
         while host_serial_paths.values().any(|path| !path.exists())
@@ -1035,9 +1205,12 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 )
             })?;
             let bridge_name = name.clone();
+            let bridge_failure_tx = console_failure_tx.clone();
             thread::spawn(move || {
                 if let Err(error) = run_pico_fi_bridge(listener, &uart_path) {
-                    eprintln!("[SIM] Pico-Fi bridge {bridge_name} failed: {error:#}");
+                    let failure = format!("Pico-Fi bridge {bridge_name} failed: {error:#}");
+                    eprintln!("[SIM] {failure}");
+                    let _ = bridge_failure_tx.send(failure);
                 }
             });
             println!(
@@ -1046,6 +1219,19 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             );
         }
         for host in &topology.host_nodes {
+            for serial in &host.serial_links {
+                let path = &host_serial_paths[&serial.link];
+                if renode_pty_paths.contains(path) {
+                    // Retain a non-reading descriptor before the host claims
+                    // exclusivity. Never apply terminal ioctls to I2C sockets.
+                    let guard = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(path)
+                        .with_context(|| format!("retaining host UART PTY {}", path.display()))?;
+                    host_pty_guards.insert((host.name.clone(), serial.link.clone()), guard);
+                }
+            }
             let child = spawn_host_node(
                 host,
                 base,
@@ -1061,7 +1247,6 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let stdout = child.stdout.take().context("capturing Renode stdout")?;
     let stderr = child.stderr.take().context("capturing Renode stderr")?;
     let progress_sample_path = sample_path.clone();
-    let (console_failure_tx, console_failure_rx) = mpsc::channel();
     let stderr_failure_tx = console_failure_tx.clone();
     let stdout_reader = thread::spawn(move || -> Result<String> {
         let mut captured = String::new();
@@ -1100,6 +1285,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             eprintln!("[SIM] Renode execution failed: {error}");
             // A failed include can leave the interactive console alive with
             // stdin held open. Stop it so diagnostics reach the test runner.
+            // Allow its subsequent exception lines to reach the readers.
+            thread::sleep(Duration::from_millis(250));
             let _ = child.kill();
         }
         if let Some(status) = child.try_wait()? {
@@ -1124,7 +1311,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .find(|runtime| runtime.name == reboot.node)
                 .with_context(|| format!("host reboot references inactive node {}", reboot.node))?;
             let _ = runtime.child.kill();
-            let _ = runtime.child.wait();
+            runtime
+                .child
+                .wait()
+                .context("reaping rebooted host before releasing UART")?;
+            for ((owner, _), guard) in &host_pty_guards {
+                if owner == &reboot.node {
+                    release_host_pty_exclusive(guard)?;
+                }
+            }
             let host = topology
                 .host_nodes
                 .iter()
@@ -1194,7 +1389,6 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         host_outputs.insert(runtime.name.clone(), combined_host);
         host_diagnostics.insert(runtime.name, diagnostic);
     }
-    ensure!(host_failures.is_empty(), "{}", host_failures.join("; "));
     let stdout = stdout_reader
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stdout reader panicked"))??;
@@ -1202,12 +1396,27 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stderr reader panicked"))??;
     let combined = format!("{stdout}{stderr}");
+    ensure!(
+        host_failures.is_empty(),
+        "{}\nRenode output:\n{}",
+        host_failures.join("; "),
+        combined
+            .lines()
+            .rev()
+            .take(80)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let lower = combined.to_ascii_lowercase();
     if !status.success()
         || !combined
             .lines()
             .any(|line| line.trim() == "SEDS_BAY_COMPLETE")
         || lower.contains("there was an error executing command")
+        || lower.contains("no such command or device")
         || lower.contains("parameters did not match")
     {
         let error_context = combined
@@ -1273,6 +1482,12 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             &combined,
             topology.sample_count,
             topology.enforce_end_drop,
+            &topology
+                .reboots
+                .iter()
+                .filter(|event| &event.node == node_name)
+                .map(|event| event.after_sample)
+                .collect::<Vec<_>>(),
         )
         .map_err(|error| {
             let host_detail = host_diagnostics
@@ -1410,11 +1625,21 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .collect();
             diagnostics.push(format!("{node}: {}", values.join(", ")));
         }
+        let probe_detail = memory_profiles
+            .iter()
+            .flat_map(|(node, probes)| {
+                probes
+                    .iter()
+                    .map(move |probe| format!("{node}.{}: {:?}", probe.name, probe.samples))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "{} network endpoint check(s) failed:\n- {}\n\nEndpoint diagnostics:\n{}",
+            "{} network endpoint check(s) failed:\n- {}\n\nEndpoint diagnostics:\n{}\n\nFirmware probe samples (oldest to newest):\n{}",
             link_failures.len(),
             link_failures.join("\n- "),
-            diagnostics.join("\n")
+            diagnostics.join("\n"),
+            probe_detail
         );
     }
     let mut assertion_reports = Vec::new();
@@ -1594,12 +1819,22 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             .map(|(name, output)| format!("{name}:\n{output}"))
             .collect::<Vec<_>>()
             .join("\n");
+        let probe_detail = memory_profiles
+            .iter()
+            .flat_map(|(node, probes)| {
+                probes
+                    .iter()
+                    .map(move |probe| format!("{node}.{}: {:?}", probe.name, probe.samples))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "{} network assertion(s) failed:\n- {}\n\nLink observations:\n{}\n\nAssertion observations:\n{}\n\nHost diagnostics:\n{}",
+            "{} network assertion(s) failed:\n- {}\n\nLink observations:\n{}\n\nAssertion observations:\n{}\n\nFirmware probe samples (oldest to newest):\n{}\n\nHost diagnostics:\n{}",
             assertion_failures.len(),
             assertion_failures.join("\n- "),
             link_detail,
             assertion_detail,
+            probe_detail,
             host_detail
         );
     }
@@ -1639,6 +1874,7 @@ fn parse_memory_profiles(
     output: &str,
     sample_count: usize,
     enforce_end_drop: bool,
+    reset_after_samples: &[usize],
 ) -> Result<Vec<MemoryProbeReport>> {
     let mut reports = Vec::new();
     let mut qualification_failures = Vec::new();
@@ -1698,13 +1934,24 @@ fn parse_memory_profiles(
         // Use the same sustained-floor comparison as the single-board
         // profiler. Comparing two arbitrary endpoints falsely classifies a
         // healthy allocator's periodic high/low oscillation as a leak.
-        let end_drop = crate::execution::sustained_end_drop(qualified_samples);
-        if let Err(error) = crate::execution::validate_counter_progress(
-            &probe.name,
-            qualified_samples,
-            probe.minimum_interval_gain,
-        ) {
-            qualification_failures.push(error.to_string());
+        let epochs = probe_epochs(
+            &samples,
+            reset_after_samples,
+            samples.len() - qualified_samples.len(),
+        );
+        let end_drop = epochs
+            .iter()
+            .map(|epoch| crate::execution::sustained_end_drop(epoch))
+            .max()
+            .unwrap_or(0);
+        for epoch in epochs {
+            if let Err(error) = crate::execution::validate_counter_progress(
+                &probe.name,
+                epoch,
+                probe.minimum_interval_gain,
+            ) {
+                qualification_failures.push(error.to_string());
+            }
         }
         if let Some(minimum) = probe.minimum {
             if minimum_observed < minimum {
@@ -1759,6 +2006,26 @@ fn parse_memory_profiles(
     }
     Ok(reports)
 }
+
+fn probe_epochs<'a>(samples: &'a [u32], resets: &[usize], first: usize) -> Vec<&'a [u32]> {
+    let mut boundaries = resets
+        .iter()
+        .copied()
+        .filter(|&index| index > first && index < samples.len())
+        .collect::<Vec<_>>();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.push(samples.len());
+    let mut start = first;
+    boundaries
+        .into_iter()
+        .map(|end| {
+            let epoch = &samples[start..end];
+            start = end;
+            epoch
+        })
+        .collect()
+}
 fn safe(value: &str) -> String {
     value
         .chars()
@@ -1799,12 +2066,261 @@ mod pico_fi_tests {
     use super::*;
 
     #[test]
+    fn pico_rejects_bad_lengths_without_losing_next_frame_or_split_sync() {
+        let mut state = PicoBridgeState::default();
+        state
+            .uart_rx
+            .extend_from_slice(&[0xa5, 0x5a, 0xff, 0xff, 0, 0xa5]);
+        process_gateway_uart_rx(&mut state).unwrap();
+        assert_eq!(state.uart_framing_errors, 1);
+        assert_eq!(state.uart_rx, [0xa5]);
+        state.uart_rx.extend_from_slice(&[0x5a, 1, 0, 42]);
+        process_gateway_uart_rx(&mut state).unwrap();
+        assert_eq!(state.uart_to_i2c_frames, 1);
+        assert_eq!(
+            &next_host_i2c_slot(&mut state)[18..23],
+            &[0xa5, 0x5a, 1, 0, 42]
+        );
+    }
+
+    #[test]
+    fn planned_reboots_split_probe_epochs_but_stalls_and_leaks_still_fail() {
+        let counter = [100, 120, 5, 10];
+        let epochs = probe_epochs(&counter, &[2], 0);
+        assert_eq!(epochs, [&[100, 120][..], &[5, 10][..]]);
+        for epoch in epochs {
+            assert!(crate::execution::validate_counter_progress("loop", epoch, Some(1)).is_ok());
+        }
+        assert!(crate::execution::validate_counter_progress("loop", &counter, Some(1)).is_err());
+        let stalled = [100, 120, 5, 5];
+        assert!(crate::execution::validate_counter_progress(
+            "loop",
+            probe_epochs(&stalled, &[2], 0)[1],
+            Some(1)
+        )
+        .is_err());
+        let leaking = [1000, 900, 1000, 800];
+        assert_eq!(
+            probe_epochs(&leaking, &[2], 0)
+                .iter()
+                .map(|epoch| crate::execution::sustained_end_drop(epoch))
+                .max(),
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn pico_tx_step_is_paced_without_blocking_other_direction() {
+        let mut state = PicoBridgeState::default();
+        enqueue_gateway_uart_packet(&mut state, vec![1, 2, 3]);
+        let now = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        step_gateway_uart_tx(&mut state, &mut bytes, now).unwrap();
+        assert_eq!(bytes, [1]);
+        step_gateway_uart_tx(&mut state, &mut bytes, now).unwrap();
+        assert_eq!(bytes, [1]);
+        step_gateway_uart_tx(&mut state, &mut bytes, now + Duration::from_millis(2)).unwrap();
+        assert_eq!(bytes, [1, 2]);
+        assert_eq!(state.uart_tx_offset, 2);
+    }
+
+    #[test]
+    fn pico_host_disconnects_mid_slot_and_mid_reply_do_not_reset_device_state() {
+        let mut state = PicoBridgeState::default();
+        enqueue_host_packet(&mut state, vec![0xA5, 0x5A, 1, 0, 42]);
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let mut session = PicoHostSession::new(stream).unwrap();
+        peer.write_all(b"Wpartial").unwrap();
+        assert!(session.service(&mut state).unwrap());
+        assert!(session.service(&mut state).unwrap());
+        drop(peer);
+        assert!(!session.service(&mut state).unwrap());
+        assert_eq!(state.host_packets.len(), 1);
+
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let mut session = PicoHostSession::new(stream).unwrap();
+        peer.write_all(b"R").unwrap();
+        assert!(session.service(&mut state).unwrap());
+        let mut slot = [0; 32];
+        peer.read_exact(&mut slot).unwrap();
+        assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 42]);
+        peer.shutdown(std::net::Shutdown::Read).unwrap();
+        peer.write_all(b"R").unwrap();
+        assert_eq!(
+            session.service(&mut state).unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+    }
+
+    #[test]
+    fn absent_i2c_host_keeps_bounded_latest_packets_and_active_transfer() {
+        let mut state = PicoBridgeState::default();
+        for byte in 0..100 {
+            enqueue_host_packet(&mut state, vec![byte; 100]);
+        }
+        assert_eq!(state.host_packets.len(), 8);
+        assert_eq!(state.host_packet_bytes, 800);
+        let first = next_host_i2c_slot(&mut state);
+        assert_eq!(first[18], 99);
+        assert_eq!(state.host_packet_bytes, 0);
+        for _ in 0..100 {
+            enqueue_host_packet(&mut state, vec![7; 4096]);
+        }
+        assert_eq!(state.host_packets.len(), 2);
+        assert_eq!(state.host_packet_bytes, 8192);
+        let continuation = next_host_i2c_slot(&mut state);
+        assert_eq!(continuation[18], 99);
+        assert_eq!(continuation[4] & PICO_I2C_START, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pico_uart_keeps_running_without_host_and_reconnects_with_split_sync() {
+        use std::os::fd::FromRawFd;
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let (mut master_fd, mut slave_fd) = (-1, -1);
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master_fd,
+                    &mut slave_fd,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let mut master = unsafe { fs::File::from_raw_fd(master_fd) };
+        let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        configure_raw_nonblocking(master.as_raw_fd()).unwrap();
+        let path = PathBuf::from(format!("/proc/self/fd/{}", slave.as_raw_fd()));
+        let scratch = tempfile::tempdir().unwrap();
+        let socket = scratch.path().join("pico.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let ready = Arc::new(AtomicBool::new(false));
+        let (worker_stop, worker_ready) = (stop.clone(), ready.clone());
+        let worker = thread::spawn(move || {
+            run_pico_fi_bridge_until(listener, &path, || {
+                worker_ready.store(true, Ordering::Release);
+                worker_stop.load(Ordering::Acquire)
+            })
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !ready.load(Ordering::Acquire) {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        // More than the PTY capacity, with no GroundStation at all.
+        let burst = [0xA5, 0x5A, 1, 0, 42].repeat(12_000);
+        let mut sent = 0;
+        while sent < burst.len() {
+            match master.write(&burst[sent..]) {
+                Ok(count) => sent += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1))
+                }
+                Err(error) => panic!("{error}"),
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "UART blocked while host absent"
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+        for _ in 0..3 {
+            let mut peer = UnixStream::connect(&socket).unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            master.write_all(&[0xA5]).unwrap();
+            thread::sleep(Duration::from_millis(10));
+            master.write_all(&[0x5A, 1, 0, 43]).unwrap();
+            thread::sleep(Duration::from_millis(10));
+            peer.write_all(b"R").unwrap();
+            let mut slot = [0; 32];
+            peer.read_exact(&mut slot).unwrap();
+            assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 43]);
+            peer.write_all(b"Wpartial").unwrap();
+            drop(peer);
+            thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Release);
+        worker.join().unwrap().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn killed_host_exclusivity_is_released_without_recreating_radio_cable() {
+        use std::os::fd::FromRawFd;
+        let (mut master, mut slave) = (-1, -1);
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let _master = unsafe { fs::File::from_raw_fd(master) };
+        let host_port = unsafe { fs::File::from_raw_fd(slave) };
+        let reboot_guard = host_port.try_clone().unwrap();
+        let path = format!("/proc/self/fd/{}", reboot_guard.as_raw_fd());
+
+        for _ in 0..3 {
+            assert_eq!(
+                unsafe { libc::ioctl(host_port.as_raw_fd(), libc::TIOCEXCL) },
+                0
+            );
+            let error = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
+            release_host_pty_exclusive(&reboot_guard).unwrap();
+            let reopened = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            drop(reopened);
+        }
+        // Abrupt process death closes its fd without serialport's Drop ioctl.
+        assert_eq!(
+            unsafe { libc::ioctl(host_port.as_raw_fd(), libc::TIOCEXCL) },
+            0
+        );
+        drop(host_port);
+        assert_eq!(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EBUSY)
+        );
+        release_host_pty_exclusive(&reboot_guard).unwrap();
+        assert!(OpenOptions::new().read(true).write(true).open(path).is_ok());
+    }
+
+    #[test]
     fn console_command_failure_is_fatal_but_injected_device_errors_are_not() {
         assert!(console_execution_failed(
             "There was an error executing command 'include @board.repl'"
         ));
         assert!(console_execution_failed(
             "Parameters did not match the signature"
+        ));
+        assert!(console_execution_failed(
+            "No such command or device: missingPeripheral"
         ));
         assert!(!console_execution_failed(
             "[WARNING] ADC injected read error"
