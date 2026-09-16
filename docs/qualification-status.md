@@ -1,4 +1,17 @@
-# v0.4.11 qualification status
+# v0.4.12 qualification status
+
+## Current checkpoint (2026-09-16, Jupiter)
+
+The bounded-header candidate passed the 16-second gate, the 120-second restart
+regression, and the full 600-second seven-board/GroundStation network soak.
+Command/state responses, restart/reconnection, attribution, traffic and memory
+assertions passed without relaxing their limits. Gateway pool low water was
+6312 bytes in the soak (1024-byte minimum). Evidence is retained in
+`qualification-route-recovery/bounded-header-ten-minute.log` on Jupiter.
+SEDSNet v4.0.31 contains the tested router/relay fixes. Physical hardware
+validation remains required; this does not qualify the separate live OTA and
+SD-content gates below. The following entries document earlier checkpoints,
+including failed attempts, rather than superseding this result.
 
 This is a work log, not a claim of hardware qualification. The earlier checkpoint
 was pushed for hardware testing before all gates were complete. The candidate
@@ -28,7 +41,35 @@ below is being released for continued testing; its final linked soak is still pe
   Root cause is not yet established. The earlier restart/soak attempts below
   must not be reported as passes either.
 
-## Current candidate validation
+## ACK-failure investigation (2026-09-15; not yet qualified)
+
+- The 60-second diagnostic reproduced the late Valve ACK timeout without any
+  reboot or injected CAN outage. Gateway CAN/UART counters kept advancing;
+  UART transmit failures and allocator failures remained zero. The late command
+  did not reach the Gateway valve-command receive counter.
+- A regression demonstrated that the simulator could overwrite a partially
+  transmitted Pico UART frame under queue pressure. The physical Pico byte ring
+  preserves that frame. The simulator now preserves it and evicts only whole
+  pending packets; packet-count and byte-budget regressions pass in Docker.
+- The first uninstrumented short rerun still failed with UART framing errors.
+  A byte-traced 16-second rerun passed with identical UART-model/Pico-input bytes.
+  This timing-sensitive result is not proof that the original failure is fixed;
+  the 50-second command reproduction and full soak remain required.
+- The lower-overhead capture reproduced the failure and localized a second
+  defect: firmware TDR writes were valid, but the simulated TX FIFO replaced
+  bytes before emitting them (first captured mismatch at byte 8,317). The PTY
+  delivered those corrupted bytes unchanged. The UART model now uses concurrent
+  queues without taking a model lock across Renode clock calls. It also rechecks
+  for concurrent enqueue after disabling an idle timer, preventing a lost
+  wake-up. A deterministic interleaving regression covers that race; the old
+  model also stalled after 39 bytes in the concurrent stress test.
+  A C# regression exercises the
+  actual model with 500,000 concurrent TX and 500,000 RX bytes; Docker builds
+  and image validation run it. The revised, uninstrumented 16-second seven-board
+  gate passes (`uart-concurrent-short.log`). The 600-second run is in progress
+  on Jupiter (`uart-concurrent-soak.log`); it is not yet a soak pass.
+
+## Pre-release candidate validation (historical)
 
 - GroundStation uses the current `ef9a39d` development baseline plus the pending
   telemetry-cadence checks. SEDSNet includes unpublished ordered-ACK and compact
@@ -99,7 +140,16 @@ below is being released for continued testing; its final linked soak is still pe
   rejection of stalled counters. The seven-board soak started before these
   latest DAQ/layout changes and does not qualify this checkpoint.
 
-## Remaining gates
+## Earlier remaining gates (600-second network gate now passed)
+
+The current launcher now requests both the short gate and --ultra-soak by
+default. Previously it invoked only --all, which omitted the ten-minute check.
+Board runners require each individual Valve and Actuator response, alternating
+open/closed states, and use normal startup discovery. GroundStation matches
+response source, valve ID, requested state, and a fresh receive generation.
+These stricter gates are candidates, not a hardware or linked-soak pass.
+SEDSNet dev also fixes endpoint ownership being erased by empty keepalives;
+its full built-in workflow passes, but integrated qualification is pending.
 
 1. Preserve the passing board/unit/peripheral and 16-second linked checks when
    updating dependency releases. Run linked tests serially when sharing a

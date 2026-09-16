@@ -3,8 +3,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=10c33a0f5278af8d5cbac911d2c98f1e0af64a32
-ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.28
+ARG GROUNDSTATION_REF=05780b4d6126dae2b285e97c92d2522d504550de
+ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.31
 ARG GROUNDSTATION_SEDSNET_GIT_REV=
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
@@ -20,6 +20,13 @@ RUN git init /groundstation \
        fi \
     && cargo build --manifest-path /groundstation/Cargo.toml \
          -p groundstation_backend --release --features hitl_mode
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS uart-tests
+WORKDIR /src
+COPY renode/peripherals/SedsStm32Uart.cs renode/peripherals/SedsStm32Uart.cs
+COPY tests/uart-concurrency tests/uart-concurrency
+RUN dotnet publish tests/uart-concurrency/UartConcurrency.csproj -c Release -o /uart-check
+RUN dotnet /uart-check/UartConcurrency.dll
 
 FROM rust:1.98-bookworm AS builder
 WORKDIR /src
@@ -63,6 +70,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libudev1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/firmware-sim /usr/local/bin/firmware-sim
+COPY --from=uart-tests /uart-check /opt/firmware-sim/uart-check
 COPY --from=groundstation /groundstation/target/release/groundstation_backend /usr/local/bin/groundstation_backend
 COPY --from=groundstation /groundstation/backend/layout /opt/groundstation/backend/layout
 COPY --from=groundstation /groundstation/backend/config /opt/groundstation/backend/config

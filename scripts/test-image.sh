@@ -31,6 +31,8 @@ check_renode() {
 }
 
 catalog="$("${docker_command[@]}" --rm "$image" list-mcus)"
+"${docker_command[@]}" --rm --entrypoint dotnet "$image" \
+    /opt/firmware-sim/uart-check/UartConcurrency.dll
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; cpu IsHalted true; sysbus WriteDoubleWord 0x4000440c 17000; sysbus WriteDoubleWord 0x40004400 9; sysbus WriteDoubleWord 0x40004428 0x42; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 0; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0; print(\"UART_TX_PENDING_PASS\")"; emulation RunFor "0.002s"; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 1; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0xc0; print(\"UART_TX_BAUD_TIMING_PASS\")"; quit' 'UART_TX_PENDING_PASS' 'UART_TX_BAUD_TIMING_PASS'
 # RX frames must not accumulate before HAL starts the controller. Exercise
 # the actual IRQ line and retained FIFO behavior across stop/restart.

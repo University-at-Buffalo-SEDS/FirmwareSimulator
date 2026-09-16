@@ -1,3 +1,7 @@
 /target/
 /build/
 .DS_Store
+__pycache__/
+*.pyc
+/tests/uart-concurrency/bin/
+/tests/uart-concurrency/obj/

@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals.UART;
@@ -20,13 +20,19 @@ namespace Antmicro.Renode.Peripherals.UART
             transmitTimer = new LimitTimer(machine.ClockSource, frequency, this,
                 "uartTx", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
             transmitTimer.LimitReached += () => {
-                if(transmitFifo.Count > 0)
+                if(transmitFifo.TryDequeue(out var value))
                 {
-                    var value = transmitFifo.Dequeue();
                     transmittedBytes++;
                     CharReceived?.Invoke(value);
                 }
-                transmitTimer.Enabled = transmitFifo.Count > 0;
+                if(transmitFifo.IsEmpty)
+                {
+                    // A CPU can enqueue after the empty check but before the
+                    // clock is disabled. Recheck after disabling so that its
+                    // wake-up cannot be lost. No lock may span clock calls.
+                    transmitTimer.Enabled = false;
+                    if(!transmitFifo.IsEmpty) transmitTimer.Enabled = true;
+                }
                 UpdateInterrupt();
             };
             Reset();
@@ -46,8 +52,7 @@ namespace Antmicro.Renode.Peripherals.UART
                     | (1u << 21) | (1u << 22)
                     | (receiveFifo.Count > 0 ? 1u << 5 : 0u);
             case 0x24:
-                if(receiveFifo.Count == 0) return 0;
-                var value = receiveFifo.Dequeue();
+                if(!receiveFifo.TryDequeue(out var value)) return 0;
                 UpdateInterrupt();
                 return value;
             case 0x2c: return prescaler;
@@ -67,6 +72,8 @@ namespace Antmicro.Renode.Peripherals.UART
                 if((value & (1u << 3)) != 0) receiveFifo.Clear(); // RXFRQ
                 break;
             case 0x28:
+                // Do not hold a model lock across LimitTimer access: Renode
+                // invokes timer callbacks while holding its clock-source lock.
                 if((control1 & 9) == 9 && TxAvailable && baudRate != 0)
                 {
                     transmitFifo.Enqueue((byte)value);
@@ -126,9 +133,12 @@ namespace Antmicro.Renode.Peripherals.UART
 
         private readonly uint frequency;
         private readonly LimitTimer transmitTimer;
-        private readonly Queue<byte> transmitFifo = new Queue<byte>();
+        // CPU register accesses, UART input and timer callbacks can execute
+        // on different Renode threads. Queue<T> loses head/count updates in
+        // that case, replacing valid firmware bytes with stale FIFO contents.
+        private readonly ConcurrentQueue<byte> transmitFifo = new ConcurrentQueue<byte>();
         private uint transmittedBytes;
-        private readonly Queue<byte> receiveFifo = new Queue<byte>();
+        private readonly ConcurrentQueue<byte> receiveFifo = new ConcurrentQueue<byte>();
         private uint control1;
         private uint control2;
         private uint control3;

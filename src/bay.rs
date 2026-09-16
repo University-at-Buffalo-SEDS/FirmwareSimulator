@@ -74,6 +74,27 @@ pub struct BayTopology {
     /// outage without stopping the firmware or its scheduler.
     #[serde(default)]
     pub can_ack_events: Vec<CanAckEvent>,
+    /// Detach/attach a firmware CAN endpoint; sample zero is before boot.
+    #[serde(default)]
+    pub can_link_events: Vec<CanLinkEvent>,
+}
+#[derive(Debug, Deserialize)]
+pub struct CanLinkEvent {
+    pub node: String,
+    pub peripheral: String,
+    pub link: String,
+    pub after_sample: usize,
+    pub connected: bool,
+}
+
+fn render_can_link_event(event: &CanLinkEvent) -> String {
+    format!(
+        "mach set \"{}\"\nconnector {} sysbus.{} {}\nsysbus.{} Acknowledged {}\necho \"SEDS_BAY_CAN_LINK {} {} {} {}\"\n",
+        safe(&event.node), if event.connected { "Connect" } else { "Disconnect" },
+        safe(&event.peripheral), safe(&event.link), safe(&event.peripheral),
+        event.connected, safe(&event.node), safe(&event.link), event.after_sample,
+        event.connected
+    )
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct RebootEvent {
@@ -184,6 +205,8 @@ pub struct NetworkAssertion {
     #[serde(default)]
     pub minimum_gain: Option<u32>,
     #[serde(default)]
+    pub maximum_gain: Option<u32>,
+    #[serde(default)]
     pub from_sample: Option<usize>,
     #[serde(default)]
     pub to_sample: Option<usize>,
@@ -202,6 +225,15 @@ struct HostRuntime {
     child: Child,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
+}
+
+fn exited_host(hosts: &mut [HostRuntime]) -> Result<Option<String>> {
+    for host in hosts {
+        if let Some(status) = host.child.try_wait()? {
+            return Ok(Some(format!("host node {} exited early with {status}", host.name)));
+        }
+    }
+    Ok(None)
 }
 
 fn spawn_host_node(
@@ -663,14 +695,21 @@ fn gateway_uart_to_i2c_response(frame: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
+    if packet.len() > PICO_PACKET_QUEUE_BYTES {
+        return;
+    }
     while state.uart_tx_packets.len() >= PICO_PACKET_QUEUE_DEPTH
         || state.uart_tx_bytes + packet.len() > PICO_PACKET_QUEUE_BYTES
     {
-        let Some(dropped) = state.uart_tx_packets.pop_front() else {
-            break;
+        // Once a UART header has left the Pico, its payload must finish.
+        // Overwrite only whole pending packets, never splice a new frame
+        // into an in-flight one. Keep both queue budgets bounded even when
+        // only the active frame remains and the incoming packet cannot fit.
+        let pending_index = usize::from(state.uart_tx_offset != 0);
+        let Some(dropped) = state.uart_tx_packets.remove(pending_index) else {
+            return;
         };
         state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(dropped.len());
-        state.uart_tx_offset = 0;
     }
     state.uart_tx_bytes += packet.len();
     state.uart_tx_packets.push_back(packet);
@@ -895,6 +934,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             event.peripheral
         );
     }
+    for event in &topology.can_link_events {
+        ensure!(event.after_sample < topology.sample_count, "CAN link event is outside the run");
+        ensure!(topology.nodes.iter().any(|node| node.name == event.node),
+            "CAN link event references unknown firmware node {}", event.node);
+        ensure!(topology.links.iter().any(|link| link.name == event.link
+            && matches!(link.kind, LinkKind::Can)
+            && link.endpoints.iter().any(|ep| ep.node == event.node && ep.peripheral == event.peripheral)),
+            "CAN link event references an unlinked endpoint");
+    }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
     let mut script = String::new();
@@ -1077,6 +1125,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             (firmware_msp, firmware_pc, firmware_vtor, elf),
         );
     }
+    for event in topology.can_link_events.iter().filter(|event| event.after_sample == 0) {
+        script += &render_can_link_event(event);
+    }
     if !topology.host_nodes.is_empty() {
         script += "echo \"SEDS_HOST_ENDPOINTS_READY\"\nsleep 5\n";
     }
@@ -1118,6 +1169,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 event.after_sample,
                 event.acknowledged
             );
+        }
+        for event in topology.can_link_events.iter().filter(|event| event.after_sample == sample + 1) {
+            script += &render_can_link_event(event);
         }
         for reboot in topology.reboots.iter().filter(|event| {
             event.after_sample == sample + 1
@@ -1291,6 +1345,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         if let Some(status) = child.try_wait()? {
             break status;
+        }
+        if let Some(error) = exited_host(&mut host_children)? {
+            eprintln!("[SIM] {error}; stopping firmware execution to collect diagnostics");
+            let _ = child.kill();
+            break child.wait().context("reaping simulator after host failure")?;
         }
         let completed_sample = fs::read_to_string(&sample_path)
             .ok()
@@ -1474,6 +1533,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             }
         }
     }
+    println!("[SIM] Final CPU positions:\n{}", register_dump.join("\n"));
     let mut memory_profiles = BTreeMap::new();
     for (node_name, layout) in &node_layouts {
         let profiles = parse_memory_profiles(
@@ -1680,12 +1740,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 )
             })?;
         ensure!(
-            assertion.minimum_gain.is_none()
+            (assertion.minimum_gain.is_none() && assertion.maximum_gain.is_none())
                 || (assertion.from_sample.is_some() && assertion.to_sample.is_some()),
-            "assertion {} with minimum_gain requires from_sample and to_sample",
+            "assertion {} with minimum_gain or maximum_gain requires from_sample and to_sample",
             assertion.name
         );
-        let observed = if let Some(minimum_gain) = assertion.minimum_gain {
+        let observed = if assertion.minimum_gain.is_some() || assertion.maximum_gain.is_some() {
+            let minimum_gain = assertion.minimum_gain.unwrap_or(0);
             let from_sample = assertion.from_sample.unwrap();
             let to_sample = assertion.to_sample.unwrap();
             ensure!(
@@ -1714,6 +1775,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 )
             })?;
             let gain = to.saturating_sub(from);
+            if let Some(maximum_gain) = assertion.maximum_gain {
+                if to < from || gain > maximum_gain {
+                    assertion_failures.push(format!(
+                        "{}: counter {} -> {} exceeds maximum gain {} or reset unexpectedly",
+                        assertion.name, from, to, maximum_gain));
+                }
+            }
             if gain < minimum_gain {
                 assertion_failures.push(format!(
                     "{}: {}.{} advanced {} ({} -> {}) between samples {} and {}, below {}",
@@ -1743,7 +1811,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         } else {
             report.maximum_observed
         };
-        if assertion.minimum_gain.is_none() {
+        if assertion.minimum_gain.is_none() && assertion.maximum_gain.is_none() {
             if let Some(minimum) = assertion.minimum {
                 if observed < minimum {
                     assertion_failures.push(format!(
@@ -2349,6 +2417,22 @@ mod pico_fi_tests {
     }
 
     #[test]
+    fn unexpected_host_exit_is_failure_even_with_zero_status() {
+        for code in [0, 7] {
+            let mut host = HostRuntime {
+                name: "groundstation".into(),
+                child: Command::new("sh").args(["-c", &format!("exit {code}")]).spawn().unwrap(),
+                stdout_path: PathBuf::new(),
+                stderr_path: PathBuf::new(),
+            };
+            host.child.wait().unwrap();
+            let failure = exited_host(std::slice::from_mut(&mut host)).unwrap().unwrap();
+            assert!(failure.contains("groundstation"));
+            assert!(failure.contains(&code.to_string()));
+        }
+    }
+
+    #[test]
     fn i2c_mailbox_envelope_is_recreated_for_gateway_uart() {
         let payload = b"sedsnet packet";
         let mut mailbox = vec![0xA5, 0x5A, payload.len() as u8, 0];
@@ -2393,6 +2477,40 @@ mod pico_fi_tests {
         enqueue_gateway_uart_packet(&mut state, vec![1; 128]);
         assert_eq!(state.uart_tx_packets.len(), 1);
         assert_eq!(state.uart_tx_bytes, 128);
+    }
+
+    #[test]
+    fn gateway_queue_overflow_preserves_in_flight_uart_frame() {
+        for sent in 1..7 {
+            let first = vec![0xA5, 0x5A, 3, 0, 1, 2, 3];
+            let mut state = PicoBridgeState::default();
+            enqueue_gateway_uart_packet(&mut state, first.clone());
+            let mut wire = first[..sent].to_vec();
+            state.uart_tx_offset = sent;
+            for value in 0..32 {
+                enqueue_gateway_uart_packet(&mut state, vec![0xA5, 0x5A, 1, 0, value]);
+                assert!(state.uart_tx_packets.len() <= PICO_PACKET_QUEUE_DEPTH);
+                assert!(state.uart_tx_bytes <= PICO_PACKET_QUEUE_BYTES);
+            }
+            drain_gateway_uart_tx_paced(&mut state, &mut wire, |_| {}).unwrap();
+            assert_eq!(&wire[..first.len()], &first);
+            assert_eq!(&wire[first.len()..first.len() + 5], &[0xA5, 0x5A, 1, 0, 25]);
+            assert_eq!(state.uart_tx_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn gateway_byte_budget_preserves_in_flight_uart_frame() {
+        let mut state = PicoBridgeState::default();
+        let first = vec![42; PICO_UART_MAX_FRAME];
+        enqueue_gateway_uart_packet(&mut state, first.clone());
+        state.uart_tx_offset = 1;
+        // Two maximum-size frames exceed the byte budget even though the
+        // packet-count limit has not been reached.
+        enqueue_gateway_uart_packet(&mut state, vec![43; PICO_UART_MAX_FRAME]);
+        assert_eq!(state.uart_tx_packets.front(), Some(&first));
+        assert_eq!(state.uart_tx_offset, 1);
+        assert!(state.uart_tx_bytes <= PICO_PACKET_QUEUE_BYTES);
     }
 
     #[test]
@@ -2450,5 +2568,22 @@ mod pico_fi_tests {
         assert_eq!(topology.assertions[0].from_sample, Some(9));
         assert_eq!(topology.assertions[0].to_sample, Some(11));
         assert_eq!(topology.host_log_assertions[0].minimum_occurrences, 11);
+    }
+
+    #[test]
+    fn can_link_loss_detaches_reception_and_restores_acknowledgements() {
+        let mut event = CanLinkEvent {
+            node: "valve".into(), peripheral: "fdcan2".into(),
+            link: "fill_can".into(), after_sample: 0, connected: false,
+        };
+        let detached = render_can_link_event(&event);
+        assert!(detached.contains("connector Disconnect sysbus.fdcan2 fill_can"));
+        assert!(detached.contains("Acknowledged false"));
+        event.connected = true;
+        event.after_sample = 1;
+        let attached = render_can_link_event(&event);
+        assert!(attached.contains("connector Connect sysbus.fdcan2 fill_can"));
+        assert!(attached.contains("Acknowledged true"));
+        assert!(attached.contains("SEDS_BAY_CAN_LINK valve fill_can 1 true"));
     }
 }

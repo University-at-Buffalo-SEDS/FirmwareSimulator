@@ -115,7 +115,7 @@ def main() -> int:
         environment = os.environ.copy()
         environment["SEDS_FIRMWARE_SIM_SOURCE"] = str(ROOT)
         environment["SEDS_FIRMWARE_SIM_SUITE_ROOT"] = str(workspace)
-        command = [sys.executable, "build.py", "test", "--all"]
+        command = [sys.executable, "build.py", "test", "--all", "--ultra-soak"]
         if not args.debug:
             command.append("--release")
         run(command, cwd=roots["gateway-board26"], env=environment)

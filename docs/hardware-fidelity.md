@@ -86,7 +86,16 @@ The I2C mailbox follows `pico-fi/src/bridge/overwrite_queue.rs` (8 queued packet
 8,192 bytes, overwrite oldest on pressure) and `i2c_task::stage_response_packet`
 (stage the newest queued packet when the current multi-slot transfer finishes).
 It is not an unlimited lossless telemetry queue. Split UART sync bytes survive
-nonblocking reads. Host-to-Gateway pacing services the reverse direction between
+nonblocking reads. Queue pressure must not evict a partially transmitted UART
+frame: only whole pending packets may be overwritten, matching the physical
+Pico byte-packet ring. Packet-count and byte-budget regression tests cover this
+case. Host-to-Gateway pacing services the reverse direction between
 bytes; the Gateway USART model uses its configured BRR and an 8N1 TX timer/FIFO
 in virtual time. The existing host-to-UART pacing scale remains an approximation,
 not a model of RF interference or Pico Wi-Fi radio physics.
+
+The STM32 UART FIFOs are shared by CPU, timer and host-input execution and must
+be thread-safe. Docker builds and `scripts/test-image.sh` run the actual C#
+model through a concurrent 500,000-byte TX/RX integrity regression. This uses
+narrow Renode API stubs to isolate synchronization; the real Renode register
+contracts separately verify baud timing and status flags.

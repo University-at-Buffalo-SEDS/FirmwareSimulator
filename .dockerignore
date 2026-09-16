@@ -1,0 +1,5 @@
+.git
+target
+build
+tests/uart-concurrency/bin
+tests/uart-concurrency/obj

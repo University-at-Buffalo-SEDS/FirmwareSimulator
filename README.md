@@ -45,7 +45,7 @@ process while retaining its configured network-variable cache; serial and Pico-F
 replacement process without resetting their peer. Pair the event with persistence, rediscovery, and
 liveness probes to verify restoration before network resynchronization and successful rejoin.
 
-One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories pin its `v0.4.11` tag through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest. The image embeds GroundStation with the stable SEDSNet v4.0.28 crates.io release so the linked-bay test exercises the same public dependency used by normal GroundStation builds.
+One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories currently pin the published `v0.4.11` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The v0.4.12 source candidate builds GroundStation with SEDSNet v4.0.31 and includes the bounded-header ten-minute qualification described in `docs/qualification-status.md`; select a newly built candidate image explicitly when testing these changes. Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
 
 The linked gate requires GroundStation to discover and canonically label all
 seven board nodes, assign nonzero application traffic to each originating
