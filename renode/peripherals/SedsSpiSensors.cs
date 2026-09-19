@@ -272,31 +272,84 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 faulted = transactions > disconnectAfter
                     || (failureEvery != 0 && transactions % failureEvery == 0);
                 command = value;
+                registerAddress = (value >> 2) & 0x0f;
+                registerByte = 0;
                 reading = (value & 0x03) == 0x01;
+                if(reading && registerAddress == 0)
+                {
+                    SelectChannel();
+                    var format = (Register(4) >> 4) & 3;
+                    dataBytes = format == 0 ? 3 : 4;
+                    var code = samples[channel] & 0x00ffffffu;
+                    var signedCode = (code & 0x00800000u) != 0 ? code | 0xff000000u : code;
+                    data = format == 0 ? code : format == 1 ? code << 8
+                        : format == 2 ? signedCode : ((ScanMask() != 0 ? (uint)channel : 0u) << 28) | (signedCode & 0x0fffffffu);
+                }
                 if(value == 0x78) ResetRegisters();
                 position++;
                 return faulted ? (byte)0xff : (byte)0;
             }
 
             if(faulted) return 0xff;
-            if(reading)
+            if(reading && registerAddress == 0)
             {
-                var shift = 16 - 8 * Math.Min(position - 1, 2);
-                var result = (byte)((sample >> shift) & 0xff);
+                var shift = 8 * (dataBytes - 1 - Math.Min(position - 1, dataBytes - 1));
+                var result = (byte)((data >> shift) & 0xff);
                 position++;
-                if(position > 3)
+                if(position == dataBytes + 1)
                 {
-                    sample = (sample + 17u) & 0x00ffffffu;
+                    samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
+                    channel = (channel + 7) & 7;
                 }
                 return result;
             }
 
-            // Configuration writes are retained so subsequent transactions
-            // observe the same register state as the physical ADC.
-            var address = (byte)((command >> 2) & 0x0f);
-            registers[((int)address << 2) + Math.Min(position - 1, 3)] = value;
+            // Increment across register boundaries during a multi-register
+            // write (CONFIG0..MUX are each one byte; SCAN/TIMER are three).
+            var key = (registerAddress << 2) + registerByte;
+            byte output = 0;
+            if(reading) registers.TryGetValue(key, out output);
+            else registers[key] = value;
+            registerByte++;
+            if(registerByte == RegisterWidth(registerAddress))
+            {
+                registerByte = 0;
+                registerAddress = (registerAddress + 1) & 0x0f;
+            }
             position++;
-            return 0;
+            return output;
+        }
+
+        private byte Register(int address)
+        {
+            byte value;
+            return registers.TryGetValue(address << 2, out value) ? value : (byte)0;
+        }
+
+        private static int RegisterWidth(int address)
+        {
+            return address == 0 ? 4 : address >= 7 && address <= 10 ? 3 : address == 15 ? 2 : 1;
+        }
+
+        private byte ScanMask()
+        {
+            byte mask;
+            return registers.TryGetValue((7 << 2) + 2, out mask) ? mask : (byte)0;
+        }
+
+        private void SelectChannel()
+        {
+            var mask = ScanMask();
+            if(mask == 0)
+            {
+                channel = (Register(6) >> 4) & 7;
+                return;
+            }
+            for(var i = 0; i < 8; i++)
+            {
+                if((mask & (1 << channel)) != 0) return;
+                channel = (channel + 7) & 7;
+            }
         }
 
         public void FinishTransmission()
@@ -328,7 +381,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private void ResetRegisters()
         {
             registers.Clear();
-            sample = 0x100000u;
+            for(var i = 0; i < samples.Length; i++) samples[i] = (uint)(i + 1) * 0x100000u;
+            channel = 7; // SCAN visits enabled inputs from MSb to LSb.
         }
 
         private readonly Dictionary<int, byte> registers = new Dictionary<int, byte>();
@@ -338,7 +392,12 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private int position;
         private bool reading;
         private bool faulted;
-        private uint sample;
+        private readonly uint[] samples = new uint[8];
+        private int channel;
+        private int registerAddress;
+        private int registerByte;
+        private int dataBytes;
+        private uint data;
         private ulong transactions;
         private readonly ulong failureEvery;
         private readonly ulong disconnectAfter;
