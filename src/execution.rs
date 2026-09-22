@@ -612,9 +612,10 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
     let source_root = simulator_root().join("renode/peripherals");
     let flash_model = source_root.join("SedsStm32Flash.cs");
     let mut overlay = format!(
-        "flashBacking: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\nphysicalFlash: MTD.SedsStm32FlashController @ sysbus 0x40022000\n    flash: flashBacking\n    mcu: \"{}\"\n    eraseSize: {}\n    writeAlignment: {}\n    flashBase: 0x{:08x}\n    preinit:\n        include @{}\n",
+        "flashBacking: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\nphysicalFlash: MTD.SedsStm32FlashController @ sysbus 0x{:08x}\n    flash: flashBacking\n    mcu: \"{}\"\n    eraseSize: {}\n    writeAlignment: {}\n    flashBase: 0x{:08x}\n    preinit:\n        include @{}\n",
         layout.memory.flash_base,
         layout.memory.flash_size,
+        if layout.resolve_mcu_descriptor()?.flash_profile.starts_with("stm32h7") { 0x52002000u64 } else { 0x40022000 },
         layout.resolve_mcu_descriptor()?.flash_profile,
         layout.memory.erase_size,
         layout.memory.write_alignment,
@@ -756,7 +757,11 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     source_root.join("SedsStm32Adc.cs").display()
                 ));
             }
-            (ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5, "sd_card", "sdmmc1") => {
+            (
+                ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32h7 | ArchitectureKind::Stm32u5,
+                "sd_card",
+                "sdmmc1",
+            ) => {
                 let controller = if layout.architecture == ArchitectureKind::Stm32h5 {
                     "sdmmc"
                 } else {
@@ -967,7 +972,7 @@ pub(crate) fn render_board_initialization_script(layout: &BoardLayout) -> String
         ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5 => {
             script.push_str(&format!("fdcan1 Acknowledged {acknowledged}\n"))
         }
-        ArchitectureKind::Stm32 => {}
+        ArchitectureKind::Stm32 | ArchitectureKind::Stm32h7 => {}
     }
     script
 }
@@ -1402,6 +1407,28 @@ mod tests {
             }}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn h7_overlay_uses_h7_flash_register_base_and_exact_ram_banks() {
+        for d in crate::core::mcu_catalog()
+            .iter()
+            .filter(|d| d.architecture == ArchitectureKind::Stm32h7)
+        {
+            let mut board = layout("stm32g4", "[]");
+            board.architecture = ArchitectureKind::Stm32h7;
+            board.mcu = crate::core::McuKind::new(&d.name);
+            board.memory.flash_size = d.flash_size;
+            board.memory.erase_size = d.erase_size;
+            board.memory.write_alignment = d.write_alignment;
+            board.memory.ram_regions = d.ram_regions.clone();
+            let overlay = render_peripheral_overlay(&board).unwrap();
+            assert!(overlay.contains("SedsStm32FlashController @ sysbus 0x52002000"));
+            assert!(overlay.contains(&format!("mcu: \"{}\"", d.flash_profile)));
+            for bank in &d.ram_regions {
+                assert!(overlay.contains(&format!("@ sysbus 0x{:08x}", bank.base)));
+            }
+        }
     }
 
     #[test]
@@ -1860,6 +1887,7 @@ mod tests {
             flash_profile: "stm32g4".into(),
             flash_base: 0x0800_0000,
             flash_size: 0x20_0000,
+            ram_regions: vec![],
             ram_base: 0x2000_0000,
             ram_size: 0x8_0000,
             erase_size: 0x800,

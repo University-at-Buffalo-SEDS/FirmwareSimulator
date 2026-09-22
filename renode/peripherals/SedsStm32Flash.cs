@@ -33,6 +33,7 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         public uint ReadDoubleWord(long offset)
         {
+            if(IsH7) { activeBank = !IsH7Rs && offset >= 0x100 ? 1 : 0; offset -= activeBank * 0x100; }
             if(offset == AccessControlOffset) return accessControl;
             if(offset == StatusOffset) return status;
             if(offset == ControlOffset) return control | (locked ? LockBit : 0u);
@@ -41,6 +42,7 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         public void WriteDoubleWord(long offset, uint value)
         {
+            if(IsH7) { activeBank = !IsH7Rs && offset >= 0x100 ? 1 : 0; offset -= activeBank * 0x100; }
             if(offset == AccessControlOffset)
             {
                 // FLASH_ACR is not protected by the program/erase lock. Cube HAL
@@ -61,7 +63,7 @@ namespace Antmicro.Renode.Peripherals.MTD
                 else keyStage = 0;
                 return;
             }
-            if(offset == StatusClearOffset || (!IsH5 && offset == StatusOffset))
+            if(offset == StatusClearOffset || (!IsH5 && !IsH7 && offset == StatusOffset))
             {
                 status &= ~value;
                 return;
@@ -84,14 +86,18 @@ namespace Antmicro.Renode.Peripherals.MTD
 
         public void Reset()
         {
-            locked = true;
-            keyStage = 0;
+            for(activeBank = 0; activeBank < 2; activeBank++)
+            {
+                locked = true;
+                keyStage = 0;
+                status = 0;
+                control = 0;
+                programming = false;
+                programBytes = 0;
+                programUnitStart = -1;
+            }
+            activeBank = 0;
             accessControl = AccessControlResetValue;
-            status = 0;
-            control = 0;
-            programming = false;
-            programBytes = 0;
-            programUnitStart = -1;
             powered = true;
             // MappedMemory is reset to its erased byte by a platform reset,
             // but physical flash is nonvolatile. Restore the controller's
@@ -126,7 +132,7 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             foreach(var cpu in machine.GetSystemBus(this).GetCPUs().OfType<ICPUWithMemoryAccessHooks>())
             {
-                // Every supported STM32 descriptor is single-core. Dirty-page
+                // Every bundled execution profile runs a single CPU. Dirty-page
                 // broadcasting only serves cache coherency between CPUs of the
                 // same architecture; leaving it enabled with the global flash
                 // write hook makes Renode retain an unbounded dirty-address
@@ -150,6 +156,7 @@ namespace Antmicro.Renode.Peripherals.MTD
             var offset = checked((int)(physicalAddress - flashBase));
             var count = checked((int)width);
             if(count <= 0 || offset > shadow.Length - count) return;
+            if(IsH7) activeBank = !IsH7Rs && offset >= H7BankSize ? 1 : 0;
             var requested = flash.ReadBytes(offset, count);
             if(!hostLoadingEnded || !powered || !programming)
             {
@@ -225,7 +232,13 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             uint page;
             long bankOffset = 0;
-            if(mcu == "stm32h5")
+            if(IsH7)
+            {
+                page = (value >> (mcu == "stm32h7" ? 8 : 6)) & (mcu == "stm32h7ab" ? 0x7fu : 7u);
+                bankOffset = activeBank * H7BankSize;
+                if((long)page * eraseSize >= H7BankSize) { status |= ProgrammingErrorBit; return; }
+            }
+            else if(mcu == "stm32h5")
             {
                 page = (value >> 6) & 0x1f;
                 if((value & (1u << 31)) != 0) bankOffset = flash.Size / 2;
@@ -287,6 +300,9 @@ namespace Antmicro.Renode.Peripherals.MTD
             machine.LocalTimeSource.ExecuteInNearestSyncedState(_ => machine.Pause());
         }
 
+        private bool IsH7 { get { return mcu == "stm32h7" || mcu == "stm32h7ab" || IsH7Rs; } }
+        private bool IsH7Rs { get { return mcu == "stm32h7rs"; } }
+        private long H7BankSize { get { return IsH7Rs ? flash.Size : 0x100000; } }
         private bool IsH5 { get { return mcu == "stm32h5"; } }
         private bool IsTrustZonePart { get { return IsH5 || mcu == "stm32u5"; } }
         private long AccessControlOffset { get { return 0x00; } }
@@ -295,22 +311,33 @@ namespace Antmicro.Renode.Peripherals.MTD
         {
             get
             {
+                if(IsH7) return 0x3fu; // LATENCY, WRHIGHFREQ
                 if(IsH5) return 0x0000013fu; // LATENCY, WRHIGHFREQ, PRFTEN
                 if(mcu == "stm32u5") return 0x0000790fu; // LATENCY, PRFTEN, low-power controls
                 return 0x00047f0fu; // LATENCY, prefetch/cache, power-down, debugger access
             }
         }
-        private long KeyOffset { get { return IsH5 ? 0x04 : 0x08; } }
-        private long StatusOffset { get { return IsTrustZonePart ? 0x20 : 0x10; } }
-        private long StatusClearOffset { get { return IsH5 ? 0x30 : StatusOffset; } }
-        private long ControlOffset { get { return IsTrustZonePart ? 0x28 : 0x14; } }
-        private uint LockBit { get { return IsH5 ? 1u : 1u << 31; } }
-        private uint ProgramBit { get { return IsH5 ? 1u << 1 : 1u; } }
-        private uint EraseBit { get { return IsH5 ? 1u << 2 : 1u << 1; } }
-        private uint StartBit { get { return IsH5 ? 1u << 5 : 1u << 16; } }
-        private uint EndOfOperationBit { get { return IsH5 ? 1u << 16 : 1u; } }
-        private uint ProgrammingErrorBit { get { return IsH5 ? 1u << 18 : 1u << 3; } }
+        private long KeyOffset { get { return IsH5 || IsH7 ? 0x04 : 0x08; } }
+        private long StatusOffset { get { return IsH7Rs ? 0x24 : IsTrustZonePart ? 0x20 : 0x10; } }
+        private long StatusClearOffset { get { return IsH7Rs ? 0x28 : IsH7 ? 0x14 : IsH5 ? 0x30 : StatusOffset; } }
+        private long ControlOffset { get { return IsH7Rs ? 0x10 : IsH7 ? 0x0c : IsTrustZonePart ? 0x28 : 0x14; } }
+        private uint LockBit { get { return IsH5 || IsH7 ? 1u : 1u << 31; } }
+        private uint ProgramBit { get { return IsH5 || IsH7 ? 1u << 1 : 1u; } }
+        private uint EraseBit { get { return IsH5 || IsH7 ? 1u << 2 : 1u << 1; } }
+        private uint StartBit { get { return mcu == "stm32h7" ? 1u << 7 : IsH5 || IsH7 ? 1u << 5 : 1u << 16; } }
+        private uint EndOfOperationBit { get { return IsH5 || IsH7 ? 1u << 16 : 1u; } }
+        private uint ProgrammingErrorBit { get { return IsH5 || IsH7 ? 1u << 18 : 1u << 3; } }
 
+        // Separate register and write-buffer state for each H7 flash bank.
+        private sealed class BankState
+        {
+            public bool locked, programming;
+            public int keyStage;
+            public uint status, control, programBytes;
+            public long programUnitStart = -1;
+        }
+        private readonly BankState[] banks = { new BankState(), new BankState() };
+        private int activeBank;
         private readonly IMachine machine;
         private readonly MappedMemory flash;
         private readonly byte[] shadow;
@@ -319,14 +346,14 @@ namespace Antmicro.Renode.Peripherals.MTD
         private readonly uint writeAlignment;
         private readonly ulong flashBase;
         private readonly List<string> operationTrace = new List<string>();
-        private bool locked;
-        private int keyStage;
+        private bool locked { get { return banks[activeBank].locked; } set { banks[activeBank].locked = value; } }
+        private int keyStage { get { return banks[activeBank].keyStage; } set { banks[activeBank].keyStage = value; } }
         private uint accessControl;
-        private uint status;
-        private uint control;
-        private bool programming;
-        private uint programBytes;
-        private long programUnitStart = -1;
+        private uint status { get { return banks[activeBank].status; } set { banks[activeBank].status = value; } }
+        private uint control { get { return banks[activeBank].control; } set { banks[activeBank].control = value; } }
+        private bool programming { get { return banks[activeBank].programming; } set { banks[activeBank].programming = value; } }
+        private uint programBytes { get { return banks[activeBank].programBytes; } set { banks[activeBank].programBytes = value; } }
+        private long programUnitStart { get { return banks[activeBank].programUnitStart; } set { banks[activeBank].programUnitStart = value; } }
         private bool hostLoadingEnded;
         private bool powered = true;
         private ulong cutAfterOperation = ulong.MaxValue;

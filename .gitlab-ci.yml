@@ -66,6 +66,7 @@ publish-image:
       --tag "$CI_REGISTRY_IMAGE:$IMAGE_VERSION"
       --tag "$CI_REGISTRY_IMAGE:latest"
       --tag "$CI_REGISTRY_IMAGE:stm32g4"
+      --tag "$CI_REGISTRY_IMAGE:stm32h7"
       --tag "$CI_REGISTRY_IMAGE:stm32h5"
       --tag "$CI_REGISTRY_IMAGE:stm32u5"
       --push .

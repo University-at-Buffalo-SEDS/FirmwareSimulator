@@ -59,12 +59,15 @@ check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/re
 
 for mcu in \
     stm32g431 stm32g441 stm32g471 stm32g473 stm32g474 stm32g483 stm32g484 stm32g491 stm32g4a1 \
+    stm32h723 stm32h725 stm32h730 stm32h733 stm32h735 stm32h742 stm32h743 \
+    stm32h745 stm32h747 stm32h750 stm32h753 stm32h755 stm32h757 stm32h7a3 \
+    stm32h7b0 stm32h7b3 stm32h7r3 stm32h7r7 stm32h7s3 stm32h7s7 \
     stm32h523 stm32h533 stm32h543 stm32h553 stm32h562 stm32h563 stm32h573 \
     stm32u575 stm32u585 stm32u595 stm32u599 stm32u5a5 stm32u5a9; do
     printf '%s\n' "$catalog" | grep -Fq "$mcu"
 done
 
-for arch in stm32 stm32g4 stm32h5 stm32u5; do
+for arch in stm32 stm32g4 stm32h5 stm32h7 stm32u5; do
     "${docker_command[@]}" --rm "$image" self-test --arch "$arch"
 done
 
@@ -116,3 +119,8 @@ check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/re
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/trustzone-contract.repl; cpu SAURegionNumber 0; cpu SAURegionBaseAddress 0x08002000; cpu SAURegionLimitAddress 0x08002FE1; cpu SAUControl 1; cpu TrustZoneEnabled; cpu SAUControl; quit' 'True' '0x00000001'
 
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl; sdmmc CardCapacityBytes 4096; sdmmc GetCardPresent; sysbus WriteDoubleWord 0x46008008 512; sysbus WriteDoubleWord 0x4600800C 0x1010; sysbus ReadDoubleWord 0x46008010; sysbus ReadDoubleWord 0x46008014; sysbus ReadDoubleWord 0x46008034; python "monitor.Machine[\"sysbus.usb\"].InjectPacket(System.Array[System.Byte]([1,2,3]), 1)"; usb GetBytesInjected; quit' 'True' '0x00000010' '0x00080040' '0x0000000000000003'
+
+# H7 classic, H7A/B and H7R/S flash register contracts execute real M7 stores.
+for contract in h7:STM32H7 h7ab:STM32H7AB h7rs:STM32H7RS; do
+    check_renode "include @/opt/firmware-sim/renode/tests/${contract%%:*}-flash.resc" "${contract#*:}_FLASH_PASS"
+done

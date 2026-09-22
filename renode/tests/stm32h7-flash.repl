@@ -1,0 +1,12 @@
+flashBacking: Memory.MappedMemory @ sysbus 0x08000000
+    size: 2097152
+physicalFlash: MTD.SedsStm32FlashController @ sysbus 0x52002000
+    flash: flashBacking
+    mcu: "stm32h7"
+    eraseSize: 131072
+    writeAlignment: 32
+    flashBase: 0x08000000
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Flash.cs
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x20000

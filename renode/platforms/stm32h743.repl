@@ -1,0 +1,54 @@
+// Functional Cortex-M7 profile; memory comes from the exact board layout.
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 64000000
+    IRQ -> cpu@0
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m7"
+    nvic: nvic
+    numberOfMPURegions: 16
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 64000000
+rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x58024400
+    variant: "h7"
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x58024800
+    variant: "h7"
+gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x58020000
+    ports: 11
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpio.cs
+usart1: UART.SedsStm32Uart @ sysbus 0x40011000
+    frequency: 64000000
+    IRQ -> nvic@37
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Uart.cs
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    frequency: 64000000
+    initialLimit: 0xFFFF
+    IRQ -> nvic@54
+spi1: SPI.SedsStm32Spi @ sysbus 0x40013000
+    IRQ -> nvic@35
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Spi.cs
+sdmmc1: Storage.SedsStm32Sdmmc @ sysbus 0x52007000
+    IRQ -> nvic@49
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Sdmmc.cs
+usb: USB.SedsStm32Usb @ sysbus 0x40040000
+    variant: "otg_fs"
+    IRQ -> nvic@77
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Usb.cs
+// H7 exposes configurable message RAM, unlike the fixed-layout G4/H5/U5 IP.
+fdcan1: CAN.MCAN @ sysbus 0x4000A000
+    Line0 -> nvic@19
+    Line1 -> nvic@21
+    messageRAM: canMessageRAM
+fdcan2: CAN.MCAN @ sysbus 0x4000A400
+    Line0 -> nvic@20
+    Line1 -> nvic@22
+    messageRAM: canMessageRAM
+canMessageRAM: Memory.ArrayMemory @ sysbus <0x4000AC00, +0x2800>
+    size: 0x2800

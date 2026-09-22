@@ -1,0 +1,25 @@
+# Isolate power-cut tests in their own Renode process.
+mach create "stm32h7"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h743.repl
+machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32h7-flash.repl
+python "b = monitor.Machine['sysbus']; f = monitor.Machine['sysbus.physicalFlash']; assert b.ReadDoubleWord(0x52002000 + 12) & 1; b.WriteDoubleWord(0x52002004, 0x45670123); b.WriteDoubleWord(0x52002004, 0xCDEF89AB); assert b.ReadDoubleWord(0x52002000 + 12) & 1 == 0"
+cpu AssembleBlock 0x20000000 "ldr r0, =0x08000000; ldr r1, =0x12345678; str r1, [r0, #0]; str r1, [r0, #4]; str r1, [r0, #8]; str r1, [r0, #12]; str r1, [r0, #16]; str r1, [r0, #20]; str r1, [r0, #24]; str r1, [r0, #28]; b ."
+physicalFlash EndHostLoading
+sysbus WriteDoubleWord 1375739916 2
+cpu SetRegister 13 0x2001fff0
+cpu PC 0x20000000
+emulation RunFor "0.001s"
+python "assert f.GetProgramCount() == 1; assert b.ReadDoubleWord(0x08000000) == 0x12345678; assert b.ReadDoubleWord(0x52002000 + 16) & 0x10000; b.WriteDoubleWord(0x52002000 + 20, 0x10000); assert b.ReadDoubleWord(0x52002000 + 16) == 0; b.WriteDoubleWord(0x52002000 + 12, 132); assert b.ReadDoubleWord(0x08000000) == 0xffffffff; assert f.GetEraseCount() == 1"
+python "assert b.ReadDoubleWord(0x5200210c) & 1; b.WriteDoubleWord(0x5200210c, 132); assert f.GetEraseCount() == 1; b.WriteDoubleWord(0x52002104, 0x45670123); b.WriteDoubleWord(0x52002104, 0xCDEF89AB); b.WriteDoubleWord(0x5200210c, 132); assert f.GetEraseCount() == 2; assert b.ReadDoubleWord(0x52002110) & 0x10000; b.WriteDoubleWord(0x52002114, 0x10000); assert b.ReadDoubleWord(0x52002110) == 0; assert b.ReadDoubleWord(0x52002010) & 0x10000"
+python "b.WriteDoubleWord(136183808, 0x12345678); b.WriteDoubleWord(136183804, 0x87654321); b.WriteDoubleWord(1375740172, 1924); assert b.ReadDoubleWord(136183808) == 0xffffffff; assert b.ReadDoubleWord(136183804) == 0x87654321"
+cpu AssembleBlock 0x20000100 "ldr r0, =135266560; ldr r1, =0x12345678; str r1, [r0, #0]; str r1, [r0, #4]; str r1, [r0, #8]; str r1, [r0, #12]; str r1, [r0, #16]; str r1, [r0, #20]; str r1, [r0, #24]; str r1, [r0, #28]; b ."
+sysbus WriteDoubleWord 1375740172 2
+cpu Reset
+cpu SetRegister 13 0x2001fff0
+cpu PC 0x20000100
+emulation RunFor "0.001s"
+python "assert f.GetProgramCount() == 2; assert b.ReadDoubleWord(135266560) == 0x12345678; f.Reset(); assert b.ReadDoubleWord(135266560) == 0x12345678; assert b.ReadDoubleWord(1375739916) & 1"
+python "b.WriteDoubleWord(1375740164, 0x45670123); b.WriteDoubleWord(1375740164, 0xCDEF89AB); f.ArmPowerCut(f.GetOperationCount() + 1); b.WriteDoubleWord(1375740172, 132); assert f.GetPowerCutTriggered(); assert b.ReadDoubleWord(135266560) == 0x12345678"
+cpu IsHalted true
+python "print('STM32H7_FLASH_PASS')"
+quit

@@ -1,0 +1,24 @@
+# Isolate power-cut tests in their own Renode process.
+mach create "stm32h7rs"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h7rs.repl
+machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/stm32h7rs-flash.repl
+python "b = monitor.Machine['sysbus']; f = monitor.Machine['sysbus.physicalFlash']; assert b.ReadDoubleWord(0x52002000 + 16) & 1; b.WriteDoubleWord(0x52002004, 0x45670123); b.WriteDoubleWord(0x52002004, 0xCDEF89AB); assert b.ReadDoubleWord(0x52002000 + 16) & 1 == 0"
+cpu AssembleBlock 0x20000000 "ldr r0, =0x08000000; ldr r1, =0x12345678; str r1, [r0, #0]; str r1, [r0, #4]; str r1, [r0, #8]; str r1, [r0, #12]; b ."
+physicalFlash EndHostLoading
+sysbus WriteDoubleWord 1375739920 2
+cpu SetRegister 13 0x2001fff0
+cpu PC 0x20000000
+emulation RunFor "0.001s"
+python "assert f.GetProgramCount() == 1; assert b.ReadDoubleWord(0x08000000) == 0x12345678; assert b.ReadDoubleWord(0x52002000 + 36) & 0x10000; b.WriteDoubleWord(0x52002000 + 40, 0x10000); assert b.ReadDoubleWord(0x52002000 + 36) == 0; b.WriteDoubleWord(0x52002000 + 16, 36); assert b.ReadDoubleWord(0x08000000) == 0xffffffff; assert f.GetEraseCount() == 1"
+python "b.WriteDoubleWord(134275072, 0x12345678); b.WriteDoubleWord(134275068, 0x87654321); b.WriteDoubleWord(1375739920, 484); assert b.ReadDoubleWord(134275072) == 0xffffffff; assert b.ReadDoubleWord(134275068) == 0x87654321"
+cpu AssembleBlock 0x20000100 "ldr r0, =134217984; ldr r1, =0x12345678; str r1, [r0, #0]; str r1, [r0, #4]; str r1, [r0, #8]; str r1, [r0, #12]; b ."
+sysbus WriteDoubleWord 1375739920 2
+cpu Reset
+cpu SetRegister 13 0x2001fff0
+cpu PC 0x20000100
+emulation RunFor "0.001s"
+python "assert f.GetProgramCount() == 2; assert b.ReadDoubleWord(134217984) == 0x12345678; f.Reset(); assert b.ReadDoubleWord(134217984) == 0x12345678; assert b.ReadDoubleWord(1375739920) & 1"
+python "b.WriteDoubleWord(1375739908, 0x45670123); b.WriteDoubleWord(1375739908, 0xCDEF89AB); f.ArmPowerCut(f.GetOperationCount() + 1); b.WriteDoubleWord(1375739920, 36); assert f.GetPowerCutTriggered(); assert b.ReadDoubleWord(134217984) == 0x12345678"
+cpu IsHalted true
+python "print('STM32H7RS_FLASH_PASS')"
+quit

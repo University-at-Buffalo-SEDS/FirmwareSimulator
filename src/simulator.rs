@@ -272,6 +272,13 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
             ArchitectureKind::Stm32 => 16 * 16,
             ArchitectureKind::Stm32g4 => 7 * 16,
             ArchitectureKind::Stm32h5 => 8 * 16,
+            ArchitectureKind::Stm32h7 => {
+                if layout.resolve_mcu_descriptor()?.flash_profile == "stm32h7rs" {
+                    16 * 16
+                } else {
+                    11 * 16
+                }
+            }
             ArchitectureKind::Stm32u5 => 9 * 16,
         };
         ensure!(
@@ -287,6 +294,8 @@ fn validate_machine_config(layout: &BoardLayout) -> Result<()> {
         );
         let expected = if layout.architecture == ArchitectureKind::Stm32g4 {
             ["dma1", "dma2"].as_slice()
+        } else if layout.architecture == ArchitectureKind::Stm32h7 {
+            [].as_slice()
         } else {
             ["gpdma"].as_slice()
         };
@@ -481,6 +490,9 @@ pub fn run(layout: &BoardLayout, root: &Path, seed: u64) -> Result<SimulationRep
                     "Cortex-M33 SAU attribution protects configured flash/RAM regions; STM32 GTZC peripheral/MPC register programming is not a complete model".into(),
                     "strict MMIO rejects unmapped addresses; implemented peripheral models may still return reset values for unsupported register offsets".into(),
                 ];
+                if layout.architecture == ArchitectureKind::Stm32h7 {
+                    values.push("H7 profiles execute the Cortex-M7 only; secondary Cortex-M4, inter-core IPC, external XIP flash, RAM repartitioning, DMA, cache coherency, graphics and cryptographic accelerators are not modeled; native H7 FDCAN completes transmissions without simulating missing bus acknowledgments".into());
+                }
                 if !updater_and_reboot_executed_at_each_cut {
                     values.push("the real updater and bootloader were not rerun at every flash operation; enable firmware_driven OTA and every_flash_operation to perform that matrix".into());
                 }

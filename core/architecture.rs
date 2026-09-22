@@ -1,4 +1,4 @@
-use crate::layout::MemoryLayout;
+use crate::layout::{MemoryLayout, MemoryRegion};
 use anyhow::{ensure, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,9 @@ pub struct McuDescriptor {
     pub flash_size: u64,
     pub ram_base: u64,
     pub ram_size: u64,
+    /// Physical banks for devices with non-contiguous RAM.
+    #[serde(default)]
+    pub ram_regions: Vec<MemoryRegion>,
     pub erase_size: u64,
     pub write_alignment: u64,
     pub trustzone_capable: bool,
@@ -82,7 +85,7 @@ impl McuDescriptor {
         ensure!(
             matches!(
                 self.flash_profile.as_str(),
-                "stm32g4" | "stm32h5" | "stm32u5"
+                "stm32g4" | "stm32h5" | "stm32u5" | "stm32h7" | "stm32h7ab" | "stm32h7rs"
             ),
             "MCU {} uses unsupported flash_profile {}",
             self.name,
@@ -94,6 +97,34 @@ impl McuDescriptor {
                 && self.erase_size.is_power_of_two()
                 && self.write_alignment.is_power_of_two(),
             "MCU {} has invalid memory or flash geometry",
+            self.name
+        );
+        let mut total = 0u64;
+        for (index, bank) in self.ram_regions.iter().enumerate() {
+            let end = bank
+                .base
+                .checked_add(bank.size)
+                .ok_or_else(|| anyhow::anyhow!("MCU {} RAM bank overflows", self.name))?;
+            ensure!(bank.size > 0, "MCU {} has an empty RAM bank", self.name);
+            for prior in &self.ram_regions[..index] {
+                ensure!(
+                    bank.base >= prior.base + prior.size || end <= prior.base,
+                    "MCU {} has overlapping RAM banks",
+                    self.name
+                );
+            }
+            total = total
+                .checked_add(bank.size)
+                .ok_or_else(|| anyhow::anyhow!("MCU {} RAM capacity overflows", self.name))?;
+        }
+        ensure!(
+            self.ram_regions.is_empty() || total == self.ram_size,
+            "MCU {} RAM bank sizes do not match ram_size",
+            self.name
+        );
+        ensure!(
+            self.ram_base.checked_add(self.ram_size).is_some(),
+            "MCU {} RAM range overflows",
             self.name
         );
         Ok(())
@@ -113,6 +144,7 @@ pub enum ArchitectureKind {
     Stm32,
     Stm32g4,
     Stm32h5,
+    Stm32h7,
     Stm32u5,
 }
 
@@ -122,6 +154,7 @@ impl fmt::Display for ArchitectureKind {
             Self::Stm32 => "stm32",
             Self::Stm32g4 => "stm32g4",
             Self::Stm32h5 => "stm32h5",
+            Self::Stm32h7 => "stm32h7",
             Self::Stm32u5 => "stm32u5",
         })
     }
@@ -149,6 +182,12 @@ impl Architecture {
                 vector_alignment: super::stm32g4::VECTOR_ALIGNMENT,
                 default_flash_size: super::stm32g4::DEFAULT_FLASH_SIZE,
                 default_ram_size: super::stm32g4::DEFAULT_RAM_SIZE,
+            },
+            ArchitectureKind::Stm32h7 => Self {
+                kind,
+                vector_alignment: 0x400,
+                default_flash_size: 2 * 1024 * 1024,
+                default_ram_size: 128 * 1024,
             },
             ArchitectureKind::Stm32h5 => Self {
                 kind,
@@ -311,7 +350,13 @@ impl Architecture {
         for region in &memory.ram_regions {
             let end = region.base + region.size;
             ensure!(
-                region.base >= physical_ram_base && end <= physical_ram_end,
+                if mcu.ram_regions.is_empty() {
+                    region.base >= physical_ram_base && end <= physical_ram_end
+                } else {
+                    mcu.ram_regions
+                        .iter()
+                        .any(|bank| region.base >= bank.base && end <= bank.base + bank.size)
+                },
                 "RAM region {} is outside {} physical SRAM",
                 region.name,
                 mcu.name

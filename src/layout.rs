@@ -90,6 +90,7 @@ fn normalize_legacy_layout(value: &mut serde_json::Value) -> Result<()> {
         let mcu = match architecture.as_str() {
             "stm32g4" => "stm32g491",
             "stm32h5" => "stm32h523",
+            "stm32h7" => "stm32h743",
             "stm32u5" => "stm32u585",
             other => bail!("cannot infer an MCU for legacy architecture {other}"),
         };

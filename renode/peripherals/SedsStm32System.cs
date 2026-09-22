@@ -10,7 +10,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         public SedsStm32Rcc(string variant)
         {
-            if(variant != "g4" && variant != "h5" && variant != "u5") throw new ArgumentException("unknown RCC variant");
+            if(variant != "g4" && variant != "h5" && variant != "u5" && variant != "h7" && variant != "h7rs") throw new ArgumentException("unknown RCC variant");
             this.variant = variant;
             Reset();
         }
@@ -23,8 +23,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             {
                 if(variant == "g4") value |= 0x400u | ((value & (1u << 24)) << 1);
                 else if(variant == "h5") value |= 5u | ((value & 0x15011101u) << 1);
+                else if(variant == "h7" || variant == "h7rs") value |= 4u | ((value & 0x15011080u) << 1);
                 else value |= 0x500u | ((value & 0x05011101u) << 1);
             }
+            else if((variant == "h7" || variant == "h7rs") && offset == 0x10) value = (value & ~0x38u) | ((value & 7u) << 3);
             else if(variant == "g4" && offset == 0x08) value = (value & ~0xcu) | ((value & 3u) << 2);
             else if(variant == "g4" && offset == 0x98 && (value & 1) != 0) value |= 2;
             else if(variant == "h5" && offset == 0x1c) value = (value & ~0x18u) | ((value & 3u) << 3);
@@ -38,7 +40,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             registers[offset] = value;
             writes++;
-            if((variant == "g4" && offset == 0x08) || (variant != "g4" && offset == 0x1c))
+            if((variant == "g4" && offset == 0x08)
+                || ((variant == "h7" || variant == "h7rs") && offset == 0x10)
+                || ((variant == "h5" || variant == "u5") && offset == 0x1c))
                 clockSwitches++;
         }
 
@@ -56,7 +60,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         public SedsStm32Pwr(string variant)
         {
-            if(variant != "g4" && variant != "h5" && variant != "u5") throw new ArgumentException("unknown PWR variant");
+            if(variant != "g4" && variant != "h5" && variant != "u5" && variant != "h7" && variant != "h7rs") throw new ArgumentException("unknown PWR variant");
             this.variant = variant;
         }
 
@@ -64,7 +68,15 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             uint value;
             registers.TryGetValue(offset, out value);
-            if(variant == "h5")
+            if(variant == "h7")
+            {
+                if(offset == 0x04 || offset == 0x18) value |= 1u << 13;
+            }
+            else if(variant == "h7rs")
+            {
+                if(offset == 0x04 || offset == 0x14) value |= 2u;
+            }
+            else if(variant == "h5")
             {
                 value |= 1u << 13;
                 if(offset == 0x14) value |= 1u << 3;
@@ -101,7 +113,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         public SedsStm32Syscfg(string variant)
         {
-            if(variant != "g4" && variant != "h5" && variant != "u5") throw new ArgumentException("unknown SYSCFG variant");
+            if(variant != "g4" && variant != "h5" && variant != "u5" && variant != "h7" && variant != "h7rs") throw new ArgumentException("unknown SYSCFG variant");
             this.variant = variant;
         }
 
