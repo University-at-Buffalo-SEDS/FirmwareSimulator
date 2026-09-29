@@ -34,7 +34,7 @@ fn release_host_pty_exclusive(guard: &fs::File) -> Result<()> {
     // SIGKILL cannot run serialport's Drop/TIOCNXCL. Unlike a real machine
     // reboot, the simulator keeps the PTY master alive in Renode, so TIOCEXCL
     // survives the dead host. Clear it only after that host has been reaped.
-    let result = unsafe { libc::ioctl(guard.as_raw_fd(), libc::TIOCNXCL) };
+    let result = unsafe { libc::ioctl(guard.as_raw_fd(), libc::TIOCNXCL as _) };
     if result < 0 {
         return Err(std::io::Error::last_os_error()).context("releasing rebooted host UART PTY");
     }
@@ -230,7 +230,10 @@ struct HostRuntime {
 fn exited_host(hosts: &mut [HostRuntime]) -> Result<Option<String>> {
     for host in hosts {
         if let Some(status) = host.child.try_wait()? {
-            return Ok(Some(format!("host node {} exited early with {status}", host.name)));
+            return Ok(Some(format!(
+                "host node {} exited early with {status}",
+                host.name
+            )));
         }
     }
     Ok(None)
@@ -935,16 +938,30 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     for event in &topology.can_link_events {
-        ensure!(event.after_sample < topology.sample_count, "CAN link event is outside the run");
-        ensure!(topology.nodes.iter().any(|node| node.name == event.node),
-            "CAN link event references unknown firmware node {}", event.node);
-        ensure!(topology.links.iter().any(|link| link.name == event.link
-            && matches!(link.kind, LinkKind::Can)
-            && link.endpoints.iter().any(|ep| ep.node == event.node && ep.peripheral == event.peripheral)),
-            "CAN link event references an unlinked endpoint");
+        ensure!(
+            event.after_sample < topology.sample_count,
+            "CAN link event is outside the run"
+        );
+        ensure!(
+            topology.nodes.iter().any(|node| node.name == event.node),
+            "CAN link event references unknown firmware node {}",
+            event.node
+        );
+        ensure!(
+            topology.links.iter().any(|link| link.name == event.link
+                && matches!(link.kind, LinkKind::Can)
+                && link
+                    .endpoints
+                    .iter()
+                    .any(|ep| ep.node == event.node && ep.peripheral == event.peripheral)),
+            "CAN link event references an unlinked endpoint"
+        );
     }
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
+    // Probe records must not share a stream with asynchronous device logs.
+    let probe_path = scratch.path().join("memory-probes.txt");
+    fs::write(&probe_path, "").context("creating bay probe capture")?;
     let mut script = String::new();
     let mut node_layouts = Vec::new();
     let mut node_reset_vectors = BTreeMap::new();
@@ -1125,7 +1142,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             (firmware_msp, firmware_pc, firmware_vtor, elf),
         );
     }
-    for event in topology.can_link_events.iter().filter(|event| event.after_sample == 0) {
+    for event in topology
+        .can_link_events
+        .iter()
+        .filter(|event| event.after_sample == 0)
+    {
         script += &render_can_link_event(event);
     }
     if !topology.host_nodes.is_empty() {
@@ -1148,10 +1169,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         for (node_name, layout) in &node_layouts {
             script += &format!("mach set \"{}\"\n", safe(node_name));
             for probe in &layout.execution.memory_probes {
-                script += &format!(
-                    "echo \"SEDS_BAY_PROBE {} {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
-                    safe(node_name), probe.name, sample, probe.symbol
-                );
+                script += &render_probe_capture(
+                    &probe_path,
+                    node_name,
+                    &probe.name,
+                    sample,
+                    &probe.symbol,
+                )?;
             }
         }
         for event in topology
@@ -1170,7 +1194,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 event.acknowledged
             );
         }
-        for event in topology.can_link_events.iter().filter(|event| event.after_sample == sample + 1) {
+        for event in topology
+            .can_link_events
+            .iter()
+            .filter(|event| event.after_sample == sample + 1)
+        {
             script += &render_can_link_event(event);
         }
         for reboot in topology.reboots.iter().filter(|event| {
@@ -1216,6 +1244,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut child = Command::new(&renode)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script_path.display()))
+        .env("SEDS_SIM_PROBE_CAPTURE", &probe_path)
         // Renode's redirected console input handler must not observe EOF during
         // a long run. Child::wait closes an internally owned stdin handle, so
         // take and retain this private pipe below until emulation completes.
@@ -1349,7 +1378,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         if let Some(error) = exited_host(&mut host_children)? {
             eprintln!("[SIM] {error}; stopping firmware execution to collect diagnostics");
             let _ = child.kill();
-            break child.wait().context("reaping simulator after host failure")?;
+            break child
+                .wait()
+                .context("reaping simulator after host failure")?;
         }
         let completed_sample = fs::read_to_string(&sample_path)
             .ok()
@@ -1534,12 +1565,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
     }
     println!("[SIM] Final CPU positions:\n{}", register_dump.join("\n"));
+    let probe_output = fs::read_to_string(&probe_path).context("reading bay probe capture")?;
     let mut memory_profiles = BTreeMap::new();
     for (node_name, layout) in &node_layouts {
         let profiles = parse_memory_profiles(
             node_name,
             layout,
-            &combined,
+            &probe_output,
             topology.sample_count,
             topology.enforce_end_drop,
             &topology
@@ -1555,7 +1587,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .map(|(name, output)| format!("{name}:\n{output}"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            anyhow::anyhow!("{error:#}\n\nHost diagnostics:\n{host_detail}")
+            let probes = raw_probe_diagnostics(&probe_output);
+            anyhow::anyhow!("{error:#}\n\nAll-node probe observations:\n{probes}\n\nHost diagnostics:\n{host_detail}")
         })?;
         memory_profiles.insert(node_name.clone(), profiles);
     }
@@ -1779,7 +1812,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 if to < from || gain > maximum_gain {
                     assertion_failures.push(format!(
                         "{}: counter {} -> {} exceeds maximum gain {} or reset unexpectedly",
-                        assertion.name, from, to, maximum_gain));
+                        assertion.name, from, to, maximum_gain
+                    ));
                 }
             }
             if gain < minimum_gain {
@@ -1936,6 +1970,69 @@ fn observe_endpoint_probe(
     Ok(Some(report.maximum_observed))
 }
 
+fn render_probe_capture(
+    path: &Path,
+    node: &str,
+    probe: &str,
+    sample: usize,
+    symbol: &str,
+) -> Result<String> {
+    let marker = format!("SEDS_BAY_PROBE {} {probe} {sample}", safe(node));
+    let python = format!(
+        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}))) + chr(10))",
+        serde_json::to_string(&path.to_string_lossy())?,
+        serde_json::to_string(&marker)?,
+        serde_json::to_string(symbol)?,
+    );
+    Ok(format!("python {}\n", serde_json::to_string(&python)?))
+}
+
+fn validate_probe_indices(indexed: &[(usize, u32)], sample_count: usize) -> Result<()> {
+    ensure!(
+        indexed.len() == sample_count,
+        "returned {} of {sample_count} samples",
+        indexed.len()
+    );
+    for (expected, (actual, _)) in indexed.iter().enumerate() {
+        ensure!(
+            *actual == expected,
+            "missing or duplicate sample: expected index {expected}, found {actual}"
+        );
+    }
+    Ok(())
+}
+
+fn raw_probe_diagnostics(output: &str) -> String {
+    let mut observations = BTreeMap::<String, Vec<String>>::new();
+    for block in output.split("SEDS_BAY_PROBE ").skip(1) {
+        let mut lines = block.lines();
+        let fields: Vec<_> = lines
+            .next()
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect();
+        if fields.len() != 3 {
+            continue;
+        }
+        let value = lines
+            .map(str::trim)
+            .find_map(|line| u32::from_str_radix(line.strip_prefix("0x")?, 16).ok());
+        observations
+            .entry(format!("{}.{}", fields[0], fields[1]))
+            .or_default()
+            .push(format!(
+                "{}={}",
+                fields[2],
+                value.map_or("missing".into(), |v| v.to_string())
+            ));
+    }
+    observations
+        .into_iter()
+        .map(|(name, values)| format!("{name}: {}", values.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn parse_memory_profiles(
     node_name: &str,
     layout: &BoardLayout,
@@ -1974,12 +2071,8 @@ fn parse_memory_profiles(
             cursor = sample_end;
         }
         indexed.sort_unstable_by_key(|(sample, _)| *sample);
-        ensure!(
-            indexed.len() == sample_count,
-            "node {node_name} probe {} returned {} of {sample_count} samples",
-            probe.name,
-            indexed.len()
-        );
+        validate_probe_indices(&indexed, sample_count)
+            .with_context(|| format!("node {node_name} probe {}", probe.name))?;
         let samples: Vec<u32> = indexed.into_iter().map(|(_, value)| value).collect();
         ensure!(
             layout.execution.memory_probe_warmup_samples < samples.len(),
@@ -2134,6 +2227,36 @@ mod pico_fi_tests {
     use super::*;
 
     #[test]
+    fn probe_capture_uses_a_private_file_and_never_the_console() {
+        let command =
+            render_probe_capture(Path::new("/tmp/probes.txt"), "rf", "pool", 2, "g_pool").unwrap();
+        assert!(command.starts_with("python "));
+        assert!(command.contains("with open("));
+        assert!(command.contains("ReadDoubleWord"));
+        assert!(command.contains("GetSymbolAddress"));
+        assert!(!command.contains("echo"));
+        assert!(!command.contains("print("));
+        assert_eq!(command.lines().count(), 1);
+    }
+
+    #[test]
+    fn missing_duplicate_and_out_of_range_probe_indices_fail_closed() {
+        assert!(validate_probe_indices(&[(0, 1), (1, 2)], 2).is_ok());
+        for bad in [vec![(0, 1)], vec![(0, 1), (0, 2)], vec![(0, 1), (2, 2)]] {
+            assert!(validate_probe_indices(&bad, 2).is_err());
+        }
+    }
+
+    #[test]
+    fn failing_probe_diagnostics_retain_other_boards_and_missing_samples() {
+        let output = "SEDS_BAY_PROBE actuator pool 0\n0x100\nSEDS_BAY_PROBE valve rx 0\n0x12\nSEDS_BAY_PROBE valve rx 1\nmissing\n";
+        assert_eq!(
+            raw_probe_diagnostics(output),
+            "actuator.pool: 0=256\nvalve.rx: 0=18, 1=missing"
+        );
+    }
+
+    #[test]
     fn pico_rejects_bad_lengths_without_losing_next_frame_or_split_sync() {
         let mut state = PicoBridgeState::default();
         state
@@ -2194,6 +2317,26 @@ mod pico_fi_tests {
 
     #[test]
     fn pico_host_disconnects_mid_slot_and_mid_reply_do_not_reset_device_state() {
+        use std::time::Instant;
+        fn expect_disconnect(session: &mut PicoHostSession, state: &mut PicoBridgeState) {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                match session.service(state) {
+                    Ok(false) => return,
+                    Err(error) => {
+                        assert!(matches!(
+                            error.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                        ));
+                        return;
+                    }
+                    Ok(true) => {
+                        assert!(Instant::now() < deadline, "closed host was not detected");
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }
+        }
         let mut state = PicoBridgeState::default();
         enqueue_host_packet(&mut state, vec![0xA5, 0x5A, 1, 0, 42]);
         let (stream, mut peer) = UnixStream::pair().unwrap();
@@ -2202,7 +2345,7 @@ mod pico_fi_tests {
         assert!(session.service(&mut state).unwrap());
         assert!(session.service(&mut state).unwrap());
         drop(peer);
-        assert!(!session.service(&mut state).unwrap());
+        expect_disconnect(&mut session, &mut state);
         assert_eq!(state.host_packets.len(), 1);
 
         let (stream, mut peer) = UnixStream::pair().unwrap();
@@ -2212,12 +2355,12 @@ mod pico_fi_tests {
         let mut slot = [0; 32];
         peer.read_exact(&mut slot).unwrap();
         assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 42]);
-        peer.shutdown(std::net::Shutdown::Read).unwrap();
         peer.write_all(b"R").unwrap();
-        assert_eq!(
-            session.service(&mut state).unwrap_err().kind(),
-            std::io::ErrorKind::BrokenPipe
-        );
+        // Fully close the peer: shutdown(Read) alone does not make the
+        // opposite write fail on every Unix kernel (notably macOS).
+        peer.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(peer);
+        expect_disconnect(&mut session, &mut state);
     }
 
     #[test]
@@ -2421,12 +2564,17 @@ mod pico_fi_tests {
         for code in [0, 7] {
             let mut host = HostRuntime {
                 name: "groundstation".into(),
-                child: Command::new("sh").args(["-c", &format!("exit {code}")]).spawn().unwrap(),
+                child: Command::new("sh")
+                    .args(["-c", &format!("exit {code}")])
+                    .spawn()
+                    .unwrap(),
                 stdout_path: PathBuf::new(),
                 stderr_path: PathBuf::new(),
             };
             host.child.wait().unwrap();
-            let failure = exited_host(std::slice::from_mut(&mut host)).unwrap().unwrap();
+            let failure = exited_host(std::slice::from_mut(&mut host))
+                .unwrap()
+                .unwrap();
             assert!(failure.contains("groundstation"));
             assert!(failure.contains(&code.to_string()));
         }
@@ -2573,8 +2721,11 @@ mod pico_fi_tests {
     #[test]
     fn can_link_loss_detaches_reception_and_restores_acknowledgements() {
         let mut event = CanLinkEvent {
-            node: "valve".into(), peripheral: "fdcan2".into(),
-            link: "fill_can".into(), after_sample: 0, connected: false,
+            node: "valve".into(),
+            peripheral: "fdcan2".into(),
+            link: "fill_can".into(),
+            after_sample: 0,
+            connected: false,
         };
         let detached = render_can_link_event(&event);
         assert!(detached.contains("connector Disconnect sysbus.fdcan2 fill_can"));

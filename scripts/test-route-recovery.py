@@ -8,6 +8,80 @@ from pathlib import Path
 import subprocess
 import time
 
+RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
+
+def configure_restarts(directory, nodes, samples=None):
+    """Restart selected processes/MCUs without restarting their peers."""
+    path = directory / "topology.json"
+    topology = json.loads(path.read_text())
+    count = topology["sample_count"]
+    samples = samples if samples is not None else [(count * 2) // 3]
+    if not nodes or any(node not in RESTART_NODES for node in nodes) or len(set(nodes)) != len(nodes):
+        raise ValueError("Select unique, known restart nodes")
+    if not samples or sorted(set(samples)) != samples or any(s <= 0 or s >= count for s in samples):
+        raise ValueError(f"Restart samples must be unique, increasing, and within 1..{count - 1}")
+    topology["reboots"] = [dict(node=node, after_sample=sample) for sample in samples for node in nodes]
+    # A still-powered MCU cannot demonstrate boot-time flash restoration.
+    # Keep those checks for nodes that actually reboot; retain all traffic,
+    # command latency, allocator and persistence-error checks.
+    topology["assertions"] = [
+        assertion for assertion in topology.get("assertions", [])
+        if assertion.get("node") in nodes
+        or not any(word in assertion["name"].lower() for word in ("restored", "startup buzz"))
+    ]
+    # after_sample counts completed samples; probe indices are zero-based.
+    # A reboot after 8 samples lies between probe indices 7 and 8. Require
+    # fresh execution in the new boot, not growth from the old boot's counter;
+    # never waive that interval or the independent host state ACK.
+    for assertion in topology["assertions"]:
+        if (assertion.get("node") in nodes
+                and assertion.get("probe") == "valve_commands_executed"
+                and assertion.get("minimum_gain") is not None
+                and assertion.get("to_sample") in samples
+                and assertion.get("from_sample") == assertion["to_sample"] - 1):
+            assertion["minimum"] = assertion.pop("minimum_gain")
+            assertion["sample"] = assertion.pop("to_sample")
+            assertion.pop("from_sample")
+    host_runs = 1 + (len(samples) if "groundstation" in nodes else 0)
+    restart_checks = {
+        "GroundStation preference survives discovery and process restart",
+        "GroundStation discovered every board by autonomous name",
+        "GroundStation attributed traffic to every board identity",
+        "GroundStation network graph labelled every board with its own traffic",
+    }
+    for assertion in topology["host_log_assertions"]:
+        if assertion["name"] in restart_checks:
+            assertion["minimum_occurrences"] = host_runs
+    if "gateway" in nodes:
+        qualify_gateway_restart(directory, topology, samples)
+    path.write_text(json.dumps(topology, indent=2))
+
+def qualify_gateway_restart(directory, topology, samples):
+    """A powered-off route can reject submissions, but must recover promptly."""
+    path = directory / "valve.json"
+    layout = json.loads(path.read_text())
+    probes = layout["execution"]["memory_probes"]
+    for probe in probes:
+        if probe["name"] == "umbilical_status_fail":
+            probe.pop("maximum", None)
+    if not any(p["name"] == "status_report_pending" for p in probes):
+        probes.append(dict(name="status_report_pending", symbol="status_report_pending"))
+    assertions = topology.setdefault("assertions", [])
+    assertions.append(dict(name="No Valve status errors before planned Gateway restart",
+        node="valve", probe="umbilical_status_fail", sample=samples[0]-1, maximum=0))
+    for index, sample in enumerate(samples):
+        end = samples[index+1]-1 if index+1 < len(samples) else topology["sample_count"]-1
+        if sample >= end:
+            raise ValueError("Gateway restart requires at least two post-restart samples to prove recovery")
+        assertions.extend([
+            dict(name=f"Valve status errors stop after Gateway restart {index+1}",
+                 node="valve", probe="umbilical_status_fail", maximum_gain=0,
+                 from_sample=sample, to_sample=end),
+            dict(name=f"No stranded Valve status after Gateway restart {index+1}",
+                 node="valve", probe="status_report_pending", sample=end, maximum=0),
+        ])
+    path.write_text(json.dumps(layout, indent=2))
+
 def configure_fault(directory, node):
     path = directory / "topology.json"
     topology = json.loads(path.read_text())
@@ -86,7 +160,15 @@ def main():
     parser.add_argument("--ultra-soak", action="store_true", help="run the normal short gate, then the complete ten-minute seven-board soak")
     parser.add_argument("--restart-regression", action="store_true", help="run the short gate, then a 120-second restart regression (not ten-minute qualification)")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--restart-nodes", nargs="+", choices=RESTART_NODES,
+                        help="override long-test reboot group; unselected peers stay powered")
+    parser.add_argument("--restart-samples", nargs="+", type=int,
+                        help="restart the selected group after these samples (default: two-thirds)")
     args = parser.parse_args()
+    if args.restart_nodes and not (args.ultra_soak or args.restart_regression):
+        parser.error("--restart-nodes requires --restart-regression or --ultra-soak")
+    if args.restart_samples is not None and not args.restart_nodes:
+        parser.error("--restart-samples requires --restart-nodes")
     if args.ultra_soak and args.restart_regression:
         parser.error("choose either --ultra-soak or --restart-regression")
     if (args.ultra_soak or args.restart_regression) and (args.disconnect_node or args.fault_elf):
@@ -130,6 +212,11 @@ def main():
             run_kind = "ten-minute-soak"
         elif "120-second restart regression" in label:
             run_kind = "restart-regression"
+        if args.restart_nodes and run_kind in ("ten-minute-soak", "restart-regression"):
+            configure_restarts(directory, args.restart_nodes, args.restart_samples)
+            run_kind += "-" + "-".join(args.restart_nodes)
+            if args.restart_samples:
+                run_kind += "-samples-" + "-".join(map(str, args.restart_samples))
         if args.fault_elf:
             run_kind += "-negative-control"
         evidence = root / f"route-recovery-{run_kind}.json"

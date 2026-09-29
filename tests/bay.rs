@@ -63,6 +63,16 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     .unwrap();
     let renode = root.join("renode-mock");
     fs::write(&renode, "#!/bin/sh\necho SEDS_NODE_BOOT_a\necho SEDS_NODE_BOOT_b\ni=0\nwhile [ $i -lt 10 ]; do\n  echo SEDS_BAY_PROBE a pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE b pool_available $i\n  echo 0x1000\n  echo SEDS_BAY_PROBE a can_tx $i\n  echo 0x5\n  echo SEDS_BAY_PROBE a can_rx $i\n  echo 0x6\n  echo SEDS_BAY_PROBE b can_tx $i\n  echo 0x6\n  echo SEDS_BAY_PROBE b can_rx $i\n  echo 0x5\n  echo SEDS_BAY_PROBE a topology_mask $i\n  echo 0x2\n  echo SEDS_BAY_PROBE b topology_mask $i\n  echo 0x1\n  i=$((i + 1))\ndone\necho SEDS_NODE a PC\necho 0x08004101\necho SEDS_NODE b PC\necho 0x08004101\necho SEDS_BAY_COMPLETE\n").unwrap();
+    // The fake executor obeys the same dedicated capture channel as Renode.
+    let mock = fs::read_to_string(&renode)
+        .unwrap()
+        .replace("done\n", "done > \"$SEDS_SIM_PROBE_CAPTURE\"\n");
+    // A plausible but false console reading must not influence memory checks.
+    let mock = mock.replace(
+        "echo SEDS_BAY_COMPLETE",
+        "echo SEDS_BAY_PROBE a pool_available 0\necho 0x0\necho SEDS_BAY_COMPLETE",
+    );
+    fs::write(&renode, &mock).unwrap();
     fs::set_permissions(&renode, fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("RENODE", &renode);
     std::env::set_var("FIRMWARE_SIM_CONTAINER", "1");
@@ -74,6 +84,14 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
     assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
     assert_eq!(report.assertion_reports.len(), 2);
+    // Console-only output is not accepted if the dedicated capture is lost.
+    fs::write(
+        &renode,
+        mock.replace("done > \"$SEDS_SIM_PROBE_CAPTURE\"", "done"),
+    )
+    .unwrap();
+    let error = format!("{:#}", bay::run(&topology).unwrap_err());
+    assert!(error.contains("returned 0 of 10 samples"), "{error}");
     // Renode stays at its prompt after an invalid platform include. Holding
     // stdin open must not hide that error indefinitely from the caller.
     fs::write(&renode, "#!/bin/sh\necho \"There was an error executing command 'include @bad.repl'\"\nread ignored\n").unwrap();

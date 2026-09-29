@@ -1,6 +1,26 @@
 # v0.4.12 qualification status
 
-## Current checkpoint (2026-09-16, Jupiter)
+## Current qualification (2026-09-16)
+
+The SEDSNet v4.0.33 source candidate passes all seven firmware builds, the
+16-second linked gate, Gateway-only and fill-group 120-second restart tests,
+and two complete 600-second seven-board/GroundStation soaks. One long run
+restarts only GroundStation twice with the boards powered; the other restarts
+GroundStation alone and then with RF, Power, and Flight. Every scheduled fresh
+Valve/Actuator state response, named discovery, graph/traffic attribution and
+memory threshold passes. No recorded allocator failure, panic or HardFault
+occurred. Response times use the existing scaled host validation clock and do
+not establish hardware latency. See [route recovery](route-recovery.md) for
+measurements, negative controls and retained evidence filenames.
+
+The simulator also rejects missing/duplicate probe observations, preserves
+external GPIO inputs across MCU reset, and accounts for explicitly reset
+command counters without dropping the independent GroundStation state checks.
+This qualification does not replace hardware testing or the separate OTA/SD
+content gates described below. Historical pending/failing entries retain their
+original context and do not supersede this checkpoint.
+
+## Earlier bounded-header checkpoint (2026-09-16)
 
 The bounded-header candidate passed the 16-second gate, the 120-second restart
 regression, and the full 600-second seven-board/GroundStation network soak.

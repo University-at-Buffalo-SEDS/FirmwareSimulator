@@ -3,8 +3,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=05780b4d6126dae2b285e97c92d2522d504550de
-ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.31
+ARG GROUNDSTATION_REF=55ef1a5b8e70d1b77d85ad1db95693d5466a2e5e
+ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.33
 ARG GROUNDSTATION_SEDSNET_GIT_REV=
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \

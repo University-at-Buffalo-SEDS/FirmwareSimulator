@@ -8,6 +8,9 @@ python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candi
 python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --report-node valve
 python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --report-node actuator
 python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --restart-regression --timeout 2400
+python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --restart-regression --restart-nodes groundstation --timeout 2400
+python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --restart-regression --restart-nodes groundstation --restart-samples 4 8 --timeout 2400
+python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --restart-regression --restart-nodes gateway valve actuator daq --timeout 2400
 python3 scripts/test-route-recovery.py --workspace /path/to/boards --image candidate --ultra-soak --timeout 10800
 ```
 
@@ -34,6 +37,24 @@ The separate `--restart-regression` option runs the short gate and then a
 120-second version of the same restart schedule. It is an iteration aid, not
 a substitute for the 600-second qualification. GroundStation resumes the global
 command round after restarting instead of replaying earlier commands in a burst.
+Use `--restart-nodes groundstation` to reproduce service-only restarts while all
+seven boards and the Pico-Fi pair remain powered. Updated board runners first
+restart only GroundStation, then restart it with the avionics bay. Keeping the
+service-only phase separate prevents fresh board announcements from masking
+missing-topology recovery. `--restart-samples 4 8` repeats service restart twice; each
+host process must discover all board names and correctly attribute their traffic.
+Other node groups exercise firmware-only restarts without resetting GroundStation.
+For a planned Gateway reboot, Valve may reject a status submission while its
+upstream route is absent. The test requires zero such errors before the outage,
+no further error-counter growth after the first post-restart sample, no pending
+status at the end of each recovery interval, and the original fresh-command
+responses within their latency bounds. Allocator and fault limits are unchanged.
+External GPIO input voltages survive an MCU reset; clearing them would invent a
+continuity/fault-input failure on otherwise healthy Valve and Actuator hardware.
+The Docker image contracts include a negative-sensitive GPIO reset regression.
+These options preserve the short gate, memory checks, repeated command/state
+responses, and latency limits. A generated scenario is not a passing result:
+inspect the complete run and retain its named topology JSON and output.
 After reconnection, GroundStation also sends close/open/close commands to both
 output boards and requires a fresh matching state response for each round.
 
@@ -147,3 +168,95 @@ Gateway pool low water was 6312 bytes (1024 minimum), Valve 3936 and Actuator
 `PASS: firmware network and route recovery`. This is simulated-time
 qualification of the candidate sources released as SEDSNet v4.0.31, not a
 guarantee of physical hardware behavior.
+
+### SEDSNet v4.0.32 reconnection qualification
+
+The new missing-topology-baseline unit regression passes on v4.0.32 and fails
+on an otherwise unchanged v4.0.31 checkout: the older implementation emits no
+bounded recovery request after the deliberately lost baseline. This negative
+control distinguishes the protocol fix from simply generating more traffic.
+
+The 120-second GroundStation-only restart passed with all seven MCU images and
+the Pico-Fi bridge left running. Named discovery, per-board traffic attribution,
+the network graph, all 20 fresh output-state response rounds, and memory checks
+passed. Evidence: `topology-v4032-gs-only.log`.
+
+The firmware-group restart exposed a simulator GPIO-reset error: external
+continuity/fault inputs were cleared, causing a legitimate firmware safety
+abort. The GPIO contract fails against the old model and passes after the fix.
+With the corrected model, every post-restart Valve and Actuator response arrived
+within the original latency bound. That run still failed its Gateway pool-trend
+threshold, so it is not recorded as an overall pass. Evidence:
+`topology-v4032-fill-restart.log` and `topology-v4032-fill-restart-gpio.log`.
+
+The 600-second repeated GroundStation-only restart run completed but failed
+Actuator's pool-trend threshold: a 3512-byte end drop was reported. Actuator
+remained network-ready at every sample, but that does not satisfy memory
+qualification. Evidence: topology-v4032-gs-repeated-ten-minute.log. The
+Gateway-only rerun also failed its pool-trend threshold (5316 bytes), in
+topology-v4032-gateway-recovery.log. These failures are unresolved; no memory
+threshold has been relaxed.
+
+The updated default mixed restart run failed because RF's network_ready probe
+returned only 11 of 12 required samples (sample 2 missing). Evidence:
+topology-v4032-mixed-restarts.log. Missing observations are not treated as
+passes or filled in. The capture failure needs investigation before that
+scenario can qualify. Hardware was unavailable; none of these results
+constitutes hardware qualification.
+
+### Allocation-maintenance and probe-capture candidate
+
+The next candidate removes a full route-table clone from every discovery poll
+in both SEDSNet routers and relays. A measured regression fails on the previous
+implementation (73,000 allocations in 1,000 idle router polls) and passes with
+zero allocations after the fix, while retaining routes and expiring stale peers.
+The full library suite and all seven Release firmware builds pass.
+
+Linked-bay memory probes now write to a dedicated file inside the simulator
+container instead of sharing stdout with asynchronous peripheral logs. Capture
+must contain exactly one reading per node/probe/sample index; missing,
+duplicate, or out-of-range indices fail. This changes neither firmware
+execution nor memory/latency thresholds.
+
+The updated short gate and 120-second Gateway-only restart regression pass all
+network, command-return and memory assertions. Gateway's pool end-drop was
+20 bytes (previous candidate: 5316 bytes); Actuator's was zero. Evidence:
+discovery-idle-gateway-restart.log. The ten-minute mixed-restart and repeated
+GroundStation-only restart runs remain under qualification.
+
+The 120-second fill-group restart completed with all memory limits and all 20
+fresh command/state responses satisfied, but failed a test-counter assertion:
+Valve's execution count reset from 9 to 3 across its scheduled reboot. This is
+not a monotonic interval. The runner now requires at least one new execution in
+that reboot interval, retaining normal counter-growth assertions elsewhere and
+every independent GroundStation response/latency check. A zero-execution new
+boot still fails. A focused regression covers this distinction and verifies that
+GroundStation-only restarts do not alter the MCU counter assertions. Evidence:
+discovery-idle-fill-restart.log.
+
+The corrected full-group rerun passed its short gate and 120-second scenario,
+including every command/state response, all memory thresholds, and post-reset
+command execution. Gateway pool end-drop was 216 bytes and Actuator's was zero.
+Evidence: discovery-idle-fill-restart-counter.log. This does not replace the
+600-second scenarios.
+
+The 600-second repeated GroundStation-only restart scenario now passes. All
+seven boards remained powered across two service restarts. All 20 fresh
+Valve/Actuator state responses, named discovery, per-board graph attribution,
+and memory/stack thresholds passed. Actuator pool end-drop was 96 bytes
+(previous failing candidate: 3512); Gateway's was 252 bytes. No recorded
+allocator failures, panics, or HardFaults occurred. Observed command response
+times were 29–843 ms using the host validator's existing time scaling, not a
+hardware latency guarantee. Evidence: discovery-idle-gs-repeated-ten-minute.log
+and discovery-idle-gs-repeated-host.log.
+
+The 600-second mixed-restart scenario also passes. It first restarts only
+GroundStation, then GroundStation with RF, Power, and Flight. All 20 scheduled
+command/state responses passed (19–1008 ms with the same host-time scaling),
+as did discovery, graph attribution, persistence and memory thresholds. Gateway
+and Actuator pool end-drop were both zero; all recorded allocator failures,
+panics and HardFault counters stayed zero. Evidence: discovery-idle-ten-minute.log
+and discovery-idle-mixed-host.log. Both scenarios retain the initial 16-second
+gate and exercise seven actual ARM firmware images plus the GroundStation
+binary. These are finite simulation results, not hardware or indefinite-uptime
+guarantees.

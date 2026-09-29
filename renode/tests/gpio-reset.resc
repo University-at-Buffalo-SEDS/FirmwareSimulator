@@ -1,0 +1,4 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+python "g = monitor.Machine[\"sysbus.gpio\"]; g.DrivePin(32, True); g.DrivePin(33, False); g.WriteDoubleWord(0x800, 16); g.WriteDoubleWord(0x814, 4); assert g.ReadDoubleWord(0x810) & 7 == 5; g.Reset(); assert g.ReadDoubleWord(0x800) == 0; assert g.ReadDoubleWord(0x814) == 0; g.WriteDoubleWord(0x80c, 5); assert g.ReadDoubleWord(0x810) & 3 == 1; g.ReleasePin(33); assert g.ReadDoubleWord(0x810) & 3 == 3; print(\"GPIO_EXTERNAL_INPUT_RESET_PASS\")"
+quit

@@ -108,8 +108,9 @@ namespace Antmicro.Renode.Peripherals.GPIOPort
         public void Reset()
         {
             registers.Clear();
-            Array.Clear(inputs, 0, inputs.Length);
-            Array.Clear(driven, 0, driven.Length);
+            // External drivers are not MCU registers. Keep their voltage and
+            // ownership across reset; ReleasePin explicitly disconnects them.
+            // Fresh instances start with zero-initialized, floating inputs.
             foreach(var connection in Connections.Values) connection.Set(false);
         }
 
