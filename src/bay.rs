@@ -151,6 +151,9 @@ pub enum HostLinkTransport {
 }
 #[derive(Debug, Deserialize)]
 pub struct Link {
+    /// UART baud for a modeled Pico pair; must match both firmware ends.
+    #[serde(default = "default_pico_uart_baud")]
+    pub baud_rate: u64,
     pub name: String,
     pub kind: LinkKind,
     pub endpoints: Vec<Endpoint>,
@@ -336,11 +339,15 @@ const PICO_UART_MAX_FRAME: usize = PICO_I2C_PACKET_MAX + 4;
 const PICO_PACKET_QUEUE_DEPTH: usize = 8;
 const PICO_PACKET_QUEUE_BYTES: usize = 8_192;
 const PICO_UART_BAUD: u64 = 115_200;
+fn default_pico_uart_baud() -> u64 {
+    PICO_UART_BAUD
+}
 const PICO_UART_BITS_PER_BYTE: u64 = 10;
 const PICO_UART_EMULATION_PACING_SCALE: u64 = 12;
 
 #[derive(Default)]
 struct PicoBridgeState {
+    uart_baud: Option<u64>,
     host_assembly: Option<(u16, usize, Vec<u8>)>,
     uart_rx: Vec<u8>,
     uart_tx_packets: VecDeque<Vec<u8>>,
@@ -356,13 +363,14 @@ struct PicoBridgeState {
     uart_framing_errors: u32,
 }
 
-fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path) -> Result<()> {
-    run_pico_fi_bridge_until(listener, uart_path, || false)
+fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path, baud: u64) -> Result<()> {
+    run_pico_fi_bridge_until(listener, uart_path, baud, || false)
 }
 
 fn run_pico_fi_bridge_until(
     listener: UnixListener,
     uart_path: &Path,
+    baud: u64,
     mut stop: impl FnMut() -> bool,
 ) -> Result<()> {
     let mut uart = fs::OpenOptions::new()
@@ -371,7 +379,9 @@ fn run_pico_fi_bridge_until(
         .open(uart_path)
         .with_context(|| format!("opening Pico-Fi Gateway UART {}", uart_path.display()))?;
     configure_raw_nonblocking(uart.as_raw_fd())?;
+    ensure!(baud > 0, "Pico UART baud must be positive");
     let mut state = PicoBridgeState {
+        uart_baud: Some(baud),
         next_transfer_id: 1,
         ..Default::default()
     };
@@ -745,7 +755,7 @@ fn step_gateway_uart_tx(
             state.next_uart_tx = Some(
                 now + Duration::from_nanos(
                     1_000_000_000 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
-                        / PICO_UART_BAUD,
+                        / state.uart_baud.unwrap_or(PICO_UART_BAUD),
                 ),
             );
         }
@@ -765,7 +775,7 @@ fn drain_gateway_uart_tx_paced(
 ) -> Result<()> {
     let byte_time = Duration::from_nanos(
         1_000_000_000u64 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
-            / PICO_UART_BAUD,
+            / state.uart_baud.unwrap_or(PICO_UART_BAUD),
     );
     loop {
         let Some(packet) = state.uart_tx_packets.front() else {
@@ -1035,7 +1045,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     .path()
                     .join(format!("{}.i2c.sock", safe(&link.name)));
                 host_serial_paths.insert(link.name.clone(), socket.clone());
-                pico_bridges.push((link.name.clone(), path, socket));
+                ensure!(link.baud_rate > 0, "Pico UART baud must be positive");
+                pico_bridges.push((link.name.clone(), path, socket, link.baud_rate));
             } else {
                 host_serial_paths.insert(link.name.clone(), path);
             }
@@ -1280,7 +1291,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     .with_context(|| format!("making host UART PTY usable: {}", path.display()))?;
             }
         }
-        for (name, uart_path, socket_path) in pico_bridges {
+        for (name, uart_path, socket_path, baud) in pico_bridges {
             let listener = UnixListener::bind(&socket_path).with_context(|| {
                 format!(
                     "creating simulated Pico-Fi I2C socket {}",
@@ -1290,7 +1301,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             let bridge_name = name.clone();
             let bridge_failure_tx = console_failure_tx.clone();
             thread::spawn(move || {
-                if let Err(error) = run_pico_fi_bridge(listener, &uart_path) {
+                if let Err(error) = run_pico_fi_bridge(listener, &uart_path, baud) {
                     let failure = format!("Pico-Fi bridge {bridge_name} failed: {error:#}");
                     eprintln!("[SIM] {failure}");
                     let _ = bridge_failure_tx.send(failure);
@@ -2416,7 +2427,7 @@ mod pico_fi_tests {
         let ready = Arc::new(AtomicBool::new(false));
         let (worker_stop, worker_ready) = (stop.clone(), ready.clone());
         let worker = thread::spawn(move || {
-            run_pico_fi_bridge_until(listener, &path, || {
+            run_pico_fi_bridge_until(listener, &path, PICO_UART_BAUD, || {
                 worker_ready.store(true, Ordering::Release);
                 worker_stop.load(Ordering::Acquire)
             })

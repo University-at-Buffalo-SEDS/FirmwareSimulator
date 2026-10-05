@@ -42,6 +42,7 @@
       "properties": {
         "name": {"type": "string", "minLength": 1},
         "kind": {"enum": ["can", "uart", "radio", "pico_fi", "routed_serial"]},
+        "baud_rate": {"type": "integer", "minimum": 1, "default": 115200},
         "transport_path": {"type": "array", "items": {"type": "string"}},
         "endpoints": {"type": "array", "minItems": 2, "items": {
           "type": "object", "required": ["node", "peripheral"],

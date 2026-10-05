@@ -11,7 +11,7 @@ namespace Antmicro.Renode.Peripherals.UART
     // STM32G4 USART register model. Renode's F7 model exposes a one-byte RX
     // holding register when G4 FIFO mode is enabled, which drops host bursts
     // before the firmware's ReceiveToIdle DMA/parser can observe them.
-    public sealed class SedsStm32Uart : IDoubleWordPeripheral, IKnownSize, IUART
+    public sealed class SedsStm32Uart : IDoubleWordPeripheral, IBytePeripheral, IKnownSize, IUART
     {
         public SedsStm32Uart(IMachine machine, uint frequency = 170000000)
         {
@@ -36,6 +36,18 @@ namespace Antmicro.Renode.Peripherals.UART
                 UpdateInterrupt();
             };
             Reset();
+        }
+
+        public byte ReadByte(long offset)
+        {
+            // RDR consumes exactly one byte. Do not perform a read/modify/write
+            // of data registers when a byte-sized DMA beat accesses them.
+            return (byte)(ReadDoubleWord(offset & ~3L) >> (8 * (int)(offset & 3)));
+        }
+
+        public void WriteByte(long offset, byte value)
+        {
+            if(offset == 0x28) WriteDoubleWord(offset, value);
         }
 
         public uint ReadDoubleWord(long offset)

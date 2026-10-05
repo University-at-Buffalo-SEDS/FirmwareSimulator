@@ -14,6 +14,7 @@ class Program
     static byte Pattern(int i) => (byte)(i * 73 + (i >> 8));
     static void Main()
     {
+        CheckByteRegisters();
         CheckConcurrentEnqueueDuringTimerDisable();
         var uart = new SedsStm32Uart(new Machine());
         uart.WriteDoubleWord(0, 9 | (1u << 29));
@@ -51,6 +52,23 @@ class Program
             throw new Exception("RX FIFO stalled");
         Console.WriteLine($"PASS: {Count} concurrent TX and {Count} RX bytes preserved exactly");
     }
+    static void CheckByteRegisters()
+    {
+        var uart = new SedsStm32Uart(new Machine());
+        uart.WriteDoubleWord(0, 9);
+        uart.WriteDoubleWord(0x0c, 1476);
+        byte sent = 0;
+        uart.CharReceived += value => sent = value;
+        uart.WriteByte(0x28, 0xa5);
+        if(uart.TransmittedBytes != 0) throw new Exception("DMA bypassed UART wire timing");
+        LimitTimer.Last.Fire();
+        if(sent != 0xa5) throw new Exception("Byte DMA write lost its byte");
+        uart.WriteChar(0x5a);
+        uart.WriteChar(0x42);
+        if(uart.ReadByte(0x24) != 0x5a || uart.ReadDoubleWord(0x24) != 0x42)
+            throw new Exception("Byte RDR consumed the wrong number of bytes");
+        Console.WriteLine("PASS: byte DMA registers preserve data and wire timing");
+    }
     static void CheckConcurrentEnqueueDuringTimerDisable()
     {
         var uart = new SedsStm32Uart(new Machine());
@@ -74,6 +92,7 @@ namespace Antmicro.Renode.Core
 namespace Antmicro.Renode.Peripherals.Bus
 {
     public interface IDoubleWordPeripheral {}
+    public interface IBytePeripheral {}
     public interface IKnownSize {}
 }
 namespace Antmicro.Renode.Peripherals.UART

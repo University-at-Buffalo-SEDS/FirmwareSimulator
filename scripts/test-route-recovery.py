@@ -4,9 +4,36 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import time
+
+def configured_pico_baud(cache):
+    match = re.search(r"^GATEWAY_PICO_UART_BAUD_RATE:STRING=(\d+)$", cache.read_text(), re.MULTILINE)
+    if not match or int(match.group(1)) == 0:
+        raise ValueError("Gateway build must declare a positive Pico UART baud")
+    return int(match.group(1))
+
+def configure_allocator_probes(layout, cache):
+    """Use allocator-specific diagnostics; never turn a missing fault probe into zero."""
+    if not cache.exists() or "TELEMETRY_USE_TLSF:BOOL=ON" not in cache.read_text():
+        return
+    threadx_only = {"small_pool_available", "large_pool_available", "emergency_pool_available",
+                    "alloc_cross_pool_recoveries", "alloc_emergency_recoveries"}
+    probes = layout.get("execution", {}).get("memory_probes", [])
+    for probe in probes:
+        if probe["name"] in threadx_only and any(key in probe for key in
+                ("minimum", "maximum", "max_end_drop", "minimum_interval_gain")):
+            raise ValueError(f"ThreadX-only probe has a qualification bound: {probe['name']}")
+    probes[:] = [p for p in probes if p["name"] not in threadx_only]
+    existing = {p["name"] for p in probes}
+    for name, bounds in (("active", {"minimum": 1}), ("init_failed", {"maximum": 0}),
+                         ("failures", {"maximum": 0}), ("largest_free", {}),
+                         ("live_bytes", {}), ("peak_bytes", {}), ("snapshot_count", {"minimum": 1})):
+        name = "tlsf_" + name
+        if name not in existing:
+            probes.append(dict(name=name, symbol="g_telemetry_" + name, **bounds))
 
 RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
 
@@ -159,12 +186,15 @@ def main():
     parser.add_argument("--fault-elf", help="alternate ELF relative to the output board, for negative controls")
     parser.add_argument("--ultra-soak", action="store_true", help="run the normal short gate, then the complete ten-minute seven-board soak")
     parser.add_argument("--restart-regression", action="store_true", help="run the short gate, then a 120-second restart regression (not ten-minute qualification)")
+    parser.add_argument("--soak-only", action="store_true", help="run only the requested long test; does not qualify the short gate")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--restart-nodes", nargs="+", choices=RESTART_NODES,
                         help="override long-test reboot group; unselected peers stay powered")
     parser.add_argument("--restart-samples", nargs="+", type=int,
                         help="restart the selected group after these samples (default: two-thirds)")
     args = parser.parse_args()
+    if args.soak_only and not (args.ultra_soak or args.restart_regression):
+        parser.error("--soak-only requires --ultra-soak or --restart-regression")
     if args.restart_nodes and not (args.ultra_soak or args.restart_regression):
         parser.error("--restart-nodes requires --restart-regression or --ultra-soak")
     if args.restart_samples is not None and not args.restart_nodes:
@@ -183,6 +213,7 @@ def main():
     def load_built_layout(board, _subdir):
         subdir = "Release" if board.name == "FlightComputer26" else "Release_Script"
         layout = load_layout(board, subdir)
+        configure_allocator_probes(layout, board / "build" / subdir / "CMakeCache.txt")
         fault_repo = {"valve": "ValveBoard26", "actuator": "ActuatorBoard26"}.get(args.disconnect_node)
         if args.fault_elf and board.name == fault_repo:
             layout["artifacts"]["elf"] = args.fault_elf
@@ -202,6 +233,9 @@ def main():
         directory = Path(mount.split(":", 1)[0])
         topology_path = directory / "topology.json"
         topology = json.loads(topology_path.read_text())
+        for link in topology.get("links", []):
+            if link["kind"] == "pico_fi":
+                link["baud_rate"] = configured_pico_baud(root / "gateway-board26/build/Release_Script/CMakeCache.txt")
         for host in topology["host_nodes"]:
             host.setdefault("env", {})["GS_BIND_ADDRESS"] = "127.0.0.1:0"
         topology_path.write_text(json.dumps(topology, indent=2))
@@ -245,11 +279,12 @@ def main():
         @staticmethod
         def say(kind, message):
             print(f"[{kind}] {message}", flush=True)
-    suite.run_network_simulation(UI(), root / "ActuatorBoard26", "stm32g4", "Release_Script")
+    if not args.soak_only:
+        suite.run_network_simulation(UI(), root / "ActuatorBoard26", "stm32g4", "Release_Script")
     if args.ultra_soak or args.restart_regression:
         os.environ["SEDS_FIRMWARE_SIM_SOAK_MS"] = "120000" if args.restart_regression else "600000"
         suite.run_network_simulation(UI(), root / "ActuatorBoard26", "stm32g4", "Release_Script", ultra_soak=True)
-    print("PASS: firmware network and route recovery", flush=True)
+    print("PASS: long test only; short gate not executed" if args.soak_only else "PASS: firmware network and route recovery", flush=True)
 
 if __name__ == "__main__":
     main()

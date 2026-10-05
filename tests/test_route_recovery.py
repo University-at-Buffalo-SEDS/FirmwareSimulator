@@ -11,6 +11,41 @@ recovery = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recovery)
 
 class RouteRecoveryTests(unittest.TestCase):
+    def test_pico_baud_follows_actual_gateway_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "CMakeCache.txt"
+            for baud in (115200, 1000000):
+                cache.write_text(f"GATEWAY_PICO_UART_BAUD_RATE:STRING={baud}\n")
+                self.assertEqual(recovery.configured_pico_baud(cache), baud)
+            for value in ("0", "", "abc"):
+                cache.write_text(f"GATEWAY_PICO_UART_BAUD_RATE:STRING={value}\n")
+                with self.assertRaises(ValueError):
+                    recovery.configured_pico_baud(cache)
+
+    def test_tlsf_keeps_generic_fault_and_memory_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "CMakeCache.txt"
+            original = [dict(name="pool_low_water", symbol="g_telemetry_pool_low_water", minimum=1024),
+                        dict(name="alloc_failures", symbol="g_telemetry_alloc_fail", maximum=0),
+                        dict(name="panics", symbol="g_telemetry_panic_count", maximum=0),
+                        dict(name="small_pool_available", symbol="g_telemetry_small_pool_available")]
+            layout = dict(execution=dict(memory_probes=list(original)))
+            recovery.configure_allocator_probes(layout, cache)
+            self.assertEqual(layout["execution"]["memory_probes"], original)
+            cache.write_text("TELEMETRY_USE_TLSF:BOOL=ON\n")
+            recovery.configure_allocator_probes(layout, cache)
+            probes = layout["execution"]["memory_probes"]
+            self.assertEqual(probes[:3], original[:3])
+            self.assertEqual(next(p for p in probes if p["name"] == "tlsf_failures")["maximum"], 0)
+            self.assertEqual(next(p for p in probes if p["name"] == "tlsf_init_failed")["maximum"], 0)
+            self.assertNotIn(original[3], probes)
+            count = len(probes)
+            recovery.configure_allocator_probes(layout, cache)
+            self.assertEqual(len(probes), count)
+            probes.append(dict(name="emergency_pool_available", minimum=1024))
+            with self.assertRaisesRegex(ValueError, "qualification bound"):
+                recovery.configure_allocator_probes(layout, cache)
+
     def test_command_counter_reset_still_requires_new_execution_and_host_ack(self):
         for nodes, reset in ((["valve"], True), (["groundstation"], False)):
             with self.subTest(nodes=nodes), tempfile.TemporaryDirectory() as tmp:
@@ -107,6 +142,20 @@ class RouteRecoveryTests(unittest.TestCase):
                      mock.patch("sys.argv", ["test-route-recovery", "--workspace", tmp, "--image", "candidate", flag]):
                     recovery.main()
                 self.assertEqual(runs, [(False, None), (True, duration)])
+
+    def test_soak_only_keeps_full_duration_and_does_not_run_short_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = []
+            suite = SimpleNamespace(load_layout_for_build=mock.Mock())
+            suite.run_network_simulation = lambda *args, **kwargs: runs.append(
+                (kwargs.get("ultra_soak", False), recovery.os.environ.get("SEDS_FIRMWARE_SIM_SOAK_MS")))
+            specification = SimpleNamespace(loader=mock.Mock())
+            with mock.patch.object(recovery.importlib.util, "spec_from_file_location", return_value=specification), \
+                 mock.patch.object(recovery.importlib.util, "module_from_spec", return_value=suite), \
+                 mock.patch.dict(recovery.os.environ, {}, clear=True), \
+                 mock.patch("sys.argv", ["test-route-recovery", "--workspace", tmp, "--image", "candidate", "--ultra-soak", "--soak-only"]):
+                recovery.main()
+            self.assertEqual(runs, [(True, "600000")])
 
     def test_fault_preserves_end_to_end_checks_and_requires_failed_submission(self):
         with tempfile.TemporaryDirectory() as tmp:

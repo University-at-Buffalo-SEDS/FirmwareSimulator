@@ -1,0 +1,22 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+machine LoadPlatformDescriptionFromString "dmaTestRam: Memory.MappedMemory @ sysbus 0x20000000 { size: 0x1000 }; dma1: { 0 -> nvic@11 }"
+cpu IsHalted true
+sysbus WriteDoubleWord 0x4000440c 17000
+sysbus WriteDoubleWord 0x40004400 9
+sysbus WriteDoubleWord 0x40004408 0
+python "b = monitor.Machine['sysbus']; [b.WriteByte(0x20000000+i, (i*73)&255) for i in range(32)]"
+sysbus WriteDoubleWord 0x4002000c 32
+sysbus WriteDoubleWord 0x40020010 0x40004428
+sysbus WriteDoubleWord 0x40020014 0x20000000
+sysbus WriteDoubleWord 0x40020008 0x93
+emulation RunFor "0.003s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 32; assert monitor.Machine['sysbus.usart2'].TransmittedBytes == 0; print('UART_DMA_REQUEST_GATE_PASS')"
+sysbus WriteDoubleWord 0x40004408 128
+emulation RunFor "0.016s"
+python "b = monitor.Machine['sysbus']; remaining = b.ReadDoubleWord(0x4002000c); assert 15 <= remaining <= 17; assert b.ReadDoubleWord(0x40020000) & 2 == 0; print('UART_DMA_BOUNDED_PACING_PASS')"
+emulation RunFor "0.040s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 0; assert b.ReadDoubleWord(0x40020000) & 3 == 3; assert monitor.Machine['sysbus.usart2'].TransmittedBytes == 32; assert b.ReadDoubleWord(0xe000e200) & (1<<11); print('UART_DMA_COMPLETE_IRQ_PASS')"
+sysbus WriteDoubleWord 0x40020004 15
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x40020000) == 0; print('UART_DMA_CLEAR_PASS')"
+quit

@@ -13,10 +13,24 @@ rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x40021000
         include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
 pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x40007000
     variant: "g4"
-dma1: DMA.STM32G0DMA @ sysbus 0x40020000
+dma1: DMA.SedsStm32Dma @ sysbus 0x40020000
     numberOfChannels: 7
-dma2: DMA.STM32G0DMA @ sysbus 0x40020400
+    0 -> nvic@11
+    1 -> nvic@12
+    2 -> nvic@13
+    3 -> nvic@14
+    4 -> nvic@15
+    5 -> nvic@16
+    6 -> nvic@17
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Dma.cs
+dma2: DMA.SedsStm32Dma @ sysbus 0x40020400
     numberOfChannels: 5
+    0 -> nvic@56
+    1 -> nvic@57
+    2 -> nvic@58
+    3 -> nvic@59
+    4 -> nvic@60
 dmamux: Miscellaneous.STM32_DMAMUX @ sysbus 0x40020800
     numberOfInputRequestChannels: 128
     numberOfOutputRequestChannels: 16

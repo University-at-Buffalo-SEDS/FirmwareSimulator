@@ -1,6 +1,29 @@
-# v0.4.12 qualification status
+# Qualification status
 
-## Current qualification (2026-09-16)
+## Current codec/arena candidate (2026-10-05; pending)
+
+The SEDSnet development candidate is `9f48a8e`; all seven board host/Python
+and GoogleTest suites pass. The simulator Rust/Python suites and Docker image
+contracts pass, including byte UART DMA request pacing and completion IRQs.
+Native codec pressure passed 600 wall-clock seconds, and native network churn
+passed 600 seconds of protocol time. These are separate from linked ARM runs.
+
+The latest board, GroundStation, and SEDSnet snapshots are isolated on Jupiter
+for allocator OFF/ON comparison. Both gateway variants use 1 Mbaud Pico UART.
+The short baseline fails the UART queue-refusal bound. The compact candidate
+reports no UART queue refusals but fails the DAQ zero-overrun bound with one
+startup overrun. Neither is a ten-minute linked pass; no throughput improvement
+is established. All memory, progress, fresh command ACK and fault bounds remain
+enforced. `--ultra-soak --soak-only` permits a diagnostic long run independently
+of the short gate, and explicitly does not qualify that short gate.
+
+The previous 4.0.33 results below do not qualify current firmware. Initial runs
+also exposed incompatible ThreadX-only probes in TLSF builds and unsupported
+byte DMA writes to USART2; the corrected model preserves physical wire timing
+and bounded buffering. Gateway queue parking uses the plain arena; embedded
+compression remains unqualified due to its workspace cost.
+
+## Historical v0.4.12 qualification (2026-09-16)
 
 The SEDSNet v4.0.33 source candidate passes all seven firmware builds, the
 16-second linked gate, Gateway-only and fill-group 120-second restart tests,
