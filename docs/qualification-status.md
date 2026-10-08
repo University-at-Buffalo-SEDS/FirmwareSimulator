@@ -1,5 +1,42 @@
 # Qualification status
 
+## Production UART DMA checkpoint (2026-10-08)
+
+USART1/2 now model real byte RX/TX DMA, DMAMUX selection, IDLE/overrun,
+circular reload and half/full completion interrupts. Thirteen Renode checks
+cover these paths, including exact bytes when HAL changes interrupt enables
+mid-transfer and DMA2's DMAMUX channel offset. The concurrent UART regression
+preserves 500,000 TX and 500,000 RX bytes. Rust tests, formatting and Clippy pass.
+
+A 30-second virtual-time RF/Power/FC run on Jupiter used hardware firmware
+images (`SEDS_FIRMWARE_SIM_TEST=OFF`), not the legacy UART polling workaround.
+GroundStation's IMU and barometer 5 Hz return-path checks passed; the RF link
+transmitted 413 and received 252 frames. FC sensor timestamps kept advancing,
+and recorded allocator failures and panics remained zero. This is a short
+acquisition/transport result, not a ten-minute soak or hardware timing proof.
+
+A separate 16-second seven-board run discovered all boards and delivered a
+Valve ACK within the test's scaled 2,500 ms bound. It failed the retained FC
+zero-queue-error threshold (one error), reported a managed-variable reliable
+ACK timeout, and missed Gateway traffic/graph attribution. Those failures are
+not waived. Production images lack some simulator-only probes; the omitted
+instrumentation was recorded, so this run is diagnostic rather than full
+qualification. FC's physical image uses SEDSnet 4.1.3; the other snapshots use
+the current 4.1.4 development candidate with pending queue-reclamation changes.
+
+The old DMA model restarted a transfer when HAL disabled its half-transfer
+interrupt, repeating buffer bytes and causing radio CRC errors. That model bug
+is fixed and covered by an exact-byte regression. Future UART validation must
+use hardware images or remove the old board-side polling workarounds; setting
+`SEDS_FIRMWARE_SIM_TEST=ON` alone still selects those workarounds in existing RF
+and Gateway sources.
+
+Evidence on Jupiter: `/home/rylan/seds-return-path-20261008/logs/`, particularly
+`fc-return-dma-ccr.log`, `real-dma-full-bay-ccr.log`,
+`uart-dma2-contract.log`, `uart-dma-final-contracts.log`, and
+`uart-dma-rust-tests.log`. The candidate Docker image is
+`seds-firmware-simulator:uart-dma-20261008`.
+
 ## Current codec/arena candidate (2026-10-05; pending)
 
 The SEDSnet development candidate is `9f48a8e`; all seven board host/Python

@@ -35,6 +35,16 @@ namespace Antmicro.Renode.Peripherals.UART
                 }
                 UpdateInterrupt();
             };
+            receiveTimer = new LimitTimer(machine.ClockSource, frequency, this,
+                "uartRx", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
+            receiveTimer.LimitReached += ReceiveWireByte;
+            idleTimer = new LimitTimer(machine.ClockSource, frequency, this,
+                "uartIdle", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
+            idleTimer.LimitReached += () => {
+                idleTimer.Enabled = false;
+                idle = true;
+                UpdateInterrupt();
+            };
             Reset();
         }
 
@@ -62,7 +72,8 @@ namespace Antmicro.Renode.Peripherals.UART
                 return (TxAvailable ? 1u << 7 : 0u)
                     | (transmitFifo.Count == 0 ? 1u << 6 : 0u)
                     | (1u << 21) | (1u << 22)
-                    | (receiveFifo.Count > 0 ? 1u << 5 : 0u);
+                    | (receiveFifo.Count > 0 ? 1u << 5 : 0u)
+                    | (idle ? 1u << 4 : 0u) | (overrun ? 1u << 3 : 0u);
             case 0x24:
                 if(!receiveFifo.TryDequeue(out var value)) return 0;
                 UpdateInterrupt();
@@ -80,6 +91,10 @@ namespace Antmicro.Renode.Peripherals.UART
             case 0x04: control2 = value; break;
             case 0x08: control3 = value; break;
             case 0x0c: baudRate = value; break;
+            case 0x20: // ICR: write-one-to-clear IDLECF and ORECF.
+                if((value & 16) != 0) idle = false;
+                if((value & 8) != 0) overrun = false;
+                break;
             case 0x18:
                 if((value & (1u << 3)) != 0) receiveFifo.Clear(); // RXFRQ
                 break;
@@ -107,14 +122,49 @@ namespace Antmicro.Renode.Peripherals.UART
 
         public void WriteChar(byte value)
         {
-            receiveFifo.Enqueue(value);
-            UpdateInterrupt();
+            // Host PTYs deliver bursts in wall time. Put bytes onto the
+            // configured virtual wire before exposing RXNE or DMA requests.
+            if((control1 & 5) != 5 || baudRate == 0) return;
+            receiveWire.Enqueue(value);
+            if(!receiveTimer.Enabled)
+            {
+                receiveTimer.Limit = CharacterTicks;
+                receiveTimer.Value = 0;
+                receiveTimer.Enabled = true;
+            }
+        }
+
+        private ulong CharacterTicks { get { return Math.Max(1ul, (ulong)baudRate * 10); } }
+        private void ReceiveWireByte()
+        {
+            if(receiveWire.TryDequeue(out var value) && (control1 & 5) == 5)
+            {
+                var capacity = (control1 & (1u << 29)) != 0 ? 16 : 1;
+                if(receiveFifo.Count < capacity) receiveFifo.Enqueue(value);
+                else if((control3 & (1u << 12)) == 0) overrun = true;
+                idleTimer.Enabled = false;
+                // One frame of inactivity after the final received frame.
+                // The extra tick prevents an IDLE edge between contiguous bytes.
+                idleTimer.Limit = CharacterTicks + 1;
+                idleTimer.Value = 0;
+                idleTimer.Enabled = true;
+                UpdateInterrupt();
+            }
+            if(receiveWire.IsEmpty)
+            {
+                receiveTimer.Enabled = false;
+                if(!receiveWire.IsEmpty) receiveTimer.Enabled = true;
+            }
         }
 
         public void Reset()
         {
             receiveFifo.Clear();
+            receiveWire.Clear();
             transmitFifo.Clear();
+            receiveTimer.Reset(); receiveTimer.Enabled = false;
+            idleTimer.Reset(); idleTimer.Enabled = false;
+            idle = overrun = false;
             transmitTimer.Reset();
             transmitTimer.Enabled = false;
             transmittedBytes = 0;
@@ -131,7 +181,9 @@ namespace Antmicro.Renode.Peripherals.UART
             // RXNEIE/RXFNEIE is bit 5 in CR1 on STM32G4.
             IRQ.Set((receiveFifo.Count > 0 && (control1 & (1u << 5)) != 0)
                 || (TxAvailable && (control1 & (1u << 7)) != 0)
-                || (transmitFifo.Count == 0 && (control1 & (1u << 6)) != 0));
+                || (transmitFifo.Count == 0 && (control1 & (1u << 6)) != 0)
+                || (idle && (control1 & 16) != 0)
+                || (overrun && (control3 & 1) != 0));
         }
 
         public event Action<byte> CharReceived;
@@ -144,7 +196,9 @@ namespace Antmicro.Renode.Peripherals.UART
         private bool TxAvailable { get { return transmitFifo.Count < ((control1 & (1u << 29)) != 0 ? 16 : 1); } }
 
         private readonly uint frequency;
-        private readonly LimitTimer transmitTimer;
+        private readonly LimitTimer transmitTimer, receiveTimer, idleTimer;
+        private readonly ConcurrentQueue<byte> receiveWire = new ConcurrentQueue<byte>();
+        private bool idle, overrun;
         // CPU register accesses, UART input and timer callbacks can execute
         // on different Renode threads. Queue<T> loses head/count updates in
         // that case, replacing valid firmware bytes with stale FIFO contents.

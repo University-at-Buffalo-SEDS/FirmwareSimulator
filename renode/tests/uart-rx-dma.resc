@@ -1,0 +1,84 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+machine LoadPlatformDescriptionFromString "dmaTestRam: Memory.MappedMemory @ sysbus 0x20000000 { size: 0x1000 }"
+cpu IsHalted true
+sysbus WriteDoubleWord 0x4001380c 17000
+sysbus WriteDoubleWord 0x40013800 0x1d
+sysbus WriteDoubleWord 0x40013808 64
+sysbus WriteDoubleWord 0x40020800 24
+sysbus WriteDoubleWord 0x4002000c 16
+sysbus WriteDoubleWord 0x40020010 0x40013824
+sysbus WriteDoubleWord 0x40020014 0x20000000
+sysbus WriteDoubleWord 0x40020008 0x87
+python "u = monitor.Machine['sysbus.usart1']; [u.WriteChar(x) for x in [0x11,0x22,0x33]]"
+emulation RunFor "0.0025s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 14; assert b.ReadDoubleWord(0x20000000) == 0x2211; assert b.ReadDoubleWord(0x4001381c) & 16 == 0; print('UART_RX_DMA_WIRE_PACING_PASS')"
+emulation RunFor "0.002s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 13; assert b.ReadDoubleWord(0x20000000) == 0x332211; assert b.ReadDoubleWord(0x4001381c) & 16; assert b.ReadDoubleWord(0xe000e204) & (1<<5); print('UART_RX_DMA_IDLE_IRQ_PASS')"
+sysbus WriteDoubleWord 0x40013820 16
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4001381c) & 16 == 0; print('UART_IDLE_W1C_PASS')"
+python "u = monitor.Machine['sysbus.usart1']; [u.WriteChar(x) for x in range(4,9)]"
+emulation RunFor "0.006s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 8; assert b.ReadDoubleWord(0x40020000) & 5 == 5; assert b.ReadDoubleWord(0xe000e200) & (1<<11); print('UART_RX_DMA_HALF_IRQ_PASS')"
+# HAL disables HTIE in the half-transfer handler without stopping DMA.
+sysbus WriteDoubleWord 0x40020008 0x83
+python "u = monitor.Machine['sysbus.usart1']; [u.WriteChar(x) for x in range(9,17)]"
+emulation RunFor "0.010s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 0; assert b.ReadDoubleWord(0x40020008) & 1 == 0; assert b.ReadDoubleWord(0x40020000) & 3 == 3; assert b.ReadDoubleWord(0x2000000c) == 0x100f0e0d; print('UART_RX_DMA_NORMAL_COMPLETE_PASS')"
+sysbus WriteDoubleWord 0x40020004 15
+sysbus WriteDoubleWord 0x40013820 16
+sysbus WriteDoubleWord 0x4002000c 4
+sysbus WriteDoubleWord 0x40020014 0x20000020
+sysbus WriteDoubleWord 0x40020008 0xa7
+python "u = monitor.Machine['sysbus.usart1']; [u.WriteChar(x) for x in range(0xa0,0xa6)]"
+emulation RunFor "0.008s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 2; assert b.ReadDoubleWord(0x40020008) & 1; assert b.ReadDoubleWord(0x20000020) == 0xa3a2a5a4; print('UART_RX_DMA_CIRCULAR_WRAP_PASS')"
+sysbus WriteDoubleWord 0x40020800 26
+usart1 WriteChar 0xb1
+emulation RunFor "0.002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4002000c) == 2; print('UART_RX_DMAMUX_GATE_PASS')"
+sysbus WriteDoubleWord 0x40020800 24
+emulation RunFor "0.0002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4002000c) == 1"
+sysbus WriteDoubleWord 0x40013808 0
+usart1 WriteChar 0xb2
+emulation RunFor "0.002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4002000c) == 1; print('UART_RX_DMAR_GATE_PASS')"
+sysbus WriteDoubleWord 0x40013808 64
+emulation RunFor "0.0002s"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 4; assert b.ReadDoubleWord(0x20000020) == 0xb2b1a5a4"
+sysbus WriteDoubleWord 0x40020008 0
+usart1 WriteChar 0xc1
+emulation RunFor "0.002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4002000c) == 4; print('UART_RX_ABORT_GATE_PASS')"
+# RF uses USART1 TX on DMA1 channel 2; exercise that address independently.
+sysbus WriteDoubleWord 0x40013818 8
+sysbus WriteDoubleWord 0x40013808 128
+sysbus WriteDoubleWord 0x20000040 0x44332211
+sysbus WriteDoubleWord 0x40020804 25
+sysbus WriteDoubleWord 0x40020020 4
+sysbus WriteDoubleWord 0x40020024 0x40013828
+sysbus WriteDoubleWord 0x40020028 0x20000040
+python "wire = []; monitor.Machine['sysbus.usart1'].CharReceived += wire.append"
+sysbus WriteDoubleWord 0x4002001c 0x97
+emulation RunFor "0.0021s"
+sysbus WriteDoubleWord 0x4002001c 0x93
+emulation RunFor "0.005s"
+python "assert wire == [0x11,0x22,0x33,0x44]; print('UART_DMA_ACTIVE_CCR_UPDATE_PASS')"
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x40020020) == 0; assert b.ReadDoubleWord(0x40020000) & 0x30 == 0x30; assert monitor.Machine['sysbus.usart1'].TransmittedBytes == 4; assert b.ReadDoubleWord(0xe000e200) & (1<<12); print('USART1_TX_DMA_COMPLETE_IRQ_PASS')"
+usart1 Reset
+dma1 Reset
+python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 0; assert b.ReadDoubleWord(0x40020000) == 0; assert b.ReadDoubleWord(0x4001381c) & 56 == 0; print('UART_DMA_RESET_PASS')"
+# DMA2 starts at DMAMUX channel 7, not channel 0.
+sysbus WriteDoubleWord 0x4000440c 17000
+sysbus WriteDoubleWord 0x40004400 5
+sysbus WriteDoubleWord 0x40004408 64
+sysbus WriteDoubleWord 0x4002081c 26
+sysbus WriteDoubleWord 0x4002040c 1
+sysbus WriteDoubleWord 0x40020410 0x40004424
+sysbus WriteDoubleWord 0x40020414 0x20000060
+sysbus WriteDoubleWord 0x40020408 0x83
+usart2 WriteChar 0x5a
+emulation RunFor "0.002s"
+python "b = monitor.Machine['sysbus']; assert b.ReadByte(0x20000060) == 0x5a; assert b.ReadDoubleWord(0x4002040c) == 0; assert b.ReadDoubleWord(0xe000e204) & (1<<24); print('UART_DMA2_MUX_OFFSET_PASS')"
+quit

@@ -25,6 +25,7 @@ dma1: DMA.SedsStm32Dma @ sysbus 0x40020000
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Dma.cs
 dma2: DMA.SedsStm32Dma @ sysbus 0x40020400
+    muxChannelOffset: 7
     numberOfChannels: 5
     0 -> nvic@56
     1 -> nvic@57
@@ -60,7 +61,7 @@ usart2: UART.SedsStm32Uart @ sysbus 0x40004400
     IRQ -> nvic@38
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Uart.cs
-usart1: UART.STM32F7_USART @ sysbus 0x40013800
+usart1: UART.SedsStm32Uart @ sysbus 0x40013800
     frequency: 170000000
     IRQ -> nvic@37
 spi1: SPI.STM32SPI @ sysbus 0x40013000

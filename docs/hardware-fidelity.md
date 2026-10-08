@@ -24,6 +24,27 @@ transfer behavior; it is not a cycle-accurate SPI bandwidth model. This early
 completion case exposed a firmware lost-wakeup race, now covered by the FC's
 production-code completion test. Electrical sensor noise remains synthetic.
 
+## STM32G4 UART DMA
+
+USART1 and USART2 execute the production UART DMA paths: configured 8N1
+wire timing, bounded receive/transmit FIFOs, RXNE, IDLE and overrun flags,
+write-one-to-clear interrupts, and DMAMUX-selected byte transfers into actual
+firmware memory. DMA maintains remaining counts, circular reload, half/full
+transfer flags and NVIC interrupts. Changing interrupt enables on an active
+channel preserves its transfer position, as STM32 HAL requires.
+
+Renode contracts exercise RX timing, IDLE, normal/circular transfers,
+DMAR/DMAMUX gating, abort, reset, and exact TX bytes across a half-transfer
+interrupt configuration change. The concurrent model test checks 500,000 bytes
+in each direction. These contracts permit hardware images to run without the
+older `SEDS_FIRMWARE_SIM_TEST` UART polling workaround. They do not by themselves
+qualify a complete network or establish hardware throughput.
+
+Only the byte-wide USART1/2 paths used by these boards are covered. Full UART
+prescaler/oversampling, parity, nine-bit data, flow control and electrical radio
+behavior remain outside this validation. The input wire queue bridges host PTY
+scheduling to virtual byte timing; it does not represent extra MCU FIFO memory.
+
 ## Executed behavior
 
 CAN reception is disabled while CCCR.INIT is set, including before firmware

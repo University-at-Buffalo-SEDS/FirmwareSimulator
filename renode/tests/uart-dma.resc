@@ -9,6 +9,7 @@ python "b = monitor.Machine['sysbus']; [b.WriteByte(0x20000000+i, (i*73)&255) fo
 sysbus WriteDoubleWord 0x4002000c 32
 sysbus WriteDoubleWord 0x40020010 0x40004428
 sysbus WriteDoubleWord 0x40020014 0x20000000
+sysbus WriteDoubleWord 0x40020800 27
 sysbus WriteDoubleWord 0x40020008 0x93
 emulation RunFor "0.003s"
 python "b = monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c) == 32; assert monitor.Machine['sysbus.usart2'].TransmittedBytes == 0; print('UART_DMA_REQUEST_GATE_PASS')"
