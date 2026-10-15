@@ -1,5 +1,5 @@
 use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayout};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -8,9 +8,14 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     os::fd::AsRawFd,
     os::unix::net::{UnixListener, UnixStream},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -22,11 +27,22 @@ pub(crate) fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
         .context("retaining the Renode console stdin guard")
 }
 
+// Renode's launcher can spawn a runtime child which inherits its console
+// pipes. Kill the owned process group on failure, otherwise reader joins can
+// wait forever after only the launcher exits.
+fn terminate_simulator(child: &mut Child) {
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
 fn console_execution_failed(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     lower.contains("there was an error executing command")
         || lower.contains("no such command or device")
         || lower.contains("parameters did not match")
+        || lower.contains("seds_iwdg_reset")
         || lower.contains("fatal error")
 }
 
@@ -90,9 +106,19 @@ pub struct CanLinkEvent {
 fn render_can_link_event(event: &CanLinkEvent) -> String {
     format!(
         "mach set \"{}\"\nconnector {} sysbus.{} {}\nsysbus.{} Acknowledged {}\necho \"SEDS_BAY_CAN_LINK {} {} {} {}\"\n",
-        safe(&event.node), if event.connected { "Connect" } else { "Disconnect" },
-        safe(&event.peripheral), safe(&event.link), safe(&event.peripheral),
-        event.connected, safe(&event.node), safe(&event.link), event.after_sample,
+        safe(&event.node),
+        if event.connected {
+            "Connect"
+        } else {
+            "Disconnect"
+        },
+        safe(&event.peripheral),
+        safe(&event.link),
+        safe(&event.peripheral),
+        event.connected,
+        safe(&event.node),
+        safe(&event.link),
+        event.after_sample,
         event.connected
     )
 }
@@ -269,6 +295,7 @@ fn spawn_host_node(
     }
     command.env("GS_NETWORK_VARIABLE_CACHE", variable_cache);
     command.env("FIRMWARE_SIM_SAMPLE_FILE", sample_path);
+    command.env("GS_SIM_CLOCK_FILE", scratch.join("virtual-clock.txt"));
     let stdout_path = scratch.join(format!("{}-stdout.log", safe(&host.name)));
     let stderr_path = scratch.join(format!("{}-stderr.log", safe(&host.name)));
     let open_log = |path: &Path| {
@@ -342,18 +369,14 @@ const PICO_UART_BAUD: u64 = 115_200;
 fn default_pico_uart_baud() -> u64 {
     PICO_UART_BAUD
 }
-const PICO_UART_BITS_PER_BYTE: u64 = 10;
-const PICO_UART_EMULATION_PACING_SCALE: u64 = 12;
 
 #[derive(Default)]
 struct PicoBridgeState {
-    uart_baud: Option<u64>,
     host_assembly: Option<(u16, usize, Vec<u8>)>,
     uart_rx: Vec<u8>,
     uart_tx_packets: VecDeque<Vec<u8>>,
     uart_tx_offset: usize,
     uart_tx_bytes: usize,
-    next_uart_tx: Option<std::time::Instant>,
     host_reads: VecDeque<[u8; PICO_I2C_SLOT_SIZE]>,
     host_packets: VecDeque<Vec<u8>>,
     host_packet_bytes: usize,
@@ -361,10 +384,6 @@ struct PicoBridgeState {
     i2c_to_uart_frames: u32,
     uart_to_i2c_frames: u32,
     uart_framing_errors: u32,
-}
-
-fn run_pico_fi_bridge(listener: UnixListener, uart_path: &Path, baud: u64) -> Result<()> {
-    run_pico_fi_bridge_until(listener, uart_path, baud, || false)
 }
 
 fn run_pico_fi_bridge_until(
@@ -381,7 +400,6 @@ fn run_pico_fi_bridge_until(
     configure_raw_nonblocking(uart.as_raw_fd())?;
     ensure!(baud > 0, "Pico UART baud must be positive");
     let mut state = PicoBridgeState {
-        uart_baud: Some(baud),
         next_transfer_id: 1,
         ..Default::default()
     };
@@ -469,7 +487,7 @@ impl PicoHostSession {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "unknown I2C operation",
-                    ))
+                    ));
                 }
             }
             self.incoming.clear();
@@ -599,7 +617,7 @@ fn read_gateway_uart(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                break
+                break;
             }
             Err(error) => return Err(error).context("reading Gateway UART in Pico-Fi bridge"),
         }
@@ -640,8 +658,12 @@ fn process_gateway_uart_rx(state: &mut PicoBridgeState) -> Result<()> {
             // not a reason to kill either independent Pico or their link.
             state.uart_framing_errors += 1;
             if state.uart_framing_errors <= 10 {
-                eprintln!("[SIM] Pico-Fi UART framing error {}: length {}, header {:02x?}; resynchronizing",
-                    state.uart_framing_errors, frame_length, &state.uart_rx[..4]);
+                eprintln!(
+                    "[SIM] Pico-Fi UART framing error {}: length {}, header {:02x?}; resynchronizing",
+                    state.uart_framing_errors,
+                    frame_length,
+                    &state.uart_rx[..4]
+                );
             }
             state.uart_rx.drain(..4);
             continue;
@@ -729,21 +751,18 @@ fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
 }
 
 fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
-    step_gateway_uart_tx(state, uart, std::time::Instant::now())
+    step_gateway_uart_tx(state, uart)
 }
 
-fn step_gateway_uart_tx(
-    state: &mut PicoBridgeState,
-    uart: &mut impl Write,
-    now: std::time::Instant,
-) -> Result<()> {
-    if state.next_uart_tx.is_some_and(|deadline| now < deadline) {
-        return Ok(());
-    }
+fn step_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut impl Write) -> Result<()> {
     let Some(packet) = state.uart_tx_packets.front() else {
         return Ok(());
     };
-    match uart.write(&packet[state.uart_tx_offset..state.uart_tx_offset + 1]) {
+    // The UART peripheral serializes this buffer using its configured BRR in
+    // virtual time. Pacing individual bytes in wall time as well creates
+    // spurious IDLE interrupts, DMA rearming and lost bytes between characters.
+    // One nonblocking write preserves duplex service and partial-write state.
+    match uart.write(&packet[state.uart_tx_offset..]) {
         Ok(0) => bail!("Gateway UART closed during Pico-Fi transfer"),
         Ok(length) => {
             state.uart_tx_offset += length;
@@ -752,55 +771,11 @@ fn step_gateway_uart_tx(
                 state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(packet.len());
                 state.uart_tx_offset = 0;
             }
-            state.next_uart_tx = Some(
-                now + Duration::from_nanos(
-                    1_000_000_000 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
-                        / state.uart_baud.unwrap_or(PICO_UART_BAUD),
-                ),
-            );
         }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
         Err(error) => return Err(error).context("writing Gateway UART in Pico-Fi bridge"),
     }
-    // Never sleep through a whole UART frame: service the independent UART
-    // receive and host I2C directions between bytes.
     Ok(())
-}
-
-#[cfg(test)]
-fn drain_gateway_uart_tx_paced(
-    state: &mut PicoBridgeState,
-    uart: &mut impl Write,
-    mut wait: impl FnMut(Duration),
-) -> Result<()> {
-    let byte_time = Duration::from_nanos(
-        1_000_000_000u64 * PICO_UART_BITS_PER_BYTE * PICO_UART_EMULATION_PACING_SCALE
-            / state.uart_baud.unwrap_or(PICO_UART_BAUD),
-    );
-    loop {
-        let Some(packet) = state.uart_tx_packets.front() else {
-            return Ok(());
-        };
-        // A PTY accepts the entire frame immediately, unlike the physical
-        // Pico-Fi UART. Renode advances virtual CPU time more slowly than wall
-        // time in a seven-node bay, so scale the physical 8N1 byte interval to
-        // preserve its interrupt cadence in virtual time instead of queuing a
-        // host burst ahead of the emulated receiver.
-        match uart.write(&packet[state.uart_tx_offset..state.uart_tx_offset + 1]) {
-            Ok(0) => bail!("Gateway UART closed during Pico-Fi transfer"),
-            Ok(length) => {
-                state.uart_tx_offset += length;
-                if state.uart_tx_offset == packet.len() {
-                    let packet = state.uart_tx_packets.pop_front().unwrap();
-                    state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(packet.len());
-                    state.uart_tx_offset = 0;
-                }
-                wait(byte_time);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) => return Err(error).context("writing Gateway UART in Pico-Fi bridge"),
-        }
-    }
 }
 
 fn enqueue_host_i2c_slots(state: &mut PicoBridgeState, frame: &[u8]) {
@@ -1102,18 +1077,32 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let firmware_image = node_scratch.join("firmware-flash.bin");
         fs::write(
             &firmware_image,
-            crate::elf::flash_image(
+            crate::elf::validated_factory_image(
+                &root.join(&layout.artifacts.factory),
                 &elf,
                 &layout.memory,
+                firmware_vtor,
                 &format!("node {} firmware", node.name),
             )?,
         )
         .with_context(|| format!("writing node {} flash image", node.name))?;
         let overlay = node_scratch.join("peripherals.repl");
-        fs::write(
-            &overlay,
-            crate::execution::render_peripheral_overlay(&layout)?,
-        )?;
+        fs::write(&overlay, {
+            let mut overlay = crate::execution::render_peripheral_overlay(&layout)?;
+            if node_layouts.is_empty() {
+                overlay += &format!(
+                    "\nsimulationClock: Miscellaneous.SedsSimulationClock\n    path: \"{}\"\n    preinit:\n        include @{}\n",
+                    scratch.path().join("virtual-clock.txt").display(),
+                    PathBuf::from(
+                        env::var_os("FIRMWARE_SIM_ROOT")
+                            .unwrap_or_else(|| root.clone().into_os_string())
+                    )
+                    .join("renode/peripherals/SedsSimulationClock.cs")
+                    .display()
+                );
+            }
+            overlay
+        })?;
         let configured_platform =
             crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
@@ -1123,7 +1112,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
-            if layout.board.strict_mmio { "sysbus UnhandledAccessBehaviour ThrowException\n" } else { "" },
+            if layout.board.strict_mmio {
+                "sysbus UnhandledAccessBehaviour ThrowException\n"
+            } else {
+                ""
+            },
             board_initialization,
             elf.display(),
             firmware_image.display(),
@@ -1140,6 +1133,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .iter()
                 .filter(|endpoint| endpoint.node == node.name)
             {
+                if matches!(link.kind, LinkKind::Can)
+                    && fs::read_to_string(&configured_platform)?.contains("SedsFixedFdcan")
+                {
+                    script += &format!(
+                        "sysbus.{} BusName \"{}\"\n",
+                        safe(&endpoint.peripheral),
+                        safe(&link.name)
+                    );
+                }
                 script += &format!(
                     "connector Connect sysbus.{} {}\n",
                     safe(&endpoint.peripheral),
@@ -1174,13 +1176,35 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     );
     let base_ms = topology.virtual_time_ms / topology.sample_count as u64;
     let remainder_ms = topology.virtual_time_ms % topology.sample_count as u64;
+    let profiled_nodes: Vec<&str> = node_layouts
+        .iter()
+        .filter(|(_, layout)| layout.execution.trace)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let profile_sample = usize::from(topology.sample_count > 1);
     for sample in 0..topology.sample_count {
         let duration_ms = base_ms + u64::from((sample as u64) < remainder_ms);
-        script += &format!("emulation RunFor \"{}s\"\n", duration_ms as f64 / 1000.0);
+        if sample == profile_sample && !profiled_nodes.is_empty() {
+            script += &render_cpu_profile_step(scratch.path(), &profiled_nodes, duration_ms)?;
+        } else {
+            script += &format!("emulation RunFor \"{}s\"\n", duration_ms as f64 / 1000.0);
+        }
         for (node_name, layout) in &node_layouts {
             script += &format!("mach set \"{}\"\n", safe(node_name));
             for probe in &layout.execution.memory_probes {
                 script += &render_probe_capture(
+                    &probe_path,
+                    node_name,
+                    &probe.name,
+                    sample,
+                    &probe.symbol,
+                )?;
+            }
+        }
+        for (node_name, layout) in &node_layouts {
+            script += &format!("mach set \"{}\"\n", safe(node_name));
+            for probe in can_fifo_model_probes(layout) {
+                script += &render_can_fifo_probe_capture(
                     &probe_path,
                     node_name,
                     &probe.name,
@@ -1219,7 +1243,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             let (msp, pc, vtor, elf) = &node_reset_vectors[&reboot.node];
             script += &format!(
                 "mach set \"{}\"\nmachine Reset\nsysbus LoadSymbolsFrom @{}\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\necho \"SEDS_BAY_REBOOT {} {}\"\n",
-                safe(&reboot.node), elf.display(), msp, pc, vtor, safe(&reboot.node), sample + 1
+                safe(&reboot.node),
+                elf.display(),
+                msp,
+                pc,
+                vtor,
+                safe(&reboot.node),
+                sample + 1
             );
         }
         // Publish the sample only after its fault/recovery and reboot events
@@ -1237,6 +1267,28 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             safe(&node.name),
             safe(&node.name)
         );
+        // Capture registers before any reset/teardown. These are read-only
+        // monitor operations, so the firmware image and memory layout stay intact.
+        for register in 0..16 {
+            script += &format!(
+                "echo \"SEDS_NODE {} R{}\"\ncpu GetRegister {}\n",
+                safe(&node.name),
+                register,
+                register
+            );
+        }
+        for (name, address) in [
+            ("ICSR", 0xe000_ed04u32),
+            ("CFSR", 0xe000_ed28),
+            ("HFSR", 0xe000_ed2c),
+        ] {
+            script += &format!(
+                "echo \"SEDS_NODE {} {}\"\nsysbus ReadDoubleWord 0x{:08x}\n",
+                safe(&node.name),
+                name,
+                address
+            );
+        }
     }
     script += "echo \"SEDS_BAY_COMPLETE\"\n";
     let script_path = scratch.path().join("bay.resc");
@@ -1250,9 +1302,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         topology.links.len(),
         topology.virtual_time_ms
     );
+    fs::write(scratch.path().join("virtual-clock.txt"), "0\n")?;
     let sample_path = scratch.path().join("network-sample.txt");
     fs::write(&sample_path, "0\n").context("creating linked-bay sample marker")?;
     let mut child = Command::new(&renode)
+        .process_group(0)
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script_path.display()))
         .env("SEDS_SIM_PROBE_CAPTURE", &probe_path)
@@ -1266,6 +1320,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .context("starting Renode")?;
     let _renode_stdin_guard = keep_console_stdin_open(&mut child)?;
     let (console_failure_tx, console_failure_rx) = mpsc::channel();
+    let bridge_stop = Arc::new(AtomicBool::new(false));
     let mut host_children = Vec::new();
     let mut host_pty_guards = BTreeMap::new();
     if !topology.host_nodes.is_empty() {
@@ -1300,8 +1355,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             })?;
             let bridge_name = name.clone();
             let bridge_failure_tx = console_failure_tx.clone();
+            let worker_stop = bridge_stop.clone();
             thread::spawn(move || {
-                if let Err(error) = run_pico_fi_bridge(listener, &uart_path, baud) {
+                let result = run_pico_fi_bridge_until(listener, &uart_path, baud, || {
+                    worker_stop.load(Ordering::Acquire)
+                });
+                if let Err(error) = result {
+                    if worker_stop.load(Ordering::Acquire) {
+                        return;
+                    }
                     let failure = format!("Pico-Fi bridge {bridge_name} failed: {error:#}");
                     eprintln!("[SIM] {failure}");
                     let _ = bridge_failure_tx.send(failure);
@@ -1342,12 +1404,19 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let stderr = child.stderr.take().context("capturing Renode stderr")?;
     let progress_sample_path = sample_path.clone();
     let stderr_failure_tx = console_failure_tx.clone();
+    let stdout_bridge_stop = bridge_stop.clone();
     let stdout_reader = thread::spawn(move || -> Result<String> {
         let mut captured = String::new();
         for line in BufReader::new(stdout).lines() {
             let line = line?;
             if console_execution_failed(&line) {
                 let _ = console_failure_tx.send(line.clone());
+            }
+            if line.trim() == "SEDS_BAY_COMPLETE" {
+                // Renode closes its PTYs when the script exits. Stop the
+                // simulated cable first; that expected close is not a live
+                // transport failure. Probe/host validation still runs below.
+                stdout_bridge_stop.store(true, Ordering::Release);
             }
             if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
                 println!("[SIM] network sample {progress} complete");
@@ -1381,14 +1450,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             // stdin held open. Stop it so diagnostics reach the test runner.
             // Allow its subsequent exception lines to reach the readers.
             thread::sleep(Duration::from_millis(250));
-            let _ = child.kill();
+            terminate_simulator(&mut child);
         }
         if let Some(status) = child.try_wait()? {
             break status;
         }
         if let Some(error) = exited_host(&mut host_children)? {
             eprintln!("[SIM] {error}; stopping firmware execution to collect diagnostics");
-            let _ = child.kill();
+            terminate_simulator(&mut child);
             break child
                 .wait()
                 .context("reaping simulator after host failure")?;
@@ -1442,6 +1511,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         thread::sleep(Duration::from_millis(20));
     };
+    bridge_stop.store(true, Ordering::Release);
     let mut host_failures = Vec::new();
     let mut host_diagnostics = BTreeMap::new();
     let mut host_outputs = BTreeMap::new();
@@ -1497,6 +1567,40 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stderr reader panicked"))??;
     let combined = format!("{stdout}{stderr}");
+    if let Some(directory) = env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let destination = PathBuf::from(directory).join(format!("bay-{stamp}"));
+        fs::create_dir_all(&destination).context("creating bay diagnostics directory")?;
+        fs::write(destination.join("renode.log"), &combined)?;
+        fs::copy(&script_path, destination.join("bay.resc"))?;
+        if probe_path.exists() {
+            fs::copy(&probe_path, destination.join("memory-probes.txt"))?;
+        }
+        for (name, output) in &host_outputs {
+            fs::write(destination.join(format!("{}-host.log", safe(name))), output)?;
+        }
+        for entry in fs::read_dir(scratch.path())? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "trace")
+            {
+                ensure!(
+                    entry.metadata()?.len() <= 64 * 1024 * 1024,
+                    "CPU trace exceeded the 64 MiB diagnostic artifact limit"
+                );
+                fs::copy(entry.path(), destination.join(entry.file_name()))?;
+            }
+        }
+        println!(
+            "[SIM] Bay diagnostics retained in {}",
+            destination.display()
+        );
+    }
+
     ensure!(
         host_failures.is_empty(),
         "{}\nRenode output:\n{}",
@@ -1519,6 +1623,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         || lower.contains("there was an error executing command")
         || lower.contains("no such command or device")
         || lower.contains("parameters did not match")
+        || lower.contains("seds_iwdg_reset")
     {
         let error_context = combined
             .lines()
@@ -1592,6 +1697,17 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .map(|event| event.after_sample)
                 .collect::<Vec<_>>(),
         )
+        .and_then(|mut profiles| {
+            // Controller lifetime loss counters include startup and survive
+            // firmware resets. Never exclude them with a firmware warm-up.
+            let mut hardware = layout.clone();
+            hardware.execution.memory_probes = can_fifo_model_probes(layout);
+            hardware.execution.memory_probe_warmup_samples = 0;
+            profiles.extend(parse_memory_profiles(
+                node_name, &hardware, &probe_output, topology.sample_count, false, &[],
+            )?);
+            Ok(profiles)
+        })
         .map_err(|error| {
             let host_detail = host_diagnostics
                 .iter()
@@ -1981,6 +2097,44 @@ fn observe_endpoint_probe(
     Ok(Some(report.maximum_observed))
 }
 
+fn can_fifo_model_probes(layout: &BoardLayout) -> Vec<crate::layout::MemoryProbe> {
+    use crate::core::ArchitectureKind;
+    let controllers: &[&str] = match layout.architecture {
+        ArchitectureKind::Stm32g4 => &["fdcan1", "fdcan2"],
+        ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5 => &["fdcan1"],
+        ArchitectureKind::Stm32 | ArchitectureKind::Stm32h7 => &[],
+    };
+    controllers
+        .iter()
+        .map(|controller| crate::layout::MemoryProbe {
+            name: format!("can_fifo_overflow_{controller}"),
+            symbol: (*controller).into(),
+            minimum: None,
+            maximum: Some(0),
+            max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
+        })
+        .collect()
+}
+
+fn render_can_fifo_probe_capture(
+    path: &Path,
+    node: &str,
+    probe: &str,
+    sample: usize,
+    controller: &str,
+) -> Result<String> {
+    let marker = format!("SEDS_BAY_PROBE {} {probe} {sample}", safe(node));
+    let python = format!(
+        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine[{}].LifetimeReceivedOverflowFrames) + chr(10))",
+        serde_json::to_string(&path.to_string_lossy())?,
+        serde_json::to_string(&marker)?,
+        serde_json::to_string(&format!("sysbus.{controller}"))?,
+    );
+    Ok(format!("python {}\n", serde_json::to_string(&python)?))
+}
+
 fn render_probe_capture(
     path: &Path,
     node: &str,
@@ -2011,6 +2165,33 @@ fn validate_probe_indices(indexed: &[(usize, u32)], sample_count: usize) -> Resu
         );
     }
     Ok(())
+}
+
+/// Trace only a short steady-state window. Stack tracing cannot follow every
+/// RTOS context switch and can grow huge synthetic call stacks; flat binary PCs
+/// have a fixed cost per guest instruction and are aggregated offline.
+fn render_cpu_profile_step(directory: &Path, nodes: &[&str], duration_ms: u64) -> Result<String> {
+    let capture_ms = duration_ms.min(20);
+    let mut script = String::new();
+    for node in nodes {
+        let trace = directory.join(format!("profile-{}.trace", safe(node)));
+        script += &format!(
+            "mach set \"{}\"\ncpu CreateExecutionTracing \"seds-cpu-profile\" {} PC true\n",
+            safe(node),
+            serde_json::to_string(&trace.to_string_lossy())?
+        );
+    }
+    script += &format!("emulation RunFor \"{}s\"\n", capture_ms as f64 / 1000.0);
+    for node in nodes {
+        script += &format!("mach set \"{}\"\ncpu DisableExecutionTracing\n", safe(node));
+    }
+    if duration_ms > capture_ms {
+        script += &format!(
+            "emulation RunFor \"{}s\"\n",
+            (duration_ms - capture_ms) as f64 / 1000.0
+        );
+    }
+    Ok(script)
 }
 
 fn raw_probe_diagnostics(output: &str) -> String {
@@ -2238,6 +2419,59 @@ mod pico_fi_tests {
     use super::*;
 
     #[test]
+    fn guest_cpu_trace_is_bounded_and_preserves_run_duration() {
+        for duration in [1u64, 20, 21, 600_000] {
+            let script =
+                render_cpu_profile_step(Path::new("/tmp"), &["gateway", "daq"], duration).unwrap();
+            let steps: Vec<f64> = script
+                .lines()
+                .filter_map(|line| line.strip_prefix("emulation RunFor \""))
+                .map(|step| step.trim_end_matches("s\"").parse().unwrap())
+                .collect();
+            assert!(steps[0] <= 0.020);
+            assert!((steps.iter().sum::<f64>() - duration as f64 / 1000.0).abs() < 1e-9);
+            assert_eq!(script.matches("CreateExecutionTracing").count(), 2);
+            assert_eq!(script.matches("DisableExecutionTracing").count(), 2);
+            assert!(!script.contains("EnableProfiler"));
+            if steps.len() == 2 {
+                let disable = script.rfind("DisableExecutionTracing").unwrap();
+                assert!(disable < script.rfind("emulation RunFor").unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn controller_fifo_loss_is_captured_and_fails_the_gate() {
+        let mut layout: BoardLayout =
+            serde_json::from_str(include_str!("../examples/stm32g4-board.json")).unwrap();
+        layout.execution.memory_probes = can_fifo_model_probes(&layout);
+        layout.execution.memory_probe_warmup_samples = 0;
+        let mut good = String::new();
+        for sample in 0..2 {
+            for probe in &layout.execution.memory_probes {
+                good += &format!(
+                    "SEDS_BAY_PROBE gateway {} {}\n0x00000000\n",
+                    probe.name, sample
+                );
+            }
+        }
+        assert_eq!(
+            parse_memory_profiles("gateway", &layout, &good, 2, false, &[])
+                .unwrap()
+                .len(),
+            2
+        );
+        let lost = good.replacen("0x00000000", "0x00000001", 1);
+        assert!(parse_memory_profiles("gateway", &layout, &lost, 2, false, &[]).is_err());
+        let command =
+            render_can_fifo_probe_capture(Path::new("/tmp/probes"), "gateway", "loss", 0, "fdcan1")
+                .unwrap();
+        assert!(command.contains("LifetimeReceivedOverflowFrames"));
+        assert!(!command.contains("WriteDoubleWord"));
+        assert!(!command.contains("print("));
+    }
+
+    #[test]
     fn probe_capture_uses_a_private_file_and_never_the_console() {
         let command =
             render_probe_capture(Path::new("/tmp/probes.txt"), "rf", "pool", 2, "g_pool").unwrap();
@@ -2295,12 +2529,14 @@ mod pico_fi_tests {
         }
         assert!(crate::execution::validate_counter_progress("loop", &counter, Some(1)).is_err());
         let stalled = [100, 120, 5, 5];
-        assert!(crate::execution::validate_counter_progress(
-            "loop",
-            probe_epochs(&stalled, &[2], 0)[1],
-            Some(1)
-        )
-        .is_err());
+        assert!(
+            crate::execution::validate_counter_progress(
+                "loop",
+                probe_epochs(&stalled, &[2], 0)[1],
+                Some(1)
+            )
+            .is_err()
+        );
         let leaking = [1000, 900, 1000, 800];
         assert_eq!(
             probe_epochs(&leaking, &[2], 0)
@@ -2312,18 +2548,15 @@ mod pico_fi_tests {
     }
 
     #[test]
-    fn pico_tx_step_is_paced_without_blocking_other_direction() {
+    fn pico_tx_step_leaves_byte_pacing_to_virtual_uart() {
         let mut state = PicoBridgeState::default();
-        enqueue_gateway_uart_packet(&mut state, vec![1, 2, 3]);
-        let now = std::time::Instant::now();
+        let packet = vec![0xa5, 0x5a, 3, 0, 1, 2, 3];
+        enqueue_gateway_uart_packet(&mut state, packet.clone());
         let mut bytes = Vec::new();
-        step_gateway_uart_tx(&mut state, &mut bytes, now).unwrap();
-        assert_eq!(bytes, [1]);
-        step_gateway_uart_tx(&mut state, &mut bytes, now).unwrap();
-        assert_eq!(bytes, [1]);
-        step_gateway_uart_tx(&mut state, &mut bytes, now + Duration::from_millis(2)).unwrap();
-        assert_eq!(bytes, [1, 2]);
-        assert_eq!(state.uart_tx_offset, 2);
+        step_gateway_uart_tx(&mut state, &mut bytes).unwrap();
+        assert_eq!(bytes, packet);
+        assert_eq!(state.uart_tx_bytes, 0);
+        assert_eq!(state.uart_tx_offset, 0);
     }
 
     #[test]
@@ -2400,8 +2633,8 @@ mod pico_fi_tests {
     fn pico_uart_keeps_running_without_host_and_reconnects_with_split_sync() {
         use std::os::fd::FromRawFd;
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         };
         let (mut master_fd, mut slave_fd) = (-1, -1);
         assert_eq!(
@@ -2651,7 +2884,9 @@ mod pico_fi_tests {
                 assert!(state.uart_tx_packets.len() <= PICO_PACKET_QUEUE_DEPTH);
                 assert!(state.uart_tx_bytes <= PICO_PACKET_QUEUE_BYTES);
             }
-            drain_gateway_uart_tx_paced(&mut state, &mut wire, |_| {}).unwrap();
+            while !state.uart_tx_packets.is_empty() {
+                step_gateway_uart_tx(&mut state, &mut wire).unwrap();
+            }
             assert_eq!(&wire[..first.len()], &first);
             assert_eq!(&wire[first.len()..first.len() + 5], &[0xA5, 0x5A, 1, 0, 25]);
             assert_eq!(state.uart_tx_bytes, 0);
@@ -2673,21 +2908,42 @@ mod pico_fi_tests {
     }
 
     #[test]
-    fn gateway_uart_delivery_is_paced_at_the_physical_wire_rate() {
-        let packet = vec![0xA5, 0x5A, 3, 0, 1, 2, 3];
+    fn gateway_uart_partial_write_and_backpressure_preserve_frame() {
+        struct Limited {
+            bytes: Vec<u8>,
+            blocked: bool,
+        }
+        impl Write for Limited {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.blocked {
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+                let n = bytes.len().min(2);
+                self.bytes.extend_from_slice(&bytes[..n]);
+                Ok(n)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let packet = vec![0xa5, 0x5a, 3, 0, 1, 2, 3];
         let mut state = PicoBridgeState::default();
         enqueue_gateway_uart_packet(&mut state, packet.clone());
-        let mut written = Vec::new();
-        let mut delays = Vec::new();
-
-        drain_gateway_uart_tx_paced(&mut state, &mut written, |delay| delays.push(delay)).unwrap();
-
-        assert_eq!(written, packet);
-        assert_eq!(delays.len(), packet.len());
-        assert!(delays
-            .iter()
-            .all(|delay| *delay >= Duration::from_micros(86)));
-        assert!(state.uart_tx_packets.is_empty());
+        let mut wire = Limited {
+            bytes: Vec::new(),
+            blocked: false,
+        };
+        step_gateway_uart_tx(&mut state, &mut wire).unwrap();
+        assert_eq!(state.uart_tx_offset, 2);
+        wire.blocked = true;
+        step_gateway_uart_tx(&mut state, &mut wire).unwrap();
+        assert_eq!(state.uart_tx_offset, 2);
+        assert_eq!(state.uart_tx_bytes, packet.len());
+        wire.blocked = false;
+        while !state.uart_tx_packets.is_empty() {
+            step_gateway_uart_tx(&mut state, &mut wire).unwrap();
+        }
+        assert_eq!(wire.bytes, packet);
         assert_eq!(state.uart_tx_bytes, 0);
     }
 
@@ -2747,5 +3003,30 @@ mod pico_fi_tests {
         assert!(attached.contains("connector Connect sysbus.fdcan2 fill_can"));
         assert!(attached.contains("Acknowledged true"));
         assert!(attached.contains("SEDS_BAY_CAN_LINK valve fill_can 1 true"));
+    }
+    #[test]
+    fn simulator_failure_closes_console_pipes_held_by_runtime_children() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 60 & printf R; wait"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = child.stdout.take().unwrap();
+        let mut ready = [0u8];
+        output.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [b'R']); // The runtime descendant exists before termination.
+        let (tx, rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = output.read_to_end(&mut bytes);
+            tx.send(result).unwrap();
+        });
+        terminate_simulator(&mut child);
+        child.wait().unwrap();
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("runtime descendant kept the console open")
+            .unwrap();
+        reader.join().unwrap();
     }
 }

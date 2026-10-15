@@ -11,6 +11,8 @@ rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x40021000
     variant: "g4"
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+iwdg: Miscellaneous.SedsStm32Iwdg @ sysbus 0x40003000
+    rcc: rcc
 pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x40007000
     variant: "g4"
 dma1: DMA.SedsStm32Dma @ sysbus 0x40020000
@@ -97,3 +99,7 @@ gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x48000000
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Gpio.cs
 syscfg: Miscellaneous.SedsStm32Syscfg @ sysbus 0x40010000
     variant: "g4"
+
+crc: Miscellaneous.SedsStm32Crc @ sysbus 0x40023000
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Crc.cs

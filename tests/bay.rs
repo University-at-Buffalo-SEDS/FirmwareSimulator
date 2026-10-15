@@ -41,6 +41,10 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
         )
         .unwrap();
         fs::write(root.join(name).join("build/fw.elf"), &elf).unwrap();
+        let mut factory = vec![0xff; 0x400c];
+        factory[..8].copy_from_slice(&elf[84..92]);
+        factory[0x4000..].copy_from_slice(&elf[84..]);
+        fs::write(root.join(name).join("build/factory.bin"), factory).unwrap();
     }
     let topology = root.join("bay.json");
     fs::write(
@@ -67,6 +71,10 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     let mock = fs::read_to_string(&renode)
         .unwrap()
         .replace("done\n", "done > \"$SEDS_SIM_PROBE_CAPTURE\"\n");
+    let mock = mock.replace(
+        "  i=$((i + 1))",
+        "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x0\necho SEDS_BAY_PROBE a can_fifo_overflow_fdcan2 $i\necho 0x0\necho SEDS_BAY_PROBE b can_fifo_overflow_fdcan1 $i\necho 0x0\necho SEDS_BAY_PROBE b can_fifo_overflow_fdcan2 $i\necho 0x0\n  i=$((i + 1))",
+    );
     // A plausible but false console reading must not influence memory checks.
     let mock = mock.replace(
         "echo SEDS_BAY_COMPLETE",
@@ -84,6 +92,12 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
     assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
     assert_eq!(report.assertion_reports.len(), 2);
+    // Hardware FIFO loss must fail even when ordinary firmware probes pass.
+    fs::write(&renode, mock.replace(
+        "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x0",
+        "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x1",
+    )).unwrap();
+    assert!(bay::run(&topology).unwrap_err().to_string().contains("can_fifo_overflow_fdcan1"));
     // Console-only output is not accepted if the dedicated capture is lost.
     fs::write(
         &renode,
@@ -99,6 +113,30 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     let error = bay::run(&topology).unwrap_err().to_string();
     assert!(error.contains("include @bad.repl"), "{error}");
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    // A watchdog failure must exit without hanging on the runtime child and
+    // retain the evidence before the temporary simulation directory disappears.
+    let diagnostics = root.join("diagnostics");
+    std::env::set_var("FIRMWARE_SIM_DIAGNOSTICS_DIR", &diagnostics);
+    fs::write(
+        &renode,
+        "#!/bin/sh\necho SEDS_IWDG_RESET count=1\nsleep 60 &\nwait\n",
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let error = bay::run(&topology).unwrap_err().to_string();
+    assert!(error.contains("SEDS_IWDG_RESET"), "{error}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    let retained = fs::read_dir(&diagnostics)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(fs::read_to_string(retained.join("renode.log"))
+        .unwrap()
+        .contains("SEDS_IWDG_RESET"));
+    assert!(retained.join("bay.resc").is_file());
+    std::env::remove_var("FIRMWARE_SIM_DIAGNOSTICS_DIR");
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");
     fs::remove_dir_all(root).unwrap();

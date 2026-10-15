@@ -17,18 +17,20 @@ check_renode() {
         return 1
     fi
     printf '%s\n' "$output"
-    if printf '%s\n' "$output" | grep -Eiq \
-        'there was an error executing command|fatal error|could not compile|error E[0-9]+|CPU abort|trying to execute code outside RAM or ROM'; then
+    if grep -Eiq \
+        'AssertionError|Traceback|there was an error executing command|fatal error|could not compile|error E[0-9]+|CPU abort|trying to execute code outside RAM or ROM' <<< "$output"; then
         return 1
     fi
     local expected
     for expected in "$@"; do
-        printf '%s\n' "$output" | grep -Fq "$expected" || {
+        grep -Fq "$expected" <<< "$output" || {
             echo "missing Renode contract output: $expected" >&2
             return 1
         }
     done
 }
+
+python3 "$(dirname "${BASH_SOURCE[0]}")/../tests/watchdog-contract/run.py" --image "$image"
 
 catalog="$("${docker_command[@]}" --rm "$image" list-mcus)"
 "${docker_command[@]}" --rm --entrypoint dotnet "$image" \
@@ -36,7 +38,15 @@ catalog="$("${docker_command[@]}" --rm "$image" list-mcus)"
 check_renode 'mach create; machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl; cpu IsHalted true; sysbus WriteDoubleWord 0x4000440c 17000; sysbus WriteDoubleWord 0x40004400 9; sysbus WriteDoubleWord 0x40004428 0x42; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 0; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0; print(\"UART_TX_PENDING_PASS\")"; emulation RunFor "0.002s"; python "u = monitor.Machine[\"sysbus.usart2\"]; assert u.TransmittedBytes == 1; assert u.ReadDoubleWord(0x1c) & 0xc0 == 0xc0; print(\"UART_TX_BAUD_TIMING_PASS\")"; quit' 'UART_TX_PENDING_PASS' 'UART_TX_BAUD_TIMING_PASS'
 check_renode "include @/opt/firmware-sim/renode/tests/uart-dma.resc" "UART_DMA_REQUEST_GATE_PASS" "UART_DMA_BOUNDED_PACING_PASS" "UART_DMA_COMPLETE_IRQ_PASS" "UART_DMA_CLEAR_PASS"
 check_renode "include @/opt/firmware-sim/renode/tests/uart-rx-dma.resc" "UART_RX_DMA_WIRE_PACING_PASS" "UART_RX_DMA_IDLE_IRQ_PASS" "UART_IDLE_W1C_PASS" "UART_RX_DMA_HALF_IRQ_PASS" "UART_RX_DMA_NORMAL_COMPLETE_PASS" "UART_RX_DMA_CIRCULAR_WRAP_PASS" "UART_RX_DMAMUX_GATE_PASS" "UART_RX_DMAR_GATE_PASS" "UART_RX_ABORT_GATE_PASS" "USART1_TX_DMA_COMPLETE_IRQ_PASS" "UART_DMA_ACTIVE_CCR_UPDATE_PASS" "UART_DMA_RESET_PASS" "UART_DMA2_MUX_OFFSET_PASS"
+check_renode "include @/opt/firmware-sim/renode/tests/crc.resc" "CRC_POLY_WORD_PASS" "CRC_IEEE_WORD_BYTE_PASS" "CRC_INCREMENTAL_LENGTHS_PASS" "CRC_RESET_PASS"
 check_renode "include @/opt/firmware-sim/renode/tests/gpio-reset.resc" "GPIO_EXTERNAL_INPUT_RESET_PASS"
+# Linked-bay CAN must reserve three hardware slots and serialize controllers
+# on one timed wire, including cancellation/reuse and reset of pending slots.
+check_renode "include @/opt/firmware-sim/renode/tests/fdcan-timing.resc" "CAN_TX_FIFO_RESERVATION_PASS" "CAN_WIRE_NOT_INSTANT_PASS" "CAN_WIRE_SERIALIZATION_PASS" "CAN_CANCEL_REUSE_TOKEN_PASS" "CAN_TX_FIFO_DRAIN_PASS" "CAN_RESET_CANCELS_PENDING_PASS" "CAN_SHARED_BUS_SERIALIZATION_PASS" "CAN_SHARED_BUS_DRAIN_PASS"
+# Full RX FIFOs discard excess frames, report a loss IRQ and never replay them.
+for mcu in stm32g491 stm32h523 stm32u585; do
+    check_renode "\$fifoPlatform=@/opt/firmware-sim/renode/platforms/${mcu}.repl; include @/opt/firmware-sim/renode/tests/fdcan-finite-rx.resc" "CAN_FINITE_FIFO_LOSS_IRQ_PASS" "CAN_FIFO_NO_OVERFLOW_REPLAY_PASS" "CAN_FIFO_LOSS_RESET_PASS"
+done
 # RX frames must not accumulate before HAL starts the controller. Exercise
 # the actual IRQ line and retained FIFO behavior across stop/restart.
 for mcu in stm32h523 stm32u585; do
@@ -67,7 +77,7 @@ for mcu in \
     stm32h7b0 stm32h7b3 stm32h7r3 stm32h7r7 stm32h7s3 stm32h7s7 \
     stm32h523 stm32h533 stm32h543 stm32h553 stm32h562 stm32h563 stm32h573 \
     stm32u575 stm32u585 stm32u595 stm32u599 stm32u5a5 stm32u5a9; do
-    printf '%s\n' "$catalog" | grep -Fq "$mcu"
+    grep -Fq "$mcu" <<< "$catalog"
 done
 
 for arch in stm32 stm32g4 stm32h5 stm32h7 stm32u5; do

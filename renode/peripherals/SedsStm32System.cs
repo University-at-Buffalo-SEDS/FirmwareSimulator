@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
+using Antmicro.Renode.Time;
+using Antmicro.Renode.Peripherals.Timers;
 using Antmicro.Renode.Peripherals.Bus;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
@@ -19,6 +21,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             uint value;
             registers.TryGetValue(offset, out value);
+            if(offset == ResetFlagsOffset) value |= resetFlags;
             if(offset == 0)
             {
                 if(variant == "g4") value |= 0x400u | ((value & (1u << 24)) << 1);
@@ -38,6 +41,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public void WriteDoubleWord(long offset, uint value)
         {
+            if(offset == ResetFlagsOffset)
+            {
+                if((value & (1u << 23)) != 0) resetFlags = 0;
+                // Reset-cause flags are read-only; RMVF is a write-one clear.
+                value &= ~0xFF800000u;
+            }
             registers[offset] = value;
             writes++;
             if((variant == "g4" && offset == 0x08)
@@ -51,9 +60,84 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public long Size { get { return 0x400; } }
         public void Reset() { registers.Clear(); writes = clockSwitches = 0; }
 
+        public void NoteWatchdogReset() { resetFlags |= 1u << 29; }
+        private long ResetFlagsOffset { get { return variant == "g4" ? 0x94 : (variant == "h5" || variant == "u5" ? 0xF4 : -1); } }
+        // Reset cause survives a peripheral/machine reset until firmware clears RMVF.
+        private uint resetFlags;
         private readonly string variant;
         private readonly Dictionary<long, uint> registers = new Dictionary<long, uint>();
         private ulong writes, clockSwitches;
+    }
+
+    // Functional IWDG model for the register sequence used by G4/H5/U5 firmware.
+    // Time is driven by the independent 32 kHz clock, not CPU or ThreadX progress.
+    public sealed class SedsStm32Iwdg : IDoubleWordPeripheral, IKnownSize
+    {
+        public SedsStm32Iwdg(IMachine machine, SedsStm32Rcc rcc)
+        {
+            this.machine = machine;
+            this.rcc = rcc;
+            timer = new LimitTimer(machine.ClockSource, 32000, this, "iwdg",
+                limit: 16384, direction: Direction.Ascending, enabled: false, eventEnabled: true);
+            timer.LimitReached += Expire;
+            Reset();
+        }
+        public uint ReadDoubleWord(long offset)
+        {
+            switch(offset)
+            {
+                case 4: return prescaler;
+                case 8: return reload;
+                // Configuration latches synchronously; no update remains pending.
+                case 12: return 0;
+                case 16: return 0xFFF;
+                default: return 0;
+            }
+        }
+        public void WriteDoubleWord(long offset, uint value)
+        {
+            if(offset == 0)
+            {
+                if(value == 0x5555) { unlocked = true; return; }
+                unlocked = false;
+                if(value == 0xCCCC && !timer.Enabled) { Reload(); timer.Enabled = true; }
+                else if(value == 0xAAAA && timer.Enabled) Reload();
+                return;
+            }
+            if(!unlocked) return;
+            if(offset == 4) prescaler = Math.Min(value & 7u, 6u);
+            else if(offset == 8) reload = value & 0xFFFu;
+            else if(offset == 16 && (value & 0xFFFu) != 0xFFFu)
+                this.Log(LogLevel.Warning, "IWDG window mode is not modeled");
+        }
+        private void Reload()
+        {
+            timer.Limit = ((ulong)reload + 1) * (4UL << (int)prescaler);
+            timer.Value = 0;
+        }
+        private void Expire()
+        {
+            timer.Enabled = false;
+            resetCount++;
+            this.Log(LogLevel.Error, "SEDS_IWDG_RESET count={0}", resetCount);
+            rcc.NoteWatchdogReset();
+            machine.RequestReset();
+        }
+        public ulong GetResetCount() { return resetCount; }
+        public long Size { get { return 0x400; } }
+        public void Reset()
+        {
+            timer.Enabled = false;
+            timer.Value = 0;
+            prescaler = 0; reload = 0xFFF; unlocked = false;
+        }
+        private readonly IMachine machine;
+        private readonly SedsStm32Rcc rcc;
+        private readonly LimitTimer timer;
+        private uint prescaler, reload;
+        private bool unlocked;
+        // Test diagnostic survives resets so repeated recovery cannot hide failures.
+        private ulong resetCount;
     }
 
     public sealed class SedsStm32Pwr : IDoubleWordPeripheral, IKnownSize

@@ -36,14 +36,48 @@ channel preserves its transfer position, as STM32 HAL requires.
 Renode contracts exercise RX timing, IDLE, normal/circular transfers,
 DMAR/DMAMUX gating, abort, reset, and exact TX bytes across a half-transfer
 interrupt configuration change. The concurrent model test checks 500,000 bytes
-in each direction. These contracts permit hardware images to run without the
-older `SEDS_FIRMWARE_SIM_TEST` UART polling workaround. They do not by themselves
-qualify a complete network or establish hardware throughput.
+in each direction. RF and Gateway firmware no longer substitute UART polling
+or blocking transmission in instrumented simulator builds: both builds arm
+ReceiveToIdle DMA, and RF retains DMA timeout/retry recovery. Native two-build
+regressions check real HAL success, BUSY, and error results. These contracts do
+not by themselves qualify a complete network or establish hardware throughput.
 
 Only the byte-wide USART1/2 paths used by these boards are covered. Full UART
 prescaler/oversampling, parity, nine-bit data, flow control and electrical radio
 behavior remain outside this validation. The input wire queue bridges host PTY
 scheduling to virtual byte timing; it does not represent extra MCU FIFO memory.
+
+## STM32G4 CRC
+
+The G4 CRC peripheral now executes the production hardware-CRC adapter instead
+of forcing its software fallback. The model implements programmable 32-bit
+polynomial and INIT, reset, input/output reversal, and byte/halfword/word writes.
+Four contracts compare IEEE and non-reflected CRC results, incremental writes,
+multiple lengths and seeds, and reset against an independent bitwise reference.
+Peripheral bus latency and 7/8/16-bit polynomial modes are not modeled. These
+contracts establish functional compatibility, not physical CRC timing.
+
+## CAN wire timing and host clock
+
+Linked G4/H5/U5 controllers reserve all three physical TX slots and share a
+wire scheduler per CAN link. TXFQS/TXBRP reflect occupied slots until a frame
+finishes. The model calculates nominal bit time from NBTP and the configured
+FDCAN kernel frequency; U585 uses 96 MHz and G4/H523 use 170 MHz. Regression
+contracts cover FIFO saturation, cancellation/reuse, reset, and serialization
+between controllers. An aborted/reused slot cannot complete its replacement
+from an obsolete request; pending host storage is bounded per controller/slot.
+
+The wire uses conservative stuffing for the boards' extended-ID CAN FD frames
+without BRS. It does not implement identifier-priority arbitration, electrical
+noise, retransmission timing, or arbitrary bit-rate switching. Unassigned
+`BusName` preserves instantaneous transmission for isolated register contracts.
+Do not infer physical CAN throughput from this model alone.
+
+GroundStation HITL routing and validation deadlines use the same virtual clock
+as the MCU bay (`GS_SIM_CLOCK_FILE`). Pausing Renode pauses route aging; a board
+reset does not reset the host clock. Partial/failed file reads retain the last
+valid monotonic tick. A fixed wall-time divisor remains available for legacy
+runs, but does not qualify current shared-clock latency measurements.
 
 ## Executed behavior
 
@@ -110,13 +144,29 @@ It is not an unlimited lossless telemetry queue. Split UART sync bytes survive
 nonblocking reads. Queue pressure must not evict a partially transmitted UART
 frame: only whole pending packets may be overwritten, matching the physical
 Pico byte-packet ring. Packet-count and byte-budget regression tests cover this
-case. Host-to-Gateway pacing services the reverse direction between
-bytes; the Gateway USART model uses its configured BRR and an 8N1 TX timer/FIFO
-in virtual time. The existing host-to-UART pacing scale remains an approximation,
-not a model of RF interference or Pico Wi-Fi radio physics.
+case. Host-to-Gateway writes submit one frame without blocking the reverse
+direction; partial writes retain their offset. The USART model serializes RX
+and TX with its configured BRR and 8N1 timers in virtual time. An additional
+wall-time byte pacer previously created artificial inter-character IDLE gaps
+and DMA restart losses. Radio interference and Pico Wi-Fi radio physics remain
+outside this model.
 
 The STM32 UART FIFOs are shared by CPU, timer and host-input execution and must
 be thread-safe. Docker builds and `scripts/test-image.sh` run the actual C#
 model through a concurrent 500,000-byte TX/RX integrity regression. This uses
 narrow Renode API stubs to isolate synchronization; the real Renode register
 contracts separately verify baud timing and status flags.
+
+## Independent watchdog
+
+G4, H5 and U5 platforms use the firmware's real IWDG key/prescaler/reload
+register sequence, driven by an independent 32 kHz virtual clock. Configuration
+latches synchronously. A timeout resets the machine and preserves RCC's IWDG
+reset-cause flag until firmware clears RMVF. The model's reset counter survives
+resets; unexpected `SEDS_IWDG_RESET` events fail single-board and linked-bay
+qualification rather than hide a stopped task behind a reboot.
+
+The register contract tests protected writes, feed timing, /4 and /256
+prescalers, all three MCU reset-flag offsets, flag clearing and inactive reloads.
+Window mode, early-warning interrupts, oscillator tolerance and debug-freeze
+control are not modeled. Current board firmware does not enable those modes.

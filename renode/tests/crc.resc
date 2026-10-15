@@ -1,0 +1,4 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+python "exec(open('/opt/firmware-sim/renode/tests/crc-check.py').read())"
+quit

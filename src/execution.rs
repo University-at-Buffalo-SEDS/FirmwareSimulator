@@ -183,6 +183,11 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         ),
     )?;
     let combined = run_renode_script(&renode, &script)?;
+    ensure!(
+        !combined.contains("SEDS_IWDG_RESET"),
+        "firmware reset through IWDG during qualification:\n{}",
+        tail(&combined, 80)
+    );
     let registers = marker_lines(&combined);
     let memory_profile = parse_memory_profile(layout, &combined)?;
     ensure!(

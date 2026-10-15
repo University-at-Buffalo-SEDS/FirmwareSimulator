@@ -12,6 +12,8 @@ rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x46020C00
     variant: "u5"
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+iwdg: Miscellaneous.SedsStm32Iwdg @ sysbus 0x40003000
+    rcc: rcc
 pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x46020800
     variant: "u5"
 gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
@@ -24,6 +26,7 @@ gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
 // layout and incorrectly reports that the fixed U5 TX FIFO is full.
 fdcan1: CAN.SedsFixedFdcan @ sysbus 0x4000A400
     messageRam: fdcan1MessageRAM
+    clockFrequency: 96000000
     Int0 -> nvic@39
     Int1 -> nvic@40
     preinit:

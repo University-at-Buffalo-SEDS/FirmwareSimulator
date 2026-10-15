@@ -1,0 +1,42 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+cpu IsHalted true
+fdcan1 BusName "timing-contract"
+sysbus WriteDoubleWord 0x40006418 3
+sysbus WriteDoubleWord 0x4000641c 0x00090c02
+sysbus WriteDoubleWord 0x40006418 0
+sysbus WriteDoubleWord 0x4000a67c 0x002f0000
+sysbus WriteDoubleWord 0x4000a6c4 0x002f0000
+sysbus WriteDoubleWord 0x4000a70c 0x002f0000
+sysbus WriteDoubleWord 0x400064cc 7
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.PendingTransmissions == 7; assert c.CompletedTransmissions == 0; assert c.ReadDoubleWord(0xc4) & 0x200003 == 0x200000; print('CAN_TX_FIFO_RESERVATION_PASS')"
+emulation RunFor "0.0006s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.CompletedTransmissions == 0; print('CAN_WIRE_NOT_INSTANT_PASS')"
+emulation RunFor "0.0002s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.CompletedTransmissions == 1; assert c.PendingTransmissions == 6; print('CAN_WIRE_SERIALIZATION_PASS')"
+sysbus WriteDoubleWord 0x400064d0 2
+sysbus WriteDoubleWord 0x400064cc 2
+emulation RunFor "0.0006s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.CompletedTransmissions == 1; assert c.PendingTransmissions == 6; print('CAN_CANCEL_REUSE_TOKEN_PASS')"
+emulation RunFor "0.0015s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.CompletedTransmissions == 3; assert c.PendingTransmissions == 0; print('CAN_TX_FIFO_DRAIN_PASS')"
+sysbus WriteDoubleWord 0x400064cc 7
+fdcan1 Reset
+emulation RunFor "0.003s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.CompletedTransmissions == 0; assert c.PendingTransmissions == 0; print('CAN_RESET_CANCELS_PENDING_PASS')"
+fdcan2 BusName "timing-contract"
+sysbus WriteDoubleWord 0x40006818 3
+sysbus WriteDoubleWord 0x4000681c 0x00090c02
+sysbus WriteDoubleWord 0x40006818 0
+sysbus WriteDoubleWord 0x40006418 3
+sysbus WriteDoubleWord 0x4000641c 0x00090c02
+sysbus WriteDoubleWord 0x40006418 0
+sysbus WriteDoubleWord 0x4000a67c 0x002f0000
+sysbus WriteDoubleWord 0x4000a9cc 0x002f0000
+sysbus WriteDoubleWord 0x400064cc 1
+sysbus WriteDoubleWord 0x400068cc 1
+emulation RunFor "0.0008s"
+python "a = monitor.Machine['sysbus.fdcan1']; b = monitor.Machine['sysbus.fdcan2']; assert a.CompletedTransmissions + b.CompletedTransmissions == 1; print('CAN_SHARED_BUS_SERIALIZATION_PASS')"
+emulation RunFor "0.0008s"
+python "a = monitor.Machine['sysbus.fdcan1']; b = monitor.Machine['sysbus.fdcan2']; assert a.CompletedTransmissions == 1; assert b.CompletedTransmissions == 1; print('CAN_SHARED_BUS_DRAIN_PASS')"
+quit

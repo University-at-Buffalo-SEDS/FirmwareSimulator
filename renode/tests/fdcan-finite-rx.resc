@@ -1,0 +1,8 @@
+mach create
+$fifoPlatform?=@/opt/firmware-sim/renode/platforms/stm32g491.repl
+machine LoadPlatformDescription $fifoPlatform
+cpu IsHalted true
+python "from Antmicro.Renode.Core.CAN import CANMessageFrame; c = monitor.Machine['sysbus.fdcan1']; c.WriteDoubleWord(0x54, 4); c.WriteDoubleWord(0x5c, 1); c.WriteDoubleWord(0x18, 0); f = CANMessageFrame(0x321, System.Array[System.Byte]([1,2,3])); [c.OnFrameReceived(f) for _ in range(8)]; assert c.ReadDoubleWord(0x90) & 7 == 3; assert c.ReceivedOverflowFrames == 5; assert c.ReadDoubleWord(0x50) & 4; assert c.ReadDoubleWord(0x90) & (1 << 25); assert c.Int0.IsSet; c.WriteDoubleWord(0x94, 0); assert c.ReadDoubleWord(0x90) & 7 == 2; c.WriteDoubleWord(0x50, 4); assert not c.Int0.IsSet; print('CAN_FINITE_FIFO_LOSS_IRQ_PASS')"
+emulation RunFor "0.0002s"
+python "c = monitor.Machine['sysbus.fdcan1']; assert c.ReadDoubleWord(0x90) & 7 == 2; assert c.ReceivedOverflowFrames == 5; c.WriteDoubleWord(0x94, 1); c.WriteDoubleWord(0x94, 2); assert c.ReadDoubleWord(0x90) & 7 == 0; print('CAN_FIFO_NO_OVERFLOW_REPLAY_PASS'); c.Reset(); assert c.ReceivedOverflowFrames == 0; assert c.LifetimeReceivedOverflowFrames == 5; print('CAN_FIFO_LOSS_RESET_PASS')"
+quit

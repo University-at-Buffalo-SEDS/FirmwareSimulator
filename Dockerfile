@@ -37,6 +37,7 @@ COPY mcu mcu
 COPY peripherals peripherals
 COPY renode renode
 COPY tests tests
+COPY examples examples
 RUN cargo test --locked
 RUN cargo build --release --locked
 

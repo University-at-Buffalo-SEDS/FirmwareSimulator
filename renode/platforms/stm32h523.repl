@@ -12,6 +12,8 @@ rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x44020C00
     variant: "h5"
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+iwdg: Miscellaneous.SedsStm32Iwdg @ sysbus 0x40003000
+    rcc: rcc
 pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x44020800
     variant: "h5"
 gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000

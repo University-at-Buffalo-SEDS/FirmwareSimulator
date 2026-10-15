@@ -187,6 +187,62 @@ pub fn flash_image(path: &Path, memory: &MemoryLayout, label: &str) -> Result<Ve
     Ok(image)
 }
 
+/// Keep the factory bootloader/header/metadata intact while checking that the
+/// application and its initialized RAM bytes match the ELF used for probes.
+pub fn validated_factory_image(
+    factory: &Path,
+    elf: &Path,
+    memory: &MemoryLayout,
+    vector_table: u32,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let image = fs::read(factory).with_context(|| format!("reading {label} factory image"))?;
+    ensure!(
+        image.len() >= 8 && image.len() as u64 <= memory.flash_size,
+        "{label} factory image has an invalid physical flash size"
+    );
+    let bytes = fs::read(elf)?;
+    let phoff = u32_at(&bytes, 28)? as usize;
+    let phentsize = u16_at(&bytes, 42)? as usize;
+    let phnum = u16_at(&bytes, 44)? as usize;
+    let mut compared = 0usize;
+    for index in 0..phnum {
+        let header = program_header_offset(phoff, phentsize, index, bytes.len(), label)?;
+        if u32_at(&bytes, header)? != PT_LOAD {
+            continue;
+        }
+        let source = u32_at(&bytes, header + 4)? as usize;
+        let address = u32_at(&bytes, header + 12)? as u64;
+        let size = u32_at(&bytes, header + 16)? as usize;
+        if size == 0 || !fits_flash(address, size as u64, memory) {
+            continue;
+        }
+        let skip = (vector_table as u64)
+            .saturating_sub(address)
+            .min(size as u64) as usize;
+        if skip == size {
+            continue;
+        }
+        let offset = (address - memory.flash_base) as usize + skip;
+        let expected = bytes
+            .get(source + skip..source + size)
+            .context("application ELF LOAD is truncated")?;
+        let actual = image
+            .get(offset..offset + expected.len())
+            .context("factory image is missing application LOAD bytes")?;
+        ensure!(
+            actual == expected,
+            "{label} factory application differs from ELF LOAD {index}"
+        );
+        compared += expected.len();
+    }
+    ensure!(
+        compared > 0,
+        "{label} factory has no matching application LOAD bytes"
+    );
+    Ok(image)
+}
+
 fn program_header_offset(
     phoff: usize,
     phentsize: usize,
@@ -246,9 +302,38 @@ fn u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{flash_image, reset_vector, validate_elf};
+    use super::{flash_image, reset_vector, validate_elf, validated_factory_image};
     use crate::layout::{MemoryLayout, MemoryRegion};
     use std::{fs, path::Path};
+
+    #[test]
+    fn factory_validation_preserves_header_and_rejects_stale_application() {
+        let temp = tempfile::tempdir().unwrap();
+        let elf_path = temp.path().join("app.elf");
+        let factory_path = temp.path().join("factory.bin");
+        let mut app = elf(0x0800_4000, 0x0800_4000, 0x208, 0x208);
+        app[84 + 0x200..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        write(&elf_path, &app);
+        let mut factory = vec![0xa5; 0x4208];
+        factory[0x4200..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        write(&factory_path, &factory);
+        assert_eq!(
+            validated_factory_image(&factory_path, &elf_path, &memory(), 0x0800_4200, "test")
+                .unwrap(),
+            factory
+        );
+        factory[0x4204] ^= 1;
+        write(&factory_path, &factory);
+        assert!(
+            validated_factory_image(&factory_path, &elf_path, &memory(), 0x0800_4200, "test")
+                .is_err()
+        );
+        write(&factory_path, &factory[..0x4204]);
+        assert!(
+            validated_factory_image(&factory_path, &elf_path, &memory(), 0x0800_4200, "test")
+                .is_err()
+        );
+    }
 
     fn memory() -> MemoryLayout {
         MemoryLayout {
