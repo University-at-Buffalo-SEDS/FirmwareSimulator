@@ -1,0 +1,291 @@
+{
+  "release": "SEDSnet 4.2.0",
+  "scope": "simulated linked network and memory qualification",
+  "sdk_code_commit": "1b77df8",
+  "sdk_release_commit": "19f2458",
+  "capture": "bay-1792043310789324113",
+  "capture_recheck": true,
+  "virtual_time_ms": 600000,
+  "firmware_nodes": 7,
+  "host_nodes": 1,
+  "physical_links": 4,
+  "network_assertions_passed": 107,
+  "omitted_network_assertions": [],
+  "scheduled_command_confirmations": {
+    "passed": 20,
+    "expected": 20,
+    "minimum_latency_ms": 10,
+    "maximum_latency_ms": 520,
+    "limit_ms": 2500
+  },
+  "faults": [
+    "RF secondary CAN ACK absent for 50 virtual seconds",
+    "GroundStation restart at 200 and 400 virtual seconds",
+    "RF, power and FC cold reboot at 400 virtual seconds"
+  ],
+  "storage_modes": {
+    "gateway": "TLSF + heap",
+    "other_six_boards": "TLSF + compact"
+  },
+  "oracle_correction": {
+    "numeric_tolerance_unchanged_bytes": 4096,
+    "old_false_positive_bytes": 4116,
+    "valve_free_bytes": [
+      26480,
+      26468,
+      22044,
+      26192,
+      26420,
+      26404,
+      26392,
+      26316,
+      22492,
+      22492,
+      22076,
+      26460
+    ],
+    "description": "Require both low and high free-memory levels to decline; minimum, allocation-failure, panic, watchdog and FIFO guards remain independent."
+  },
+  "gateway_admission_refusals": {
+    "can_ingress": 17036,
+    "cached_transit": 295,
+    "lossless_telemetry_claim": false
+  },
+  "macos": {
+    "firmware_builds_passed": 7,
+    "board_native_tests_passed": 822,
+    "groundstation_workspace_tests_passed": 269,
+    "existing_manual_media_test_ignored": 1,
+    "web_ui_build_passed": true,
+    "desktop_ui_build_passed": true,
+    "sdk_full_compact_compression_workflow_passed": true,
+    "installed_python_tests_passed": 28
+  },
+  "capture_sha256": {
+    "bay.resc": "1e1f53a37037ceb9426460847a19b9bca4284ac0e395557a20e23646922c9ff4",
+    "groundstation-host.log": "197faf9d72d64a5e27cf082f110b9ba69a46cbc228f29c3608253b2b1a2e7742",
+    "memory-probes.txt": "d7e8e68cce979ca093cf854a7e96a8d69eccd063283f6f33fbdbff7957f1a6e6",
+    "renode.log": "0df5841ca722afc9f049f3477613f689ab49bfb59a343c25695be52ecd2a8124"
+  },
+  "node_critical_probes": {
+    "actuator": {
+      "pool_available": {
+        "minimum": 16940,
+        "maximum": 19296,
+        "sustained_drop": 0
+      },
+      "allocation_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan2": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "daq": {
+      "pool_available": {
+        "minimum": 88344,
+        "maximum": 92112,
+        "sustained_drop": 284
+      },
+      "allocation_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "flight": {
+      "alloc_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "gateway": {
+      "pool_available": {
+        "minimum": 7060,
+        "maximum": 16560,
+        "sustained_drop": 0
+      },
+      "allocation_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "g_fdcan_rx_hw_overflow_count": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan2": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "power": {
+      "pool_available": {
+        "minimum": 42644,
+        "maximum": 43152,
+        "sustained_drop": 460
+      },
+      "alloc_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan2": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "rf": {
+      "pool_available": {
+        "minimum": 50360,
+        "maximum": 50360,
+        "sustained_drop": 0
+      },
+      "alloc_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan2": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    },
+    "valve": {
+      "pool_available": {
+        "minimum": 22076,
+        "maximum": 26460,
+        "sustained_drop": 0
+      },
+      "allocation_failures": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "panics": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "watchdog_reset_flags": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan1": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      },
+      "can_fifo_overflow_fdcan2": {
+        "minimum": 0,
+        "maximum": 0,
+        "sustained_drop": 0
+      }
+    }
+  },
+  "limits": [
+    "No physical RF/SD throughput qualification",
+    "No hardware maximum-throughput claim",
+    "No multi-hour hardware stability claim"
+  ]
+}

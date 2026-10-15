@@ -93,11 +93,18 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
     assert_eq!(report.assertion_reports.len(), 2);
     // Hardware FIFO loss must fail even when ordinary firmware probes pass.
-    fs::write(&renode, mock.replace(
-        "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x0",
-        "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x1",
-    )).unwrap();
-    assert!(bay::run(&topology).unwrap_err().to_string().contains("can_fifo_overflow_fdcan1"));
+    fs::write(
+        &renode,
+        mock.replace(
+            "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x0",
+            "echo SEDS_BAY_PROBE a can_fifo_overflow_fdcan1 $i\necho 0x1",
+        ),
+    )
+    .unwrap();
+    assert!(bay::run(&topology)
+        .unwrap_err()
+        .to_string()
+        .contains("can_fifo_overflow_fdcan1"));
     // Console-only output is not accepted if the dedicated capture is lost.
     fs::write(
         &renode,

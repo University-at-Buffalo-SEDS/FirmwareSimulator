@@ -135,6 +135,13 @@ enum Command {
         #[arg(long)]
         topology: PathBuf,
     },
+    /// Recheck retained bay registers and host logs without executing firmware.
+    BayCheck {
+        #[arg(long)]
+        topology: PathBuf,
+        #[arg(long)]
+        capture: PathBuf,
+    },
     SelfTest {
         #[arg(long)]
         arch: ArchitectureKind,
@@ -214,6 +221,17 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("{}", firmware_sim::report::bay(&report));
+            }
+        }
+        Command::BayCheck { topology, capture } => {
+            let report = firmware_sim::bay::check_capture(&topology, &capture)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Retained capture recheck (no firmware executed)\n{}",
+                    firmware_sim::report::bay(&report)
+                );
             }
         }
         Command::ListMcus => {

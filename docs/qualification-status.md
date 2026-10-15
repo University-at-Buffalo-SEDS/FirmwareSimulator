@@ -1,6 +1,6 @@
 # Qualification status
 
-## SEDSnet 4.2.0 coordinated candidate (2026-10-14; restart passed, soak pending)
+## SEDSnet 4.2.0 coordinated candidate (2026-10-15; linked network qualification passed)
 
 The candidate uses canonical name-based schema identities, one reliability enum,
 explicit application destinations, and fixed 32-bit C identity types. All seven
@@ -8,6 +8,66 @@ linked firmware images build with TLSF; gateway uses heap packet storage and
 other boards use compact storage. The Mac GCC 13 production FC build also fits.
 Board scripts select `main` by default for both stores, with compatible on-disk
 fallback; GroundStation keeps the SEDSnet `4` dependency range.
+
+The exact final candidate (`SEDSnet` commit `1b77df8`, gateway `e864d91`,
+FC `0cdaac9`) passes all 65 assertions in the 32-second linked gate, capture
+`bay-1792036832681388424`. Its startup application-status confirmation is 20 ms
+against the unchanged 2,500 ms bound. The frozen images live in
+`Release420ControlHeadroom_ARM`; the matching backend image is
+`seds-firmware-simulator:release420-control-headroom`.
+
+An earlier 600-second candidate failed after the first GroundStation restart:
+only 13 of 20 scheduled VB/AB confirmations arrived. No allocator panic or
+watchdog reset occurred. That failed baseline remains in
+`release-420-cache-retry-soak-600.log`; the previously passed 120-second stage
+did not establish longer-term qualification. The new small-control admission
+class retains the full allocation estimate and contiguous-block guard while
+allowing bounded byte commands/status to use the gateway's control reserve.
+Bulk/schema work keeps the 4 KiB reserve. Router/Relay rejection regressions and
+the actual gateway allocator's slot-rounding, exhaustion and recovery tests pass.
+The final 600-second firmware execution is retained as
+`bay-1792043310789324113`. All twenty scheduled VB/AB command confirmations
+arrived in 10–520 ms against the unchanged 2,500 ms limit. The run includes a
+50-second unacknowledged secondary CAN path, two GroundStation restarts, and
+RF/PowerBoard/FC reboots. All 107 network assertions pass; none was omitted.
+Allocator-failure, panic, watchdog-reset and controller CAN FIFO-loss counters
+remain zero. Gateway raw CAN ring displacement counters also remain zero.
+There are 17,036 ingress admission refusals and 295 cached-transit refusals;
+these are not a lossless-telemetry claim. Sampled rejected headers mainly name
+discovery traffic, with some telemetry/control traffic; there is no complete
+per-type refusal histogram.
+
+The original run verdict failed one valve memory-trend check. Its sampled
+free-memory series was `[26480, 26468, 22044, 26192, 26420, 26404, 26392, 26316,
+22492, 22492, 22076, 26460]`: the final value recovered to within 20 bytes of
+start, and an earlier steady-state trough was already lower than the late trough.
+The floor-only detector nevertheless reported 4,116 lost bytes after excluding
+three warm-up samples. The corrected detector requires both the high and low
+free-memory levels to shift downward. It retains the same 4 KiB tolerance and
+separate absolute-minimum, allocation-failure and watchdog guards. The exact
+trace fails against the old detector and passes after correction; an injected
+sustained leak and unsafe dips/faults/incomplete captures still fail.
+
+The shared production validators rechecked the unchanged captured observations,
+including every link and host-log assertion. The report explicitly sets
+`capture_recheck: true`; this was not a second firmware execution. The simulator's
+87 native tests and strict lint check pass. Physical RF quality, SD-card sustained
+writes, hardware maximum throughput and multi-hour hardware stability remain
+outside this simulated network qualification.
+
+macOS GCC 13 builds pass for all seven boards (TLSF, gateway heap storage,
+other boards compact storage, watchdog enabled). FC uses 473,632 of 474,624
+application flash bytes; Jupiter GCC 14 uses 474,504 bytes. Two unused legacy
+slots and a DAQ-only calibration definition were removed from FC's boot catalog;
+canonical identities and later runtime schema learning are unaffected.
+All 822 board-native macOS regressions pass (DAQ 151, actuator 86, valve 100,
+power 101, RF 130, FC 141, gateway 113). The natively built macOS Python wheel
+passes all 26 installed-package integration tests, matching Linux. The final
+release-tool regressions extend the Python suite to 28 passing tests.
+GroundStation's macOS workspace tests pass: 241 backend, four downloader and
+24 shared-sequence tests, with one existing ignored backend test. The web UI
+and native desktop UI also compile on macOS. The SDK's full compact-compression macOS workflow passes,
+including its 601-second native pressure test and embedded cross-build.
 
 Native release gates passed for default, compact store, and compact compression,
 including embedded cross-builds. Separate processes also validated runtime-only

@@ -1285,7 +1285,15 @@ pub(crate) fn sustained_end_drop(samples: &[u32]) -> i64 {
     let midpoint = samples.len() / 2;
     let early_floor = samples[..midpoint].iter().copied().min().unwrap();
     let late_floor = samples[midpoint..].iter().copied().min().unwrap();
-    (i64::from(early_floor) - i64::from(late_floor)).max(0)
+    let early_ceiling = samples[..midpoint].iter().copied().max().unwrap();
+    let late_ceiling = samples[midpoint..].iter().copied().max().unwrap();
+    // A bounded in-flight buffer can lower a sampled floor and later release
+    // all its memory. Call a loss sustained only when the entire free-memory
+    // envelope shifts downward. Absolute minimum/allocation-fault guards are
+    // checked separately, so a recovered transient cannot hide exhaustion.
+    let floor_drop = i64::from(early_floor) - i64::from(late_floor);
+    let ceiling_drop = i64::from(early_ceiling) - i64::from(late_ceiling);
+    floor_drop.min(ceiling_drop).max(0)
 }
 fn marker_lines(output: &str) -> Vec<String> {
     let lines: Vec<_> = output.lines().collect();
@@ -1663,6 +1671,23 @@ mod tests {
             32_000, 31_500, 31_000, 31_500, 28_000, 27_500, 27_000, 27_500,
         ];
         assert_eq!(sustained_end_drop(&samples), 4_000);
+    }
+
+    #[test]
+    fn captured_valve_temporary_working_buffer_recovers_without_a_leak() {
+        let samples = [
+            26_480, 26_468, 22_044, 26_192, 26_420, 26_404, 26_392, 26_316, 22_492, 22_492, 22_076,
+            26_460,
+        ];
+        // The recorded three-sample warm-up excluded an earlier, even lower
+        // trough. The old floor-only comparison then reported 4,116 lost bytes
+        // although the final free memory recovered to within 20 bytes of start.
+        assert_eq!(sustained_end_drop(&samples[3..]), 0);
+        let mut leaking = samples;
+        for value in &mut leaking[6..] {
+            *value -= 5_000;
+        }
+        assert!(sustained_end_drop(&leaking[3..]) > 4_096);
     }
 
     #[test]

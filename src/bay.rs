@@ -1,5 +1,5 @@
 use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayout};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -12,9 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -342,6 +341,8 @@ pub struct AssertionReport {
 }
 #[derive(Debug, Serialize)]
 pub struct BayReport {
+    /// True when existing observations were checked without executing firmware.
+    pub capture_recheck: bool,
     pub bay: String,
     pub nodes_executed: usize,
     pub host_nodes_executed: usize,
@@ -1682,12 +1683,83 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     }
     println!("[SIM] Final CPU positions:\n{}", register_dump.join("\n"));
     let probe_output = fs::read_to_string(&probe_path).context("reading bay probe capture")?;
+    qualify_observations(
+        topology,
+        &node_layouts,
+        &probe_output,
+        &host_outputs,
+        &host_diagnostics,
+        register_dump,
+    )
+}
+
+/// Re-evaluate a retained run with the production memory/link/host validators.
+/// This does not execute firmware or change its captured register values.
+pub fn check_capture(topology_path: &Path, capture: &Path) -> Result<BayReport> {
+    let topology: BayTopology = serde_json::from_slice(&fs::read(topology_path)?)?;
+    let console = fs::read_to_string(capture.join("renode.log"))?;
+    ensure!(
+        observed_marker(&console, "SEDS_BAY_COMPLETE"),
+        "capture does not contain a completed bay run"
+    );
+    ensure!(
+        !console.lines().any(console_execution_failed),
+        "capture contains a simulator execution failure"
+    );
+    let mut layouts = Vec::new();
+    for node in &topology.nodes {
+        ensure!(
+            observed_marker(&console, &format!("SEDS_NODE_BOOT_{}", safe(&node.name))),
+            "capture lacks boot confirmation for {}",
+            node.name
+        );
+        let path = if node.layout.is_absolute() {
+            node.layout.clone()
+        } else {
+            topology_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&node.layout)
+        };
+        layouts.push((node.name.clone(), BoardLayout::load(&path)?));
+    }
+    let mut hosts = BTreeMap::new();
+    for host in &topology.host_nodes {
+        hosts.insert(
+            host.name.clone(),
+            fs::read_to_string(capture.join(format!("{}-host.log", safe(&host.name))))?,
+        );
+    }
+    let probes = fs::read_to_string(capture.join("memory-probes.txt"))?;
+    let mut registers = Vec::new();
+    let lines: Vec<_> = console.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim().starts_with("SEDS_NODE ") {
+            registers.push(line.trim().to_owned());
+            if let Some(value) = lines.get(index + 1) {
+                registers.push((*value).to_owned());
+            }
+        }
+    }
+    let mut report = qualify_observations(topology, &layouts, &probes, &hosts, &hosts, registers)?;
+    report.capture_recheck = true;
+    Ok(report)
+}
+
+fn qualify_observations(
+    topology: BayTopology,
+    node_layouts: &[(String, BoardLayout)],
+    probe_output: &str,
+    host_outputs: &BTreeMap<String, String>,
+    host_diagnostics: &BTreeMap<String, String>,
+    register_dump: Vec<String>,
+) -> Result<BayReport> {
     let mut memory_profiles = BTreeMap::new();
-    for (node_name, layout) in &node_layouts {
+    for (node_name, layout) in node_layouts {
         let profiles = parse_memory_profiles(
             node_name,
             layout,
-            &probe_output,
+            probe_output,
             topology.sample_count,
             topology.enforce_end_drop,
             &topology
@@ -1704,7 +1776,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             hardware.execution.memory_probes = can_fifo_model_probes(layout);
             hardware.execution.memory_probe_warmup_samples = 0;
             profiles.extend(parse_memory_profiles(
-                node_name, &hardware, &probe_output, topology.sample_count, false, &[],
+                node_name, &hardware, probe_output, topology.sample_count, false, &[],
             )?);
             Ok(profiles)
         })
@@ -1714,7 +1786,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 .map(|(name, output)| format!("{name}:\n{output}"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let probes = raw_probe_diagnostics(&probe_output);
+            let probes = raw_probe_diagnostics(probe_output);
             anyhow::anyhow!("{error:#}\n\nAll-node probe observations:\n{probes}\n\nHost diagnostics:\n{host_detail}")
         })?;
         memory_profiles.insert(node_name.clone(), profiles);
@@ -2068,6 +2140,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     Ok(BayReport {
+        capture_recheck: false,
         bay: topology.name,
         nodes_executed: topology.nodes.len(),
         host_nodes_executed: topology.host_nodes.len(),
@@ -2284,7 +2357,7 @@ fn parse_memory_profiles(
         }
         let minimum_observed = *qualified_samples.iter().min().context("empty bay probe")?;
         let maximum_observed = *qualified_samples.iter().max().context("empty bay probe")?;
-        // Use the same sustained-floor comparison as the single-board
+        // Use the same sustained-envelope comparison as the single-board
         // profiler. Comparing two arbitrary endpoints falsely classifies a
         // healthy allocator's periodic high/low oscillation as a leak.
         let epochs = probe_epochs(
@@ -2419,6 +2492,74 @@ mod pico_fi_tests {
     use super::*;
 
     #[test]
+    fn saved_capture_keeps_minimum_fault_and_completion_guards() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../examples/stm32g4-board.json")).unwrap();
+        value["execution"]["memory_probe_warmup_samples"] = serde_json::json!(3);
+        value["execution"]["memory_probes"] = serde_json::json!([
+            {"name":"pool_available", "symbol":"pool", "minimum":20_000, "max_end_drop":4_096},
+            {"name":"allocation_failures", "symbol":"faults", "maximum":0}
+        ]);
+        let layout: BoardLayout = serde_json::from_value(value.clone()).unwrap();
+        let layout_path = directory.path().join("board.json");
+        fs::write(&layout_path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let topology = serde_json::json!({"name":"recorded", "virtual_time_ms":600_000,
+            "sample_count":12, "nodes":[{"name":"valve", "layout":layout_path,
+                "firmware_root":directory.path()}]});
+        let topology_path = directory.path().join("topology.json");
+        fs::write(&topology_path, serde_json::to_vec(&topology).unwrap()).unwrap();
+        let pools = [
+            26_480, 26_468, 22_044, 26_192, 26_420, 26_404, 26_392, 26_316, 22_492, 22_492, 22_076,
+            26_460,
+        ];
+        let capture = directory.path().join("capture");
+        fs::create_dir(&capture).unwrap();
+        let console = "SEDS_NODE_BOOT_valve\nSEDS_BAY_COMPLETE\n";
+        fs::write(capture.join("renode.log"), console).unwrap();
+        let render = |values: &[u32], fault: u32| {
+            let mut text = String::new();
+            for (sample, value) in values.iter().enumerate() {
+                text += &format!("SEDS_BAY_PROBE valve pool_available {sample}\n0x{value:08x}\n");
+                text +=
+                    &format!("SEDS_BAY_PROBE valve allocation_failures {sample}\n0x{fault:08x}\n");
+                for probe in can_fifo_model_probes(&layout) {
+                    text += &format!("SEDS_BAY_PROBE valve {} {sample}\n0x00000000\n", probe.name);
+                }
+            }
+            text
+        };
+        let good = render(&pools, 0);
+        fs::write(capture.join("memory-probes.txt"), &good).unwrap();
+        assert!(
+            check_capture(&topology_path, &capture)
+                .unwrap()
+                .capture_recheck
+        );
+        let mut unsafe_dip = pools;
+        unsafe_dip[7] = 1_000;
+        fs::write(capture.join("memory-probes.txt"), render(&unsafe_dip, 0)).unwrap();
+        assert!(check_capture(&topology_path, &capture)
+            .unwrap_err()
+            .to_string()
+            .contains("fell below"));
+        fs::write(capture.join("memory-probes.txt"), render(&pools, 1)).unwrap();
+        assert!(check_capture(&topology_path, &capture)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeded"));
+        fs::write(capture.join("memory-probes.txt"), &good).unwrap();
+        fs::write(capture.join("renode.log"), "SEDS_NODE_BOOT_valve\n").unwrap();
+        assert!(check_capture(&topology_path, &capture).is_err());
+        fs::write(
+            capture.join("renode.log"),
+            format!("{console}SEDS_IWDG_RESET\n"),
+        )
+        .unwrap();
+        assert!(check_capture(&topology_path, &capture).is_err());
+    }
+
+    #[test]
     fn guest_cpu_trace_is_bounded_and_preserves_run_duration() {
         for duration in [1u64, 20, 21, 600_000] {
             let script =
@@ -2529,14 +2670,12 @@ mod pico_fi_tests {
         }
         assert!(crate::execution::validate_counter_progress("loop", &counter, Some(1)).is_err());
         let stalled = [100, 120, 5, 5];
-        assert!(
-            crate::execution::validate_counter_progress(
-                "loop",
-                probe_epochs(&stalled, &[2], 0)[1],
-                Some(1)
-            )
-            .is_err()
-        );
+        assert!(crate::execution::validate_counter_progress(
+            "loop",
+            probe_epochs(&stalled, &[2], 0)[1],
+            Some(1)
+        )
+        .is_err());
         let leaking = [1000, 900, 1000, 800];
         assert_eq!(
             probe_epochs(&leaking, &[2], 0)
@@ -2633,8 +2772,8 @@ mod pico_fi_tests {
     fn pico_uart_keeps_running_without_host_and_reconnects_with_split_sync() {
         use std::os::fd::FromRawFd;
         use std::sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         };
         let (mut master_fd, mut slave_fd) = (-1, -1);
         assert_eq!(

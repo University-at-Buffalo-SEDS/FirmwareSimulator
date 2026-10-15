@@ -164,7 +164,7 @@ IDR also observes open-drain release and internal pulls. ADC declarations may
 set deterministic `channel_samples` and bounded `noise_lsb`; these are digital
 stimuli, not an electrical SPICE model.
 
-For soak profiling, set `execution.sample_count` and add `execution.memory_probes`. Each probe reads an exported 32-bit firmware symbol at equal virtual-time intervals. `minimum`, `maximum`, and `max_end_drop` turn allocator reserve, failure counters, panic counters, and sustained pool loss into hard failures. Set `memory_probe_warmup_samples` to exclude reset-time samples from qualification. End drop compares the low-water floors of the first and second halves of the qualified window, so bounded periodic allocation cycles pass while a persistently falling pool floor fails. Probe real allocator state; the synthetic `memory.sedsnet_pool` traffic budget is complementary, is reported as `behavioral_pool_model`, and is not evidence about the firmware's ThreadX pools or total physical RAM. To exercise network traffic through firmware, connect real nodes in a bay topology; bay execution samples and enforces each node's probes while the CAN/UART link is active.
+For soak profiling, set `execution.sample_count` and add `execution.memory_probes`. Each probe reads an exported 32-bit firmware symbol at equal virtual-time intervals. `minimum`, `maximum`, and `max_end_drop` turn allocator reserve, failure counters, panic counters, and sustained pool loss into hard failures. Set `memory_probe_warmup_samples` to exclude reset-time samples from qualification. End drop compares both the low and high free-memory levels in the first and second halves of the qualified window. It records a sustained drop only when both decrease; a temporary allocation that is later freed is not a leak. Absolute minimum bounds, low-water probes, allocation/panic counters and watchdog checks remain independent hard failures. Probe real allocator state; the synthetic `memory.sedsnet_pool` traffic budget is complementary, is reported as `behavioral_pool_model`, and is not evidence about the firmware's ThreadX pools or total physical RAM. To exercise network traffic through firmware, connect real nodes in a bay topology; bay execution samples and enforces each node's probes while the CAN/UART link is active.
 
 At the bay-topology level, `reboots` entries select a node and a one-based
 `after_sample`. The reset retains the node's physical flash and keeps other
@@ -191,3 +191,18 @@ across intentional firmware resets. Choose observation spacing longer than
 the task's normal batch/flush interval. Network-only outage tests should keep
 onboard ADCs connected and enforce these probes for acquisition and SD writes,
 without requiring network-send counters to advance during the outage itself.
+
+### Recheck a retained linked capture
+
+`firmware-sim --json bay-check --topology topology.json --capture capture-directory`
+reuses the production memory, link, and host-log validators without executing
+firmware. Keep the original topology/layouts, `renode.log`, `memory-probes.txt`
+and every `<host>-host.log` together; preserve the layout paths through the
+same Docker mounts. The result sets `capture_recheck: true` so it cannot be
+mistaken for a fresh execution. Incomplete runs, missing boot/probe observations,
+allocation faults, unsafe memory minima and watchdog errors still fail.
+
+The 4.2 qualification caught a floor-only false positive in the saved valve
+trace: a temporary 4,116-byte drop recovered at the final observation. Tests
+retain that exact trace, reject an injected sustained leak, and separately
+verify the hard fault/minimum/completion guards. The 4 KiB tolerance is unchanged.
