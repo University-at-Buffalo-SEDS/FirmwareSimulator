@@ -748,7 +748,7 @@ fn process_gateway_uart_rx(state: &mut PicoBridgeState) -> Result<()> {
             if state.uart_to_i2c_frames <= 5 {
                 let preview_len = host_frame.len().min(12);
                 eprintln!(
-                    "[SIM] Pico-Fi UART->I2C frame {} translated ({} payload bytes, head {:02x?})",
+                    "[SIM] Pico-Fi UART ingress frame {} translated ({} payload bytes, head {:02x?})",
                     state.uart_to_i2c_frames,
                     host_frame.len(),
                     &host_frame[..preview_len]
