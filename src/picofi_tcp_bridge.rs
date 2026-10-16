@@ -7,6 +7,7 @@ use std::time::Instant;
 struct Session {
     socket: TcpStream,
     hello: bool,
+    client: bool,
     incoming: Vec<u8>,
     outgoing: Vec<u8>,
     offset: usize,
@@ -19,11 +20,18 @@ impl Session {
         Ok(Self {
             socket,
             hello: false,
+            client: false,
             incoming: Vec::new(),
             outgoing: Vec::new(),
             offset: 0,
             write_started: Instant::now(),
         })
+    }
+    fn client(socket: TcpStream) -> Result<Self> {
+        let mut session = Self::new(socket)?;
+        session.client = true;
+        session.outgoing = b"PICOFI1".to_vec();
+        Ok(session)
     }
     fn service(&mut self, state: &mut PicoBridgeState) -> Result<()> {
         ensure!(
@@ -63,7 +71,9 @@ impl Session {
         if self.incoming.len() == total {
             if !self.hello {
                 ensure!(self.incoming == b"PICOFI1", "invalid Pico-Fi TCP handshake");
-                self.outgoing = b"PICOFI1".to_vec();
+                if !self.client {
+                    self.outgoing = b"PICOFI1".to_vec();
+                }
                 self.write_started = Instant::now();
                 self.hello = true;
                 self.incoming.clear();
@@ -139,9 +149,188 @@ pub(super) fn run(listener: TcpListener, uart_path: &Path, stop: impl Fn() -> bo
     Ok(())
 }
 
+#[path = "picofi_discovery_wire.rs"]
+mod discovery_wire;
+
+/// Exercise the deployed direction: Pico discovers a GS-selected TCP endpoint.
+pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> bool) -> Result<()> {
+    use discovery_wire::{hardware_mac, Kind, Message, Party, PORT, SIZE};
+    ensure!(
+        port != 0,
+        "Pico discovery UDP port must be nonzero (default {PORT})"
+    );
+    use std::net::{Ipv4Addr, UdpSocket};
+    let mut uart = OpenOptions::new().read(true).write(true).open(uart_path)?;
+    configure_raw_nonblocking(uart.as_raw_fd())?;
+    let discovery = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    discovery.set_nonblocking(true)?;
+    let identity = hardware_mac(&discovery.local_addr()?.port().to_le_bytes());
+    let mut state = PicoBridgeState::default();
+    let mut session = None;
+    let mut next_query = Instant::now();
+    let mut query = None;
+    let mut settle = None;
+    let mut best: Option<([u8; 6], std::net::SocketAddr)> = None;
+    let mut nonce = 1u64;
+    while !stop() {
+        read_gateway_uart(&mut state, &mut uart)?;
+        drain_gateway_uart_tx(&mut state, &mut uart)?;
+        let now = Instant::now();
+        if session.is_none() {
+            if now >= next_query {
+                let message = Message {
+                    kind: Kind::Query,
+                    party: Party::Pico,
+                    port: 0,
+                    nonce,
+                    identity,
+                };
+                nonce = nonce.wrapping_add(1).max(1);
+                discovery.send_to(&message.encode(), (Ipv4Addr::LOCALHOST, port))?;
+                query = Some(message);
+                best = None;
+                settle = Some(now + Duration::from_millis(400));
+                next_query = now + Duration::from_secs(1);
+            }
+            let mut bytes = [0; SIZE + 1];
+            for _ in 0..8 {
+                match discovery.recv_from(&mut bytes) {
+                    Ok((n, source)) => {
+                        if let Some(message) = Message::decode(&bytes[..n]) {
+                            if source.ip().is_loopback()
+                                && settle.is_some_and(|until| now <= until)
+                                && query.is_some_and(|q| message.compatible_offer(q))
+                                && best.as_ref().is_none_or(|(id, _)| message.identity < *id)
+                            {
+                                best = Some((
+                                    message.identity,
+                                    std::net::SocketAddr::new(source.ip(), message.port),
+                                ));
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            if settle.is_some_and(|until| now >= until) {
+                settle = None;
+                if let Some((_, endpoint)) = best.take() {
+                    if let Ok(socket) =
+                        TcpStream::connect_timeout(&endpoint, Duration::from_millis(250))
+                    {
+                        session = Some(Session::client(socket)?);
+                    }
+                }
+            }
+        }
+        if let Some(peer) = &mut session {
+            if let Err(error) = peer.service(&mut state) {
+                eprintln!("[SIM] Discovered Pico-Fi TCP disconnected: {error}; rediscovering");
+                session = None;
+                query = None;
+                best = None;
+                settle = None;
+                next_query = Instant::now();
+            }
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_bridge_finds_changed_host_port_and_preserves_duplex_uart_frames() {
+        use discovery_wire::{Kind, Message, Party, SIZE};
+        use std::{
+            ffi::CStr,
+            net::{Ipv4Addr, UdpSocket},
+            os::fd::FromRawFd,
+        };
+        let (mut master_fd, mut slave_fd) = (-1, -1);
+        let mut name = [0 as libc::c_char; 256];
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master_fd,
+                    &mut slave_fd,
+                    name.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let mut master = unsafe { fs::File::from_raw_fd(master_fd) };
+        let _slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        let path = PathBuf::from(unsafe { CStr::from_ptr(name.as_ptr()) }.to_str().unwrap());
+        configure_raw_nonblocking(master.as_raw_fd()).unwrap();
+        let discovery = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        discovery
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let port = discovery.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let worker =
+            thread::spawn(move || run_discovered(port, &path, || stopped.load(Ordering::Acquire)));
+        for value in [31, 32] {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let mut bytes = [0; SIZE];
+            let (n, source) = discovery.recv_from(&mut bytes).unwrap();
+            let query = Message::decode(&bytes[..n]).unwrap();
+            assert_eq!(query.party, Party::Pico);
+            let offer = Message {
+                kind: Kind::Offer,
+                party: Party::GroundStation,
+                port: listener.local_addr().unwrap().port(),
+                nonce: query.nonce,
+                identity: [2, 4, 6, 8, 10, 12],
+            };
+            discovery.send_to(&offer.encode(), source).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut host = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            };
+            host.set_nonblocking(false).unwrap();
+            host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut hello = [0; 7];
+            host.read_exact(&mut hello).unwrap();
+            assert_eq!(&hello, b"PICOFI1");
+            host.write_all(b"PICOFI1").unwrap();
+            master.write_all(&[0xa5, 0x5a, 1, 0, value]).unwrap();
+            let mut frame = [0; 5];
+            host.read_exact(&mut frame).unwrap();
+            assert_eq!(frame, [0xb5, 0x4e, 1, 0, value]);
+            host.write_all(&[0xb5, 0x4e, 1, 0, value + 1]).unwrap();
+            let mut collected = vec![];
+            while collected.len() < 5 {
+                let mut buffer = [0; 5];
+                match master.read(&mut buffer) {
+                    Ok(n) => collected.extend_from_slice(&buffer[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => panic!("{e}"),
+                };
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(collected, [0xa5, 0x5a, 1, 0, value + 1]);
+            host.shutdown(std::net::Shutdown::Both).unwrap();
+        }
+        stop.store(true, Ordering::Release);
+        worker.join().unwrap().unwrap();
+    }
     #[test]
     fn stalled_uart_backpressures_tcp_without_evicting_accepted_packets() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

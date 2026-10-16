@@ -46,6 +46,17 @@ process while retaining its configured network-variable cache; serial and Pico-F
 replacement process without resetting their peer. Pair the event with persistence, rediscovery, and
 liveness probes to verify restoration before network resynchronization and successful rejoin.
 
+Pico host links can select `pico_fi_discovery_to_uart` with the host environment key
+`GS_FILL_PICO_DISCOVERY_PORT`. The Pico transport model queries the GroundStation UDP
+discovery listener, validates its reply and connects to the advertised TCP port.
+GroundStation binds an available port and reconnects through discovery after a
+restart. `pico_fi_tcp_to_uart` retains explicit TCP endpoints for comparison;
+neither Ethernet mode uses the I²C mailbox. Native tests exercise actual UDP,
+TCP and a UART PTY, including a changed host port and bidirectional framing.
+The transport model does not execute RP2040 firmware or emulate DHCP/W5500
+electrical behavior; Pico-Fi's production addressing policy and ARP driver have
+separate native tests and compiled MCU images.
+
 One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories pin the `v0.4.13` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image resolves GroundStation’s SEDSnet major-version-4 dependency from crates.io. Explicit source-revision and registry-version build arguments support reproducible candidate checks; the application manifest keeps the major-version selector. The seven-board service-only and mixed-restart ten-minute qualification is described in [qualification status](docs/qualification-status.md) and [route recovery](docs/route-recovery.md). Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, `stm32h7`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
 
 The linked gate requires GroundStation to discover and canonically label all

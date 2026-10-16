@@ -178,6 +178,8 @@ pub enum HostLinkTransport {
     /// Pico-Fi Ethernet framing over a loopback TCP server, connected to the
     /// Gateway UART without using I2C transactions.
     PicoFiTcpToUart,
+    /// Pico discovers the GroundStation listener over UDP before opening TCP.
+    PicoFiDiscoveryToUart,
 }
 #[derive(Debug, Deserialize)]
 pub struct Link {
@@ -1074,6 +1076,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut renode_pty_paths = Vec::new();
     let mut pico_bridges = Vec::new();
     let mut pico_tcp_bridges = Vec::new();
+    let mut pico_discovery_bridges = Vec::new();
     for link in &topology.links {
         ensure!(
             link.endpoints.len() >= 2,
@@ -1131,7 +1134,17 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                         .find(|serial| serial.link == link.name)
                 });
             let transport = host_link.map(|serial| serial.transport).unwrap_or_default();
-            if transport == HostLinkTransport::PicoFiTcpToUart {
+            if transport == HostLinkTransport::PicoFiDiscoveryToUart {
+                ensure!(
+                    matches!(link.kind, LinkKind::PicoFi),
+                    "Pico discovery requires a pico_fi link"
+                );
+                let reservation = std::net::UdpSocket::bind("127.0.0.1:0")?;
+                let port = reservation.local_addr()?.port();
+                drop(reservation);
+                host_serial_paths.insert(link.name.clone(), PathBuf::from(port.to_string()));
+                pico_discovery_bridges.push((link.name.clone(), path, port));
+            } else if transport == HostLinkTransport::PicoFiTcpToUart {
                 ensure!(
                     matches!(link.kind, LinkKind::PicoFi),
                     "Pico-Fi TCP requires a pico_fi link"
@@ -1516,6 +1529,20 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     if !worker_stop.load(Ordering::Acquire) {
                         let _ = bridge_failure_tx
                             .send(format!("Pico-Fi TCP bridge {name} failed: {error:#}"));
+                    }
+                }
+            });
+        }
+        for (name, uart_path, port) in pico_discovery_bridges {
+            let bridge_failure_tx = console_failure_tx.clone();
+            let worker_stop = bridge_stop.clone();
+            thread::spawn(move || {
+                if let Err(error) = picofi_tcp_bridge::run_discovered(port, &uart_path, || {
+                    worker_stop.load(Ordering::Acquire)
+                }) {
+                    if !worker_stop.load(Ordering::Acquire) {
+                        let _ = bridge_failure_tx
+                            .send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
                     }
                 }
             });
