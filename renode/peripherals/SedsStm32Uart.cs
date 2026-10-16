@@ -139,7 +139,7 @@ namespace Antmicro.Renode.Peripherals.UART
         {
             if(receiveWire.TryDequeue(out var value) && (control1 & 5) == 5)
             {
-                var capacity = (control1 & (1u << 29)) != 0 ? 16 : 1;
+                var capacity = (control1 & (1u << 29)) != 0 ? 8 : 1;
                 if(receiveFifo.Count < capacity) receiveFifo.Enqueue(value);
                 else if((control3 & (1u << 12)) == 0) overrun = true;
                 idleTimer.Enabled = false;
@@ -193,7 +193,7 @@ namespace Antmicro.Renode.Peripherals.UART
         public Bits StopBits { get { return Bits.One; } }
         public Parity ParityBit { get { return Parity.None; } }
         public uint TransmittedBytes { get { return transmittedBytes; } }
-        private bool TxAvailable { get { return transmitFifo.Count < ((control1 & (1u << 29)) != 0 ? 16 : 1); } }
+        private bool TxAvailable { get { return transmitFifo.Count < ((control1 & (1u << 29)) != 0 ? 8 : 1); } }
 
         private readonly uint frequency;
         private readonly LimitTimer transmitTimer, receiveTimer, idleTimer;

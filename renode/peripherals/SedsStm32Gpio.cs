@@ -40,7 +40,12 @@ namespace Antmicro.Renode.Peripherals.GPIOPort
                 uint inputValue = 0;
                 for(var pin = 0; pin < 16; pin++)
                 {
-                    var isInput = ((mode >> (pin * 2)) & 3u) == 0;
+                    var pinMode = (mode >> (pin * 2)) & 3u;
+                    // In alternate-function mode the peripheral owns the pad;
+                    // ODR is not its output drive. In particular I2C's idle
+                    // open-drain lines must sample the external pull-ups even
+                    // while the GPIO output latch still contains reset zero.
+                    var isInput = pinMode == 0 || pinMode == 2;
                     var mask = 1u << pin;
                     if(isInput || IsOpenDrainReleased(key, pin, output))
                     {

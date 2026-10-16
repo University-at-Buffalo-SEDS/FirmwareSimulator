@@ -1,5 +1,5 @@
 use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayout};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -12,12 +12,15 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::Duration,
 };
+#[path = "picofi_tcp_bridge.rs"]
+mod picofi_tcp_bridge;
 
 pub(crate) fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
     child
@@ -173,6 +176,9 @@ pub enum HostLinkTransport {
     /// Linux I2C transactions on the host side, translated by a Pico-Fi pair
     /// to framed UART bytes on the firmware side.
     PicoFiI2cToUart,
+    /// Pico-Fi Ethernet framing over a loopback TCP server, connected to the
+    /// Gateway UART without using I2C transactions.
+    PicoFiTcpToUart,
 }
 #[derive(Debug, Deserialize)]
 pub struct Link {
@@ -240,12 +246,40 @@ pub struct NetworkAssertion {
     pub to_sample: Option<usize>,
 }
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostLogAssertion {
     pub name: String,
     pub node: String,
     pub contains: String,
     #[serde(default = "default_minimum_activity")]
     pub minimum_occurrences: u32,
+    #[serde(default)]
+    pub maximum_occurrences: Option<u32>,
+}
+
+impl HostLogAssertion {
+    fn accepts(&self, observed: u32) -> bool {
+        observed >= self.minimum_occurrences
+            && self
+                .maximum_occurrences
+                .is_none_or(|maximum| observed <= maximum)
+    }
+}
+
+#[cfg(test)]
+mod assertion_format_tests {
+    use super::*;
+    #[test]
+    fn misspelled_log_bounds_are_rejected_instead_of_silently_ignored() {
+        let invalid = r#"{"name":"no failure","node":"groundstation","contains":"failure","minimum":0,"maximum":0}"#;
+        assert!(serde_json::from_str::<HostLogAssertion>(invalid).is_err());
+        let valid = invalid
+            .replace("\"minimum\"", "\"minimum_occurrences\"")
+            .replace("\"maximum\"", "\"maximum_occurrences\"");
+        let assertion: HostLogAssertion = serde_json::from_str(&valid).unwrap();
+        assert!(assertion.accepts(0));
+        assert!(!assertion.accepts(1));
+    }
 }
 
 struct HostRuntime {
@@ -381,10 +415,12 @@ struct PicoBridgeState {
     host_reads: VecDeque<[u8; PICO_I2C_SLOT_SIZE]>,
     host_packets: VecDeque<Vec<u8>>,
     host_packet_bytes: usize,
+    v2_mailbox: Option<Vec<u8>>,
     next_transfer_id: u16,
     i2c_to_uart_frames: u32,
     uart_to_i2c_frames: u32,
     uart_framing_errors: u32,
+    host_packet_evictions: u32,
 }
 
 fn run_pico_fi_bridge_until(
@@ -460,12 +496,20 @@ impl PicoHostSession {
     fn service(&mut self, state: &mut PicoBridgeState) -> std::io::Result<bool> {
         if self.reply.is_empty() {
             // Read exactly one operation, retaining partial slots across polls.
-            let needed = if self.incoming.first() == Some(&b'W') {
-                33
-            } else {
-                1
+            let needed = match self.incoming.first() {
+                Some(b'W') => 33,
+                Some(b'w' | b'r') if self.incoming.len() < 3 => 3,
+                Some(b'w') => {
+                    let length = u16::from_le_bytes([self.incoming[1], self.incoming[2]]) as usize;
+                    if !(4..=4096).contains(&length) {
+                        return Err(std::io::Error::other("invalid I2C v2 write length"));
+                    }
+                    3 + length
+                }
+                Some(b'r') => 3,
+                _ => 1,
             };
-            let mut bytes = [0; 33];
+            let mut bytes = [0; 4099];
             match self.stream.read(&mut bytes[..needed - self.incoming.len()]) {
                 Ok(0) => return Ok(false),
                 Ok(count) => self.incoming.extend_from_slice(&bytes[..count]),
@@ -484,6 +528,20 @@ impl PicoHostSession {
                         });
                 }
                 b'R' => self.reply.extend_from_slice(&next_host_i2c_slot(state)),
+                b'w' | b'r' if self.incoming.len() < 3 => return Ok(true),
+                b'w' => {
+                    let length = u16::from_le_bytes([self.incoming[1], self.incoming[2]]) as usize;
+                    if self.incoming.len() < 3 + length {
+                        return Ok(true);
+                    }
+                    self.reply.push(u8::from(
+                        ingest_host_i2c_v2(state, &self.incoming[3..]).is_err(),
+                    ));
+                }
+                b'r' => {
+                    let length = u16::from_le_bytes([self.incoming[1], self.incoming[2]]) as usize;
+                    self.reply = read_host_i2c_v2(state, length).map_err(std::io::Error::other)?;
+                }
                 _ => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -673,6 +731,9 @@ fn process_gateway_uart_rx(state: &mut PicoBridgeState) -> Result<()> {
             break;
         }
         let frame: Vec<u8> = state.uart_rx.drain(..frame_length).collect();
+        if env::var_os("FIRMWARE_SIM_TRACE_PICO_ACKS").is_some() && frame.get(6) == Some(&1) {
+            eprintln!("[SIM] Pico-Fi gateway ACK received: {:02x?}", &frame[4..]);
+        }
         // UART-side commands are consumed by that Pico and never cross the
         // network bridge. Only DATA frames become I2C mailbox responses.
         if let Some(host_frame) = gateway_uart_to_i2c_response(&frame) {
@@ -812,6 +873,14 @@ fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
         let Some(old) = state.host_packets.pop_front() else {
             break;
         };
+        state.host_packet_evictions += 1;
+        if env::var_os("FIRMWARE_SIM_TRACE_PICO_ACKS").is_some() {
+            eprintln!(
+                "[SIM] Pico-Fi mailbox eviction {}: {:02x?}",
+                state.host_packet_evictions,
+                &old[..old.len().min(48)]
+            );
+        }
         state.host_packet_bytes -= old.len();
     }
     state.host_packet_bytes += frame.len();
@@ -820,12 +889,14 @@ fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
 
 fn next_host_i2c_slot(state: &mut PicoBridgeState) -> [u8; PICO_I2C_SLOT_SIZE] {
     if state.host_reads.is_empty() {
-        // pico-fi i2c_task::stage_response_packet uses try_pop_latest. Keep
-        // an active multi-slot transfer intact; select the newest queued
-        // packet only when staging the next transfer.
-        if let Some(frame) = state.host_packets.pop_back() {
-            state.host_packets.clear();
-            state.host_packet_bytes = 0;
+        // Match FIFO staging in both Pico I2C protocols. Distinct ACKs and
+        // template-dependent packets must all survive an ordinary poll.
+        // Queue overflow remains bounded separately in enqueue_host_packet.
+        if let Some(frame) = state.host_packets.pop_front() {
+            if env::var_os("FIRMWARE_SIM_TRACE_PICO_ACKS").is_some() && frame.get(6) == Some(&1) {
+                eprintln!("[SIM] Pico-Fi gateway ACK staged: {:02x?}", &frame[4..]);
+            }
+            state.host_packet_bytes -= frame.len();
             enqueue_host_i2c_slots(state, &frame);
         }
     }
@@ -833,6 +904,62 @@ fn next_host_i2c_slot(state: &mut PicoBridgeState) -> [u8; PICO_I2C_SLOT_SIZE] {
         .host_reads
         .pop_front()
         .unwrap_or([0; PICO_I2C_SLOT_SIZE])
+}
+
+// I2C v2 selects a four-byte packet header. Header-only and incomplete reads
+// retain the staged packet; a completed body read consumes exactly one packet.
+fn ingest_host_i2c_v2(state: &mut PicoBridgeState, packet: &[u8]) -> Result<()> {
+    ensure!(
+        packet.len() >= 4 && packet[0] == 0xd2,
+        "invalid I2C v2 header"
+    );
+    let length = u16::from_le_bytes([packet[2], packet[3]]) as usize;
+    ensure!(
+        length <= 4092 && packet.len() == length + 4,
+        "invalid I2C v2 packet length"
+    );
+    match packet[1] {
+        0 => ensure!(length == 0, "invalid I2C v2 selection"),
+        1 => {
+            ensure!(length > 0, "empty I2C v2 DATA packet");
+            let mut frame = vec![0xa5, 0x5a];
+            frame.extend_from_slice(&(length as u16).to_le_bytes());
+            frame.extend_from_slice(&packet[4..]);
+            enqueue_gateway_uart_packet(state, frame);
+            state.i2c_to_uart_frames += 1;
+        }
+        _ => bail!("unsupported simulated I2C v2 command"),
+    }
+    Ok(())
+}
+
+fn read_host_i2c_v2(state: &mut PicoBridgeState, length: usize) -> Result<Vec<u8>> {
+    ensure!((4..=4096).contains(&length), "invalid I2C v2 read length");
+    if state.v2_mailbox.is_none() {
+        if let Some(frame) = state.host_packets.pop_front() {
+            state.host_packet_bytes -= frame.len();
+            ensure!(
+                frame.len() >= 4 && frame.len() <= 4096,
+                "invalid staged UART frame"
+            );
+            let payload_len = frame.len() - 4;
+            let mut packet = vec![0xd2, 1];
+            packet.extend_from_slice(&(payload_len as u16).to_le_bytes());
+            packet.extend_from_slice(&frame[4..]);
+            state.v2_mailbox = Some(packet);
+        }
+    }
+    let mut result = vec![0; length];
+    if let Some(packet) = &state.v2_mailbox {
+        let copied = length.min(packet.len());
+        result[..copied].copy_from_slice(&packet[..copied]);
+        if length >= packet.len() {
+            state.v2_mailbox = None;
+        }
+    } else {
+        result[..4].copy_from_slice(&[0xd2, 0, 0, 0]);
+    }
+    Ok(result)
 }
 
 pub fn run(topology_path: &Path) -> Result<BayReport> {
@@ -954,6 +1081,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut host_serial_paths = BTreeMap::new();
     let mut renode_pty_paths = Vec::new();
     let mut pico_bridges = Vec::new();
+    let mut pico_tcp_bridges = Vec::new();
     for link in &topology.links {
         ensure!(
             link.endpoints.len() >= 2,
@@ -1011,7 +1139,18 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                         .find(|serial| serial.link == link.name)
                 });
             let transport = host_link.map(|serial| serial.transport).unwrap_or_default();
-            if transport == HostLinkTransport::PicoFiI2cToUart {
+            if transport == HostLinkTransport::PicoFiTcpToUart {
+                ensure!(
+                    matches!(link.kind, LinkKind::PicoFi),
+                    "Pico-Fi TCP requires a pico_fi link"
+                );
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                host_serial_paths.insert(
+                    link.name.clone(),
+                    PathBuf::from(listener.local_addr()?.to_string()),
+                );
+                pico_tcp_bridges.push((link.name.clone(), path, listener));
+            } else if transport == HostLinkTransport::PicoFiI2cToUart {
                 ensure!(
                     matches!(link.kind, LinkKind::PicoFi),
                     "host link {} selects Pico-Fi I2C translation but is not pico_fi",
@@ -1326,7 +1465,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut host_pty_guards = BTreeMap::new();
     if !topology.host_nodes.is_empty() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-        while host_serial_paths.values().any(|path| !path.exists())
+        while renode_pty_paths.iter().any(|path| !path.exists())
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(25));
@@ -1374,6 +1513,20 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 "[SIM] Pico-Fi {} translating GroundStation I2C slots to Gateway UART frames",
                 name
             );
+        }
+        for (name, uart_path, listener) in pico_tcp_bridges {
+            let bridge_failure_tx = console_failure_tx.clone();
+            let worker_stop = bridge_stop.clone();
+            thread::spawn(move || {
+                if let Err(error) = picofi_tcp_bridge::run(listener, &uart_path, || {
+                    worker_stop.load(Ordering::Acquire)
+                }) {
+                    if !worker_stop.load(Ordering::Acquire) {
+                        let _ = bridge_failure_tx
+                            .send(format!("Pico-Fi TCP bridge {name} failed: {error:#}"));
+                    }
+                }
+            });
         }
         for host in &topology.host_nodes {
             for serial in &host.serial_links {
@@ -1944,14 +2097,15 @@ fn qualify_observations(
             )
         })?;
         let observed = output.matches(&assertion.contains).count() as u32;
-        if observed < assertion.minimum_occurrences {
+        if !assertion.accepts(observed) {
             assertion_failures.push(format!(
-                "{}: host {} reported {:?} {} time(s), below {}",
+                "{}: host {} reported {:?} {} time(s), expected at least {} and at most {:?}",
                 assertion.name,
                 assertion.node,
                 assertion.contains,
                 observed,
-                assertion.minimum_occurrences
+                assertion.minimum_occurrences,
+                assertion.maximum_occurrences
             ));
         }
     }
@@ -2539,15 +2693,19 @@ mod pico_fi_tests {
         let mut unsafe_dip = pools;
         unsafe_dip[7] = 1_000;
         fs::write(capture.join("memory-probes.txt"), render(&unsafe_dip, 0)).unwrap();
-        assert!(check_capture(&topology_path, &capture)
-            .unwrap_err()
-            .to_string()
-            .contains("fell below"));
+        assert!(
+            check_capture(&topology_path, &capture)
+                .unwrap_err()
+                .to_string()
+                .contains("fell below")
+        );
         fs::write(capture.join("memory-probes.txt"), render(&pools, 1)).unwrap();
-        assert!(check_capture(&topology_path, &capture)
-            .unwrap_err()
-            .to_string()
-            .contains("exceeded"));
+        assert!(
+            check_capture(&topology_path, &capture)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded")
+        );
         fs::write(capture.join("memory-probes.txt"), &good).unwrap();
         fs::write(capture.join("renode.log"), "SEDS_NODE_BOOT_valve\n").unwrap();
         assert!(check_capture(&topology_path, &capture).is_err());
@@ -2670,12 +2828,14 @@ mod pico_fi_tests {
         }
         assert!(crate::execution::validate_counter_progress("loop", &counter, Some(1)).is_err());
         let stalled = [100, 120, 5, 5];
-        assert!(crate::execution::validate_counter_progress(
-            "loop",
-            probe_epochs(&stalled, &[2], 0)[1],
-            Some(1)
-        )
-        .is_err());
+        assert!(
+            crate::execution::validate_counter_progress(
+                "loop",
+                probe_epochs(&stalled, &[2], 0)[1],
+                Some(1)
+            )
+            .is_err()
+        );
         let leaking = [1000, 900, 1000, 800];
         assert_eq!(
             probe_epochs(&leaking, &[2], 0)
@@ -2747,7 +2907,118 @@ mod pico_fi_tests {
     }
 
     #[test]
-    fn absent_i2c_host_keeps_bounded_latest_packets_and_active_transfer() {
+    fn i2c_poll_preserves_distinct_acks_and_telemetry_instead_of_latest_only() {
+        let mut state = PicoBridgeState::default();
+        let packets = [
+            vec![0xa5, 0x5a, 3, 0, 1, 7, 0],
+            vec![0xa5, 0x5a, 3, 0, 1, 8, 0],
+            vec![0xa5, 0x5a, 3, 0, 42, 9, 0],
+        ];
+        for packet in &packets {
+            enqueue_host_packet(&mut state, packet.clone());
+        }
+        for (index, packet) in packets.iter().enumerate() {
+            let slot = next_host_i2c_slot(&mut state);
+            assert_eq!(slot[4], PICO_I2C_START | PICO_I2C_END);
+            assert_eq!(&slot[18..18 + packet.len()], packet.as_slice());
+            assert_eq!(state.host_packets.len(), packets.len() - index - 1);
+        }
+        assert_eq!(state.host_packet_bytes, 0);
+        assert_eq!(next_host_i2c_slot(&mut state), [0; PICO_I2C_SLOT_SIZE]);
+    }
+
+    #[test]
+    fn i2c_v2_peek_partial_read_and_reconnect_keep_the_staged_packet() {
+        let mut state = PicoBridgeState::default();
+        ingest_host_i2c_v2(&mut state, &[0xd2, 0, 0, 0]).unwrap();
+        assert_eq!(read_host_i2c_v2(&mut state, 4).unwrap(), [0xd2, 0, 0, 0]);
+        for payload in [b"ack-one".as_slice(), b"ack-two", b"telemetry"] {
+            let mut frame = vec![0xa5, 0x5a];
+            frame.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+            frame.extend_from_slice(payload);
+            enqueue_host_packet(&mut state, frame);
+        }
+        for payload in [b"ack-one".as_slice(), b"ack-two", b"telemetry"] {
+            let header = [0xd2, 1, payload.len() as u8, 0];
+            assert_eq!(read_host_i2c_v2(&mut state, 4).unwrap(), header);
+            assert_eq!(read_host_i2c_v2(&mut state, 5).unwrap()[..4], header);
+            // Re-selecting after a host reconnect must not discard the body.
+            ingest_host_i2c_v2(&mut state, &[0xd2, 0, 0, 0]).unwrap();
+            assert_eq!(
+                &read_host_i2c_v2(&mut state, payload.len() + 4).unwrap()[4..],
+                payload
+            );
+        }
+        assert_eq!(state.host_packet_bytes, 0);
+        assert_eq!(read_host_i2c_v2(&mut state, 4).unwrap(), [0xd2, 0, 0, 0]);
+    }
+
+    #[test]
+    fn i2c_v2_write_wraps_raw_network_data_and_rejects_malformed_lengths() {
+        let mut state = PicoBridgeState::default();
+        ingest_host_i2c_v2(&mut state, &[0xd2, 1, 3, 0, 42, 43, 44]).unwrap();
+        assert_eq!(
+            state.uart_tx_packets.pop_front().unwrap(),
+            [0xa5, 0x5a, 3, 0, 42, 43, 44]
+        );
+        for packet in [
+            &[0xd2, 1, 3, 0, 42][..],
+            &[0xd2, 0, 1, 0, 42],
+            &[0xd2, 1, 0, 0],
+            &[0xd2, 2, 0, 0],
+        ] {
+            assert!(ingest_host_i2c_v2(&mut state, packet).is_err());
+        }
+        assert!(read_host_i2c_v2(&mut state, 4097).is_err());
+        assert!(read_host_i2c_v2(&mut state, 3).is_err());
+    }
+
+    #[test]
+    fn i2c_v2_socket_transactions_handle_fragmented_prefixes_and_peek_body_reads() {
+        let (mut host, bridge) = UnixStream::pair().unwrap();
+        host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let worker = thread::spawn(move || {
+            let mut state = PicoBridgeState::default();
+            enqueue_host_packet(&mut state, vec![0xa5, 0x5a, 3, 0, 11, 12, 13]);
+            let mut session = PicoHostSession::new(bridge).unwrap();
+            while session.service(&mut state).unwrap() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            state
+        });
+        // Actual GroundStation v2 operations: w + u16 length + packet,
+        // r + u16 length, followed by a separate full-body transaction.
+        for byte in [b'w', 4, 0, 0xd2, 0, 0, 0] {
+            host.write_all(&[byte]).unwrap();
+        }
+        let mut status = [1];
+        host.read_exact(&mut status).unwrap();
+        assert_eq!(status, [0]);
+        for length in [4u16, 4, 7, 4] {
+            host.write_all(&[b'r']).unwrap();
+            host.write_all(&length.to_le_bytes()).unwrap();
+            let mut reply = vec![0; length as usize];
+            host.read_exact(&mut reply).unwrap();
+            match length {
+                7 => assert_eq!(reply, [0xd2, 1, 3, 0, 11, 12, 13]),
+                _ if reply[1] == 1 => assert_eq!(reply, [0xd2, 1, 3, 0]),
+                _ => assert_eq!(reply, [0xd2, 0, 0, 0]),
+            }
+        }
+        host.write_all(&[b'w', 7, 0, 0xd2, 1, 3, 0, 21, 22, 23])
+            .unwrap();
+        host.read_exact(&mut status).unwrap();
+        assert_eq!(status, [0]);
+        drop(host);
+        let mut state = worker.join().unwrap();
+        assert_eq!(
+            state.uart_tx_packets.pop_front().unwrap(),
+            [0xa5, 0x5a, 3, 0, 21, 22, 23]
+        );
+        assert_eq!(state.host_packet_bytes, 0);
+    }
+    #[test]
+    fn absent_i2c_host_keeps_bounded_fifo_packets_and_active_transfer() {
         let mut state = PicoBridgeState::default();
         for byte in 0..100 {
             enqueue_host_packet(&mut state, vec![byte; 100]);
@@ -2755,15 +3026,15 @@ mod pico_fi_tests {
         assert_eq!(state.host_packets.len(), 8);
         assert_eq!(state.host_packet_bytes, 800);
         let first = next_host_i2c_slot(&mut state);
-        assert_eq!(first[18], 99);
-        assert_eq!(state.host_packet_bytes, 0);
+        assert_eq!(first[18], 92);
+        assert_eq!(state.host_packet_bytes, 700);
         for _ in 0..100 {
             enqueue_host_packet(&mut state, vec![7; 4096]);
         }
         assert_eq!(state.host_packets.len(), 2);
         assert_eq!(state.host_packet_bytes, 8192);
         let continuation = next_host_i2c_slot(&mut state);
-        assert_eq!(continuation[18], 99);
+        assert_eq!(continuation[18], 92);
         assert_eq!(continuation[4] & PICO_I2C_START, 0);
     }
 
@@ -2772,8 +3043,8 @@ mod pico_fi_tests {
     fn pico_uart_keeps_running_without_host_and_reconnects_with_split_sync() {
         use std::os::fd::FromRawFd;
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         };
         let (mut master_fd, mut slave_fd) = (-1, -1);
         assert_eq!(
@@ -2833,10 +3104,24 @@ mod pico_fi_tests {
             thread::sleep(Duration::from_millis(10));
             master.write_all(&[0x5A, 1, 0, 43]).unwrap();
             thread::sleep(Duration::from_millis(10));
-            peer.write_all(b"R").unwrap();
-            let mut slot = [0; 32];
-            peer.read_exact(&mut slot).unwrap();
-            assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 43]);
+            let mut received_new = false;
+            // FIFO preserves the bounded pre-reconnect telemetry instead of
+            // destroying it when the first new packet arrives.
+            for _ in 0..=PICO_PACKET_QUEUE_DEPTH {
+                peer.write_all(b"R").unwrap();
+                let mut slot = [0; 32];
+                peer.read_exact(&mut slot).unwrap();
+                if slot[22] == 43 {
+                    assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 43]);
+                    received_new = true;
+                    break;
+                }
+                assert_eq!(&slot[18..23], &[0xA5, 0x5A, 1, 0, 42]);
+            }
+            assert!(
+                received_new,
+                "reconnection drains retained packets and reaches new data"
+            );
             peer.write_all(b"Wpartial").unwrap();
             drop(peer);
             thread::sleep(Duration::from_millis(10));
@@ -3084,6 +3369,18 @@ mod pico_fi_tests {
         }
         assert_eq!(wire.bytes, packet);
         assert_eq!(state.uart_tx_bytes, 0);
+    }
+
+    #[test]
+    fn forbidden_stale_markers_fail_even_when_minimum_is_zero() {
+        let assertion: HostLogAssertion = serde_json::from_value(serde_json::json!({
+            "name":"no stale telemetry","node":"groundstation","contains":"stale",
+            "minimum_occurrences":0,"maximum_occurrences":0
+        }))
+        .unwrap();
+        assert!(assertion.accepts(0));
+        assert!(!assertion.accepts(1));
+        assert!(!assertion.accepts(10));
     }
 
     #[test]

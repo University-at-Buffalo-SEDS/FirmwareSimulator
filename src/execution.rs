@@ -678,7 +678,8 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
             {
                 let address = address.rsplit_once('@').unwrap().1;
                 overlay.push_str(&format!(
-                    "layoutDevice{index}: Sensors.SedsLtc2990 @ i2c2 {address}\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutDevice{index}: Sensors.SedsLtc2990 @ i2c2 {address}\n    samples: \"{}\"\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    peripheral.channel_samples.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX),
                     source_root.join("SedsLtc2990.cs").display()

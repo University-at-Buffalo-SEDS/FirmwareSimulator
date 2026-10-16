@@ -1,10 +1,10 @@
-FROM rust:1.98-bookworm AS groundstation
+FROM rust:bookworm AS groundstation
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git libudev-dev pkg-config \
+    && apt-get install -y --no-install-recommends git libudev-dev pkg-config cmake \
     && rm -rf /var/lib/apt/lists/*
 ARG GROUNDSTATION_REPOSITORY=https://github.com/University-at-Buffalo-SEDS/GroundStation26.git
-ARG GROUNDSTATION_REF=55ef1a5b8e70d1b77d85ad1db95693d5466a2e5e
-ARG GROUNDSTATION_SEDSNET_RELEASE=4.0.33
+ARG GROUNDSTATION_REF=dev
+ARG GROUNDSTATION_SEDSNET_RELEASE=
 ARG GROUNDSTATION_SEDSNET_GIT_REV=
 RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
@@ -14,9 +14,11 @@ RUN git init /groundstation \
          cargo add --manifest-path /groundstation/backend/Cargo.toml \
            SEDSnet --git https://github.com/Rylan-Meilutis/SEDSnet.git \
            --rev "${GROUNDSTATION_SEDSNET_GIT_REV}"; \
-       else \
+       elif [ -n "${GROUNDSTATION_SEDSNET_RELEASE}" ]; then \
          cargo update --manifest-path /groundstation/Cargo.toml \
            -p SEDSnet --precise "${GROUNDSTATION_SEDSNET_RELEASE}"; \
+       else \
+         cargo update --manifest-path /groundstation/Cargo.toml -p SEDSnet; \
        fi \
     && cargo build --manifest-path /groundstation/Cargo.toml \
          -p groundstation_backend --release --features hitl_mode
@@ -27,6 +29,10 @@ COPY renode/peripherals/SedsStm32Uart.cs renode/peripherals/SedsStm32Uart.cs
 COPY tests/uart-concurrency tests/uart-concurrency
 RUN dotnet publish tests/uart-concurrency/UartConcurrency.csproj -c Release -o /uart-check
 RUN dotnet /uart-check/UartConcurrency.dll
+COPY renode/peripherals/SedsLtc2990.cs renode/peripherals/SedsLtc2990.cs
+COPY tests/ltc2990 tests/ltc2990
+RUN dotnet publish tests/ltc2990/Ltc2990.csproj -c Release -o /ltc-check
+RUN dotnet /ltc-check/Ltc2990.dll
 
 FROM rust:1.98-bookworm AS builder
 WORKDIR /src

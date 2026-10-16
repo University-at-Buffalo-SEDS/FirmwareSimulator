@@ -16,6 +16,7 @@ class Program
     {
         CheckByteRegisters();
         CheckIdleAndOverrun();
+        CheckG4FifoDepth();
         CheckConcurrentEnqueueDuringTimerDisable();
         var uart = new SedsStm32Uart(new Machine());
         uart.WriteDoubleWord(0, 13 | (1u << 29));
@@ -96,6 +97,25 @@ class Program
         uart.Reset();
         if((uart.ReadDoubleWord(0x1c) & 56) != 0) throw new Exception("reset retained RX state");
         Console.WriteLine("PASS: receive wire pacing, IDLE interrupt, overrun and reset");
+    }
+    static void CheckG4FifoDepth()
+    {
+        var uart = new SedsStm32Uart(new Machine());
+        uart.WriteDoubleWord(0, 13 | (1u << 29));
+        uart.WriteDoubleWord(0x0c, 1476);
+        // STM32G4 HAL defines RX_FIFO_DEPTH/TX_FIFO_DEPTH as eight words.
+        for(byte value = 0; value < 8; value++)
+        {
+            uart.WriteChar(value); LimitTimer.For("uartRx").Fire();
+            uart.WriteDoubleWord(0x28, value);
+        }
+        if((uart.ReadDoubleWord(0x1c) & 8) != 0) throw new Exception("eight-byte RX FIFO overran early");
+        if((uart.ReadDoubleWord(0x1c) & 128) != 0) throw new Exception("TX FIFO exceeds G4 depth");
+        uart.WriteChar(9); LimitTimer.For("uartRx").Fire();
+        if((uart.ReadDoubleWord(0x1c) & 8) == 0) throw new Exception("ninth RX byte must overrun");
+        for(byte value = 0; value < 8; value++)
+            if(uart.ReadByte(0x24) != value) throw new Exception("RX FIFO overwrote accepted bytes");
+        Console.WriteLine("PASS: G4 eight-byte FIFO headroom and bounded overrun");
     }
     static void CheckConcurrentEnqueueDuringTimerDisable()
     {
