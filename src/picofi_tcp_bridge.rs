@@ -49,7 +49,7 @@ impl Session {
         let can_receive = !self.hello
             || total == 4
             || (state.uart_tx_packets.len() < PICO_PACKET_QUEUE_DEPTH
-                && state.uart_tx_bytes.saturating_add(total) <= PICO_PACKET_QUEUE_BYTES);
+                && state.uart_tx_bytes.saturating_add(total) <= PICO_UART_QUEUE_BYTES);
         let mut bytes = [0; 4100];
         let need = total - self.incoming.len();
         if need != 0 && can_receive {
@@ -70,7 +70,10 @@ impl Session {
             } else if total > 4 && can_receive {
                 let mut frame = vec![0xa5, 0x5a];
                 frame.extend_from_slice(&self.incoming[2..]);
-                enqueue_gateway_uart_packet(state, frame);
+                ensure!(
+                    enqueue_gateway_uart_packet(state, frame),
+                    "Pico UART egress full"
+                );
                 state.i2c_to_uart_frames += 1;
                 self.incoming.clear();
             }
@@ -143,12 +146,18 @@ mod tests {
     fn stalled_uart_backpressures_tcp_without_evicting_accepted_packets() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut host = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        host.set_nodelay(true).unwrap();
         host.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let (socket, _) = listener.accept().unwrap();
         let mut peer = Session::new(socket).unwrap();
         let mut state = PicoBridgeState::default();
         host.write_all(b"PICOFI1").unwrap();
-        peer.service(&mut state).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !peer.hello || !peer.outgoing.is_empty() {
+            assert!(Instant::now() < deadline, "handshake did not complete");
+            peer.service(&mut state).unwrap();
+            thread::sleep(Duration::from_millis(1));
+        }
         let mut hello = [0; 7];
         host.read_exact(&mut hello).unwrap();
         for index in 0..PICO_PACKET_QUEUE_DEPTH {
@@ -156,15 +165,19 @@ mod tests {
         }
         let accepted = state.uart_tx_packets.clone();
         host.write_all(&[0xb5, 0x4e, 1, 0, 42]).unwrap();
-        for _ in 0..4 {
+        while peer.incoming.len() < 4 {
+            assert!(Instant::now() < deadline, "header did not arrive");
             peer.service(&mut state).unwrap();
+            thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(state.uart_tx_packets, accepted);
         assert_eq!(peer.incoming, [0xb5, 0x4e, 1, 0]);
         let first = state.uart_tx_packets.pop_front().unwrap();
         state.uart_tx_bytes -= first.len();
-        for _ in 0..4 {
+        while !peer.incoming.is_empty() {
+            assert!(Instant::now() < deadline, "paused body did not resume");
             peer.service(&mut state).unwrap();
+            thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(state.uart_tx_packets.len(), PICO_PACKET_QUEUE_DEPTH);
         assert_eq!(state.uart_tx_packets.front(), accepted.get(1));

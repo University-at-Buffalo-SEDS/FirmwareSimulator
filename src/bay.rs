@@ -399,7 +399,9 @@ const PICO_I2C_END: u8 = 2;
 const PICO_I2C_PACKET_MAX: usize = 4_096;
 const PICO_UART_MAX_FRAME: usize = PICO_I2C_PACKET_MAX + 4;
 const PICO_PACKET_QUEUE_DEPTH: usize = 8;
+const PICO_HOST_MAILBOX_DEPTH: usize = 128;
 const PICO_PACKET_QUEUE_BYTES: usize = 8_192;
+const PICO_UART_QUEUE_BYTES: usize = PICO_PACKET_QUEUE_DEPTH * PICO_UART_MAX_FRAME;
 const PICO_UART_BAUD: u64 = 115_200;
 fn default_pico_uart_baud() -> u64 {
     PICO_UART_BAUD
@@ -420,7 +422,7 @@ struct PicoBridgeState {
     i2c_to_uart_frames: u32,
     uart_to_i2c_frames: u32,
     uart_framing_errors: u32,
-    host_packet_evictions: u32,
+    host_packet_rejections: u32,
 }
 
 fn run_pico_fi_bridge_until(
@@ -647,7 +649,10 @@ fn ingest_host_i2c_slot(
         // the UART Pico adds a new, independent envelope for the Gateway.
         let gateway_frame = i2c_request_to_gateway_uart(&frame)?;
         let gateway_payload_len = gateway_frame.len().saturating_sub(4);
-        enqueue_gateway_uart_packet(state, gateway_frame);
+        ensure!(
+            enqueue_gateway_uart_packet(state, gateway_frame),
+            "Pico UART egress full"
+        );
         state.i2c_to_uart_frames += 1;
         if state.i2c_to_uart_frames <= 5 || state.i2c_to_uart_frames % 25 == 0 {
             eprintln!(
@@ -791,25 +796,16 @@ fn gateway_uart_to_i2c_response(frame: &[u8]) -> Option<Vec<u8>> {
     Some(frame.to_vec())
 }
 
-fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) {
-    if packet.len() > PICO_PACKET_QUEUE_BYTES {
-        return;
-    }
-    while state.uart_tx_packets.len() >= PICO_PACKET_QUEUE_DEPTH
-        || state.uart_tx_bytes + packet.len() > PICO_PACKET_QUEUE_BYTES
+fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) -> bool {
+    if packet.len() > PICO_UART_MAX_FRAME
+        || state.uart_tx_packets.len() >= PICO_PACKET_QUEUE_DEPTH
+        || packet.len() > PICO_UART_QUEUE_BYTES.saturating_sub(state.uart_tx_bytes)
     {
-        // Once a UART header has left the Pico, its payload must finish.
-        // Overwrite only whole pending packets, never splice a new frame
-        // into an in-flight one. Keep both queue budgets bounded even when
-        // only the active frame remains and the incoming packet cannot fit.
-        let pending_index = usize::from(state.uart_tx_offset != 0);
-        let Some(dropped) = state.uart_tx_packets.remove(pending_index) else {
-            return;
-        };
-        state.uart_tx_bytes = state.uart_tx_bytes.saturating_sub(dropped.len());
+        return false;
     }
     state.uart_tx_bytes += packet.len();
     state.uart_tx_packets.push_back(packet);
+    true
 }
 
 fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Result<()> {
@@ -862,26 +858,20 @@ fn enqueue_host_i2c_slots(state: &mut PicoBridgeState, frame: &[u8]) {
 }
 
 fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
-    // Match pico-fi's OverwriteQueue: the independent I2C Pico remains
-    // bounded even if GroundStation never polls its mailbox.
-    if frame.len() > PICO_PACKET_QUEUE_BYTES {
-        return;
-    }
-    while state.host_packets.len() >= PICO_PACKET_QUEUE_DEPTH
-        || state.host_packet_bytes + frame.len() > PICO_PACKET_QUEUE_BYTES
+    // Byte-backed Pico mailboxes retain accepted packets. At saturation the
+    // network reader pauses; further unaccepted upstream UART traffic can be
+    // refused, but must never evict an accepted SDT template or receipt.
+    if state.host_packets.len() >= PICO_HOST_MAILBOX_DEPTH
+        || frame.len() > PICO_PACKET_QUEUE_BYTES.saturating_sub(state.host_packet_bytes)
     {
-        let Some(old) = state.host_packets.pop_front() else {
-            break;
-        };
-        state.host_packet_evictions += 1;
+        state.host_packet_rejections += 1;
         if env::var_os("FIRMWARE_SIM_TRACE_PICO_ACKS").is_some() {
             eprintln!(
-                "[SIM] Pico-Fi mailbox eviction {}: {:02x?}",
-                state.host_packet_evictions,
-                &old[..old.len().min(48)]
+                "[SIM] Pico-Fi upstream frame refused at mailbox backpressure {}",
+                state.host_packet_rejections
             );
         }
-        state.host_packet_bytes -= old.len();
+        return;
     }
     state.host_packet_bytes += frame.len();
     state.host_packets.push_back(frame);
@@ -925,7 +915,10 @@ fn ingest_host_i2c_v2(state: &mut PicoBridgeState, packet: &[u8]) -> Result<()> 
             let mut frame = vec![0xa5, 0x5a];
             frame.extend_from_slice(&(length as u16).to_le_bytes());
             frame.extend_from_slice(&packet[4..]);
-            enqueue_gateway_uart_packet(state, frame);
+            ensure!(
+                enqueue_gateway_uart_packet(state, frame),
+                "Pico UART egress full"
+            );
             state.i2c_to_uart_frames += 1;
         }
         _ => bail!("unsupported simulated I2C v2 command"),
@@ -3018,23 +3011,34 @@ mod pico_fi_tests {
         assert_eq!(state.host_packet_bytes, 0);
     }
     #[test]
+    fn mailbox_burst_keeps_sdt_template_and_dependent_data() {
+        let mut state = PicoBridgeState::default();
+        for byte in 0..32 {
+            enqueue_host_packet(&mut state, vec![byte; 32]);
+        }
+        assert_eq!(state.host_packet_rejections, 0);
+        for byte in 0..32 {
+            assert_eq!(state.host_packets.pop_front().unwrap(), vec![byte; 32]);
+        }
+    }
+    #[test]
     fn absent_i2c_host_keeps_bounded_fifo_packets_and_active_transfer() {
         let mut state = PicoBridgeState::default();
         for byte in 0..100 {
             enqueue_host_packet(&mut state, vec![byte; 100]);
         }
-        assert_eq!(state.host_packets.len(), 8);
-        assert_eq!(state.host_packet_bytes, 800);
+        assert_eq!(state.host_packets.len(), 81);
+        assert_eq!(state.host_packet_bytes, 8100);
         let first = next_host_i2c_slot(&mut state);
-        assert_eq!(first[18], 92);
-        assert_eq!(state.host_packet_bytes, 700);
+        assert_eq!(first[18], 0);
+        assert_eq!(state.host_packet_bytes, 8000);
         for _ in 0..100 {
             enqueue_host_packet(&mut state, vec![7; 4096]);
         }
-        assert_eq!(state.host_packets.len(), 2);
-        assert_eq!(state.host_packet_bytes, 8192);
+        assert_eq!(state.host_packets.len(), 80);
+        assert_eq!(state.host_packet_bytes, 8000);
         let continuation = next_host_i2c_slot(&mut state);
-        assert_eq!(continuation[18], 92);
+        assert_eq!(continuation[18], 0);
         assert_eq!(continuation[4] & PICO_I2C_START, 0);
     }
 
@@ -3100,6 +3104,11 @@ mod pico_fi_tests {
         for _ in 0..3 {
             let mut peer = UnixStream::connect(&socket).unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            // Release a retained mailbox slot before new upstream data; a
+            // saturated disconnected link refuses new work, not old frames.
+            peer.write_all(b"R").unwrap();
+            let mut retained = [0; 32];
+            peer.read_exact(&mut retained).unwrap();
             master.write_all(&[0xA5]).unwrap();
             thread::sleep(Duration::from_millis(10));
             master.write_all(&[0x5A, 1, 0, 43]).unwrap();
@@ -3107,7 +3116,7 @@ mod pico_fi_tests {
             let mut received_new = false;
             // FIFO preserves the bounded pre-reconnect telemetry instead of
             // destroying it when the first new packet arrives.
-            for _ in 0..=PICO_PACKET_QUEUE_DEPTH {
+            for _ in 0..=PICO_HOST_MAILBOX_DEPTH {
                 peer.write_all(b"R").unwrap();
                 let mut slot = [0; 32];
                 peer.read_exact(&mut slot).unwrap();
@@ -3306,13 +3315,13 @@ mod pico_fi_tests {
             for value in 0..32 {
                 enqueue_gateway_uart_packet(&mut state, vec![0xA5, 0x5A, 1, 0, value]);
                 assert!(state.uart_tx_packets.len() <= PICO_PACKET_QUEUE_DEPTH);
-                assert!(state.uart_tx_bytes <= PICO_PACKET_QUEUE_BYTES);
+                assert!(state.uart_tx_bytes <= PICO_UART_QUEUE_BYTES);
             }
             while !state.uart_tx_packets.is_empty() {
                 step_gateway_uart_tx(&mut state, &mut wire).unwrap();
             }
             assert_eq!(&wire[..first.len()], &first);
-            assert_eq!(&wire[first.len()..first.len() + 5], &[0xA5, 0x5A, 1, 0, 25]);
+            assert_eq!(&wire[first.len()..first.len() + 5], &[0xA5, 0x5A, 1, 0, 0]);
             assert_eq!(state.uart_tx_bytes, 0);
         }
     }
@@ -3323,12 +3332,21 @@ mod pico_fi_tests {
         let first = vec![42; PICO_UART_MAX_FRAME];
         enqueue_gateway_uart_packet(&mut state, first.clone());
         state.uart_tx_offset = 1;
-        // Two maximum-size frames exceed the byte budget even though the
-        // packet-count limit has not been reached.
-        enqueue_gateway_uart_packet(&mut state, vec![43; PICO_UART_MAX_FRAME]);
+        for _ in 1..PICO_PACKET_QUEUE_DEPTH {
+            assert!(enqueue_gateway_uart_packet(
+                &mut state,
+                vec![43; PICO_UART_MAX_FRAME]
+            ));
+        }
+        let accepted = state.uart_tx_packets.clone();
+        assert!(!enqueue_gateway_uart_packet(
+            &mut state,
+            vec![44; PICO_UART_MAX_FRAME]
+        ));
+        assert_eq!(state.uart_tx_packets, accepted);
         assert_eq!(state.uart_tx_packets.front(), Some(&first));
         assert_eq!(state.uart_tx_offset, 1);
-        assert!(state.uart_tx_bytes <= PICO_PACKET_QUEUE_BYTES);
+        assert!(state.uart_tx_bytes <= PICO_UART_QUEUE_BYTES);
     }
 
     #[test]
