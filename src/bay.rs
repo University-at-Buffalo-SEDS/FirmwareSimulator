@@ -1,5 +1,5 @@
 use crate::{core::Architecture, execution::MemoryProbeReport, layout::BoardLayout};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -12,9 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -2686,19 +2685,15 @@ mod pico_fi_tests {
         let mut unsafe_dip = pools;
         unsafe_dip[7] = 1_000;
         fs::write(capture.join("memory-probes.txt"), render(&unsafe_dip, 0)).unwrap();
-        assert!(
-            check_capture(&topology_path, &capture)
-                .unwrap_err()
-                .to_string()
-                .contains("fell below")
-        );
+        assert!(check_capture(&topology_path, &capture)
+            .unwrap_err()
+            .to_string()
+            .contains("fell below"));
         fs::write(capture.join("memory-probes.txt"), render(&pools, 1)).unwrap();
-        assert!(
-            check_capture(&topology_path, &capture)
-                .unwrap_err()
-                .to_string()
-                .contains("exceeded")
-        );
+        assert!(check_capture(&topology_path, &capture)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeded"));
         fs::write(capture.join("memory-probes.txt"), &good).unwrap();
         fs::write(capture.join("renode.log"), "SEDS_NODE_BOOT_valve\n").unwrap();
         assert!(check_capture(&topology_path, &capture).is_err());
@@ -2821,14 +2816,12 @@ mod pico_fi_tests {
         }
         assert!(crate::execution::validate_counter_progress("loop", &counter, Some(1)).is_err());
         let stalled = [100, 120, 5, 5];
-        assert!(
-            crate::execution::validate_counter_progress(
-                "loop",
-                probe_epochs(&stalled, &[2], 0)[1],
-                Some(1)
-            )
-            .is_err()
-        );
+        assert!(crate::execution::validate_counter_progress(
+            "loop",
+            probe_epochs(&stalled, &[2], 0)[1],
+            Some(1)
+        )
+        .is_err());
         let leaking = [1000, 900, 1000, 800];
         assert_eq!(
             probe_epochs(&leaking, &[2], 0)
@@ -2988,7 +2981,7 @@ mod pico_fi_tests {
         host.read_exact(&mut status).unwrap();
         assert_eq!(status, [0]);
         for length in [4u16, 4, 7, 4] {
-            host.write_all(&[b'r']).unwrap();
+            host.write_all(b"r").unwrap();
             host.write_all(&length.to_le_bytes()).unwrap();
             let mut reply = vec![0; length as usize];
             host.read_exact(&mut reply).unwrap();
@@ -3047,8 +3040,8 @@ mod pico_fi_tests {
     fn pico_uart_keeps_running_without_host_and_reconnects_with_split_sync() {
         use std::os::fd::FromRawFd;
         use std::sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         };
         let (mut master_fd, mut slave_fd) = (-1, -1);
         assert_eq!(

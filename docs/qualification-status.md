@@ -1,5 +1,14 @@
 # Qualification status
 
+## SEDSnet 4.2.3 / simulator 0.4.13 candidate (2026-10-16; not yet qualified)
+
+[Current qualification record](qualification/sedsnet-4.2.3.md) tracks the new
+Router/Relay admission, ACK delivery, circular UART DMA and packed Pico mailbox
+repairs. Both ten-minute linked transports are running. The earlier 4.2.0
+results below do not certify this candidate; publication remains gated on its
+own retained captures and assertions.
+
+
 ## SEDSnet 4.2.0 coordinated candidate (2026-10-15; linked network qualification passed)
 
 The candidate uses canonical name-based schema identities, one reliability enum,
