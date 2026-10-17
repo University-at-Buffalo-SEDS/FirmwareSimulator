@@ -1,0 +1,40 @@
+{
+  "status": "passed",
+  "duration_simulated_ms": 600000,
+  "capture": "bay-1792185661612476585",
+  "scope": "original ReleaseCompactFair networking cohort with manual Ethernet TCP; newer gateway byte-ring/discovery cohort failed separately",
+  "valve_command_ack_count": 20,
+  "maximum_valve_ack_ms": {
+    "VB": 160,
+    "AB": 20
+  },
+  "managed_variable_measurements_ms": [
+    300,
+    230,
+    100,
+    240,
+    160,
+    160,
+    290,
+    160,
+    120
+  ],
+  "maximum_managed_variable_ms": 300,
+  "sampled_faults": [],
+  "minimum_stack_bytes": {
+    "rf.telemetry_stack_remaining": 4632,
+    "rf.gps_stack_remaining": 6544,
+    "power.telemetry_stack_remaining": 5532,
+    "power.sensor_stack_remaining": 2760,
+    "flight.telemetry_stack_remaining": 39436,
+    "flight.recovery_stack_remaining": 11876,
+    "gateway.telemetry_stack_remaining": 7804,
+    "actuator.telemetry_stack_remaining": 8444,
+    "actuator.main_stack_remaining": 6560,
+    "valve.main_stack_remaining": 6520,
+    "valve.telemetry_stack_remaining": 3504,
+    "valve.data_acq_stack_remaining": 2164,
+    "valve.safety_stack_remaining": 3940,
+    "daq.telemetry_stack_remaining": 23144
+  }
+}
