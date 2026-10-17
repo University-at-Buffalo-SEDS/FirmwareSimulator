@@ -333,9 +333,19 @@ merged source history1dd5a06; this introduces no binary source change. All sourc
 branches and the [simulator0.4.13 release](https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator/releases/tag/v0.4.13)
 are pushed.
 
-Container publication remains blocked: GitHub rejects workflow dispatch with
-HTTP422, Actions disabled, despite the permissions read reporting enabled.
-Automatic approval review rejected persistent repository Actions enablement;
-no execution-permission setting was changed. Existing local immutable candidate
-image/capture hashes above remain valid. A published multi-architecture image
-is not claimed until this external gate is cleared.
+Manual container publication completed on2026-10-17 after the user requested
+a manual build because organization Actions is unavailable. No Actions setting
+was changed. Native AMD64 on Jupiter and resource-limited native ARM64 on Ubuntu
+Pi both passed the image-build tests and full packaged MCU/peripheral/watchdog
+suite. The [manual image report](sedsnet-4.2.3-manual-image.json) records source
+revisions, image digests, build/test log hashes and anonymous native pull/run checks.
+
+`ghcr.io/university-at-buffalo-seds/firmwaresimulator:v0.4.13`, `latest` and all
+STM32 aliases share the Linux AMD64/ARM64 manifest:
+
+`sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83`
+
+The tagged simulator source is78b67a4, with GS0849e84 and registry SDK4.2.3.
+The earlier ten-minute networking qualification uses GS1b80359; later camera
+discovery changes are tested separately. These native image checks are not an
+additional600-second soak or a physical-hardware qualification.

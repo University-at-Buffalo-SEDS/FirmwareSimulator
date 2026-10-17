@@ -1,13 +1,18 @@
 # Qualification status
 
-## SEDSnet 4.2.3 / simulator 0.4.13 candidate (2026-10-16; not yet qualified)
+## SEDSnet 4.2.3 / simulator 0.4.13 (qualified and published, 2026-10-17)
 
-[Current qualification record](qualification/sedsnet-4.2.3.md) tracks the new
-Router/Relay admission, ACK delivery, circular UART DMA and packed Pico mailbox
-repairs. Both ten-minute linked transports are running. The earlier 4.2.0
-results below do not certify this candidate; publication remains gated on its
-own retained captures and assertions.
+The [qualification record](qualification/sedsnet-4.2.3.md) and retained JSON
+proofs document the passing startup/restart and 600-second seven-board Ethernet
+run: all20 command ACKs,9 managed updates and no power-freshness or sampled
+allocator/panic/stack/UART-drop faults. I2C transport is excluded by user request.
 
+The [manual container report](qualification/sedsnet-4.2.3-manual-image.json)
+records native AMD64/ARM64 image builds and full packaged test passes, plus
+anonymous registry pull and CLI checks on both hosts. Version0.4.13, latest and
+all STM32 aliases are public and share the same two-platform manifest. No
+organization Actions settings were changed. Physical field and native-phone
+checks remain separate from this software qualification.
 
 ## SEDSnet 4.2.0 coordinated candidate (2026-10-15; linked network qualification passed)
 

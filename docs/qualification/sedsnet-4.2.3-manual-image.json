@@ -1,0 +1,99 @@
+{
+  "version": "v0.4.13",
+  "simulator_source": "78b67a4aa8c008a7c939fcc696e0bcf26040cfb0",
+  "groundstation_source": "0849e84b28fc50ccdd9a68f76a58cc00da2fa485",
+  "sedsnet": "4.2.3",
+  "method": "native AMD64 on Jupiter and resource-limited native ARM64 on Ubuntu Pi; no GitHub Actions settings changed",
+  "architectures": {
+    "amd64": {
+      "state": {
+        "phase": "passed",
+        "image_id": "sha256:5ac5db497f2b7f2aaa7ddef01b7e3aba5fe61749d045410ef0b4c388e6760e44",
+        "architecture": "amd64",
+        "updated": 1792216108.404682
+      },
+      "source": "78b67a4aa8c008a7c939fcc696e0bcf26040cfb0",
+      "image_size": 583716011,
+      "logs_sha256": {
+        "/tmp/seds-simulator-manual-amd64-build.log": "4697821ebe35cd7b468aba8b5d363ed380b89f7ec81a116fc212eeb5338cf237",
+        "/tmp/seds-simulator-manual-amd64-tests-confirmed.log": "cac4893cba01c153249fdaf303ce69ea624d1af6e92f3ab4ba6ad8bec104e1d3"
+      },
+      "registry_digest": "sha256:ca31b27719fdd50f515e598c6ea43d9fe7571ed8ceebc14f6f11b8f92bea553f"
+    },
+    "arm64": {
+      "state": {
+        "phase": "passed",
+        "image_id": "sha256:277732776f2560c76ab1c2245a3da0c208dbbe6bfbd5379c6ce87e970e7a2135",
+        "architecture": "arm64",
+        "updated": 1792218348.5406985
+      },
+      "source": "78b67a4aa8c008a7c939fcc696e0bcf26040cfb0",
+      "image_size": 608102643,
+      "logs_sha256": {
+        "/tmp/seds-simulator-manual-arm64-host-build.log": "e2aa575762edbec15dd25dbe3419bc65604c262a53d93483c999119f8c9acf50",
+        "/tmp/seds-simulator-manual-arm64-tests.log": "ad46a49eb4e25f1b4dbe2959ba5d0bd7069cdbe0001494e1afe5de8cda841759"
+      },
+      "registry_digest": "sha256:277732776f2560c76ab1c2245a3da0c208dbbe6bfbd5379c6ce87e970e7a2135"
+    }
+  },
+  "tags": {
+    "v0.4.13": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "78b67a4aa8c008a7c939fcc696e0bcf26040cfb0": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "latest": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "stm32g4": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "stm32h5": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "stm32h7": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83",
+    "stm32u5": "sha256:cc62b61c395704474b9300429f052220ffc76bca9fdbabeae1e6be75ecc49e83"
+  },
+  "manifest": {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+      {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "size": 3523,
+        "digest": "sha256:ca31b27719fdd50f515e598c6ea43d9fe7571ed8ceebc14f6f11b8f92bea553f",
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      },
+      {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "size": 3522,
+        "digest": "sha256:277732776f2560c76ab1c2245a3da0c208dbbe6bfbd5379c6ce87e970e7a2135",
+        "platform": {
+          "architecture": "arm64",
+          "os": "linux"
+        }
+      }
+    ]
+  },
+  "status": "passed",
+  "published_at_unix": 1792218620.077184,
+  "anonymous_native_roundtrip": {
+    "amd64": {
+      "pull": "passed",
+      "run_command": "list-mcus",
+      "required_profiles": [
+        "stm32g491",
+        "stm32h523",
+        "stm32u585"
+      ],
+      "run": "passed",
+      "architecture": "amd64"
+    },
+    "arm64": {
+      "pull": "passed",
+      "run_command": "list-mcus",
+      "required_profiles": [
+        "stm32g491",
+        "stm32h523",
+        "stm32u585"
+      ],
+      "run": "passed",
+      "architecture": "arm64"
+    }
+  },
+  "qualification_scope": "Both native container builds and their complete packaged MCU/peripheral/watchdog suites passed; anonymous registry pull and CLI execution passed on each CPU architecture. The prior ten-minute seven-MCU networking qualification is separately recorded; this is not a second 600-second run. Later GS camera-discovery-only changes are independently tested on macOS and Ubuntu Pi."
+}

@@ -57,7 +57,7 @@ The transport model does not execute RP2040 firmware or emulate DHCP/W5500
 electrical behavior; Pico-Fi's production addressing policy and ARP driver have
 separate native tests and compiled MCU images.
 
-One repository-linked image containing every bundled descriptor and platform profile is built and tested by both GitHub Actions and GitLab CI. Board repositories pin the `v0.4.13` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image resolves GroundStation’s SEDSnet major-version-4 dependency from crates.io. Explicit source-revision and registry-version build arguments support reproducible candidate checks; the application manifest keeps the major-version selector. The seven-board service-only and mixed-restart ten-minute qualification is described in [qualification status](docs/qualification-status.md) and [route recovery](docs/route-recovery.md). Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, `stm32h7`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
+One repository-linked image contains every bundled descriptor and platform profile. GitHub Actions and GitLab CI definitions provide the build/test pipeline; release0.4.13 was built and tested manually on native AMD64 and ARM64 because organization Actions is unavailable. See the [manual publication proof](docs/qualification/sedsnet-4.2.3-manual-image.json). Board repositories pin the `v0.4.13` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image resolves GroundStation’s SEDSnet major-version-4 dependency from crates.io. Explicit source-revision and registry-version build arguments support reproducible candidate checks; the application manifest keeps the major-version selector. The seven-board service-only and mixed-restart ten-minute qualification is described in [qualification status](docs/qualification-status.md) and [route recovery](docs/route-recovery.md). Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, `stm32h7`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
 
 The linked gate requires GroundStation to discover and canonically label all
 seven board nodes, assign nonzero application traffic to each originating
@@ -88,3 +88,17 @@ The organization package administrator must make the `firmwaresimulator` contain
 - [Hardware fidelity and explicit limits](docs/hardware-fidelity.md)
 - [Crash and register debugging](docs/debugging.md)
 - [Adding MCU architectures and HAL backends](docs/adding-architectures.md)
+
+### Manual image build
+
+Run from the simulator checkout on a native Docker host:
+
+```sh
+docker build -t firmware-simulator:local .
+bash scripts/test-image.sh firmware-simulator:local
+```
+
+The image builds the GroundStation backend from dev with its version4 SEDSnet
+selector. Reproducible release checks can supply `GROUNDSTATION_REF` and
+`GROUNDSTATION_SEDSNET_RELEASE` as Docker build arguments. Test AMD64 and ARM64
+images on their native hosts before publishing the combined release manifest.
