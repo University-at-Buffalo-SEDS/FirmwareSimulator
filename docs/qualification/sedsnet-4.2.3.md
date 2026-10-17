@@ -314,3 +314,28 @@ LTC2990 repair:20 command ACKs (VB/AB maximum20ms),9 managed updates maximum250m
 no power-freshness errors and no sampled allocation/panic/stack/FIFO faults. It
 includes both GS restarts and the retained-flash MCU restart checkpoint. This
 is evidence for the sensor repair and is not qualification of the later SDK.
+
+## Release integration
+
+[SEDSnet4.2.3](https://github.com/Rylan-Meilutis/SEDSnet/releases/tag/v4.2.3)
+is published on GitHub and crates.io with main/dev pointing to the tested runtime.
+The [release workflow](https://github.com/Rylan-Meilutis/SEDSnet/actions/runs/38994937379)
+is green, including every platform wheel. PyPI upload was skipped successfully
+because no token was configured. The initial crates upload lacked a CI token;
+Cargo's existing local login published it, and the existing-version rerun passed.
+Future automatic crates publication still needs a configured registry token.
+
+Normal GroundStation registry consumption keeps `SEDSnet = "4"`: macOS305 tests
+and a release build pass; Ubuntu Pi312 tests pass after fresh dependency resolution
+in the isolated workspace (one hardware test ignored each). Firmware selectors
+remain main. Both gateway checkouts have identical tested trees and now share
+merged source history1dd5a06; this introduces no binary source change. All source
+branches and the [simulator0.4.13 release](https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator/releases/tag/v0.4.13)
+are pushed.
+
+Container publication remains blocked: GitHub rejects workflow dispatch with
+HTTP422, Actions disabled, despite the permissions read reporting enabled.
+Automatic approval review rejected persistent repository Actions enablement;
+no execution-permission setting was changed. Existing local immutable candidate
+image/capture hashes above remain valid. A published multi-architecture image
+is not claimed until this external gate is cleared.
