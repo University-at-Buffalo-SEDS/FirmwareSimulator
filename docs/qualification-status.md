@@ -1,6 +1,6 @@
 # Qualification status
 
-## SEDSnet 4.2.4 / simulator 0.4.14 (software qualified, 2026-10-19)
+## SEDSnet 4.2.4 / simulator 0.4.14 (qualified and published, 2026-10-19)
 
 The [network record](qualification/sedsnet-4.2.4-network.json) documents the
 passing three strict starts, 120-second restart and 600-second mixed-restart
@@ -10,8 +10,12 @@ reconcile; accepted-but-buffered rows remain explicit. Physical 12 kHz card
 throughput and power-loss durability are hardware follow-up.
 
 Simulator 0.4.14 passes 103 Rust tests, 31 Python tests and strict lint/formatting.
-The [manual image record](qualification/sedsnet-4.2.4-manual-image.json) tracks
-native AMD64/ARM64 image validation and publication separately.
+The [manual image record](qualification/sedsnet-4.2.4-manual-image.json) records
+passing native AMD64/ARM64 packaged checks, public publication and anonymous
+pull/run checks. Version0.4.14, its source commit, latest and all four STM32 aliases
+share the same two-platform manifest. The bundled backend uses registry SDK4.2.4
+and committed GroundStation source; firmware keeps main and GroundStation keeps
+its major-version4 dependency.
 
 ## Earlier mixed-version run (2026-10-19)
 

@@ -1,7 +1,7 @@
 {
   "version": "v0.4.14",
   "sedsnet": "4.2.4",
-  "phase": "native ARM64 independent build stages passed; full images/publication pending",
+  "phase": "published; native AMD64/ARM64 packaged checks and anonymous pull/run pass",
   "native_arm64_stages": [
     {
       "target": "builder",
@@ -86,7 +86,89 @@
     }
   },
   "limits": [
-    "Full AMD64/ARM64 images are built after published SDK and GroundStation source are available.",
-    "No organization Actions settings changed."
-  ]
+    "All organization Actions settings remain unchanged; image builds and publication were performed manually.",
+    "Instruction simulation and native tests do not establish physical card throughput, power-loss durability or unlimited-load losslessness."
+  ],
+  "publication": {
+    "repository": "ghcr.io/university-at-buffalo-seds/firmwaresimulator",
+    "version": "v0.4.14",
+    "source_commit": "34b7316fcb59bd25ad9213c4a3d386c127c2d095",
+    "groundstation_commit": "351edf27a19f539bfdb554fc00dcc965c3a14c69",
+    "sdk": "4.2.4",
+    "platform_builds": [
+      {
+        "architecture": "amd64",
+        "tag": "seds-firmware-simulator:public0414-amd64",
+        "build_exit": 0,
+        "build_wall_seconds": 140.12592087499797,
+        "groundstation_commit": "351edf27a19f539bfdb554fc00dcc965c3a14c69",
+        "simulator_commit": "34b7316fcb59bd25ad9213c4a3d386c127c2d095",
+        "test_exit": 0,
+        "test_wall_seconds": 172.00833691610023
+      },
+      {
+        "architecture": "arm64",
+        "tag": "seds-firmware-simulator:public0414-arm64",
+        "build_exit": 0,
+        "build_wall_seconds": 134.23970058280975,
+        "groundstation_commit": "351edf27a19f539bfdb554fc00dcc965c3a14c69",
+        "simulator_commit": "34b7316fcb59bd25ad9213c4a3d386c127c2d095",
+        "test_exit": 0,
+        "test_wall_seconds": 144.61884658271447
+      }
+    ],
+    "platform_manifests": {
+      "amd64": "sha256:619dd26d08b73a92a421cc9c513fc11a9b91228878f3dc4d55a4dcb407b44581",
+      "arm64": "sha256:788b58ce7bdea8b2dbb599740f7635f21a971471aad0bcb8de24ea6f6ac23de7"
+    },
+    "tags": {
+      "v0.4.14": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "34b7316fcb59bd25ad9213c4a3d386c127c2d095": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "latest": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "stm32g4": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "stm32h5": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "stm32h7": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf",
+      "stm32u5": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf"
+    },
+    "manifest": {
+      "schemaVersion": 2,
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "manifests": [
+        {
+          "mediaType": "application/vnd.oci.image.manifest.v1+json",
+          "digest": "sha256:619dd26d08b73a92a421cc9c513fc11a9b91228878f3dc4d55a4dcb407b44581",
+          "size": 3714,
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          }
+        },
+        {
+          "mediaType": "application/vnd.oci.image.manifest.v1+json",
+          "digest": "sha256:788b58ce7bdea8b2dbb599740f7635f21a971471aad0bcb8de24ea6f6ac23de7",
+          "size": 3713,
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux"
+          }
+        }
+      ]
+    },
+    "anonymous_native_roundtrip": {
+      "amd64": {
+        "architecture": "amd64",
+        "anonymous_pull": "passed",
+        "run": "list-mcus passed",
+        "sdk": "4.2.4 verified",
+        "image_id": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf"
+      },
+      "arm64": {
+        "architecture": "arm64",
+        "anonymous_pull": "passed",
+        "run": "list-mcus passed",
+        "sdk": "4.2.4 verified",
+        "image_id": "sha256:cf91b07cbb123f8a68f4c02390a6d118e7e5e4c0518710b98ec9ac8fae769edf"
+      }
+    }
+  }
 }

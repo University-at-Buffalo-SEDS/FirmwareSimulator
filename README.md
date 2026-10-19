@@ -57,7 +57,7 @@ The transport model does not execute RP2040 firmware or emulate DHCP/W5500
 electrical behavior; Pico-Fi's production addressing policy and ARP driver have
 separate native tests and compiled MCU images.
 
-One repository-linked image contains every bundled descriptor and platform profile. GitHub Actions and GitLab CI definitions provide the build/test pipeline; release0.4.13 was built and tested manually on native AMD64 and ARM64 because organization Actions is unavailable. See the [manual publication proof](docs/qualification/sedsnet-4.2.3-manual-image.json). Board repositories pin the `v0.4.14` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image resolves GroundStation’s SEDSnet major-version-4 dependency from crates.io. Explicit source-revision and registry-version build arguments support reproducible candidate checks; the application manifest keeps the major-version selector. The seven-board service-only and mixed-restart ten-minute qualification is described in [qualification status](docs/qualification-status.md) and [route recovery](docs/route-recovery.md). Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, `stm32h7`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
+One repository-linked image contains every bundled descriptor and platform profile. GitHub Actions and GitLab CI definitions provide the build/test pipeline; release0.4.14 was built and tested manually on native AMD64 and ARM64 because organization Actions is unavailable. See the [manual publication proof](docs/qualification/sedsnet-4.2.4-manual-image.json). Board repositories pin the `v0.4.14` image through `build.py test --all` after producing firmware, bootloader, factory, and OTA artifacts. The image resolves GroundStation’s SEDSnet major-version-4 dependency from crates.io. Explicit source-revision and registry-version build arguments support reproducible candidate checks; the application manifest keeps the major-version selector. The seven-board service-only and mixed-restart ten-minute qualification is described in [qualification status](docs/qualification-status.md) and [route recovery](docs/route-recovery.md). Release publishing updates `latest`, the version tag, and the `stm32g4`, `stm32h5`, `stm32h7`, and `stm32u5` aliases to the same Linux AMD64/ARM64 manifest.
 
 The linked gate requires GroundStation to discover and canonically label all
 seven board nodes, assign nonzero application traffic to each originating
@@ -104,8 +104,6 @@ selector. Reproducible release checks can supply `GROUNDSTATION_REF` and
 images on their native hosts before publishing the combined release manifest.
 
 Candidate host builds can verify their actual Cargo selection with `python3 scripts/verify-sedsnet-source.py --workspace /path/to/GroundStation26 --source /path/to/SEDSnet --update-lock`. Run subsequent Cargo checks with the same path-patch configuration. Image tests read the bundled SDK source proof; `EXPECTED_SEDSNET_VERSION=4.2.4` requires that exact version.
-
-Version 0.4.14 validation and publication are tracked in the [manual image record](docs/qualification/sedsnet-4.2.4-manual-image.json).
 
 Version 0.4.14 validation and publication are tracked in the [manual image record](docs/qualification/sedsnet-4.2.4-manual-image.json).
 
