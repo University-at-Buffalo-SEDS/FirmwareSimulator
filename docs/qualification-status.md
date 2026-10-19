@@ -1,5 +1,26 @@
 # Qualification status
 
+## SEDSnet 4.2.4 / simulator 0.4.14 (software qualified, 2026-10-19)
+
+The [network record](qualification/sedsnet-4.2.4-network.json) documents the
+passing three strict starts, 120-second restart and 600-second mixed-restart
+seven-board run. All 203 printed checks pass. The record includes measured acknowledgement and
+managed-variable delays, stale events, allocation failures and admission refusals. DAQ and FC SD CSV counts, sequences and clocks
+reconcile; accepted-but-buffered rows remain explicit. Physical 12 kHz card
+throughput and power-loss durability are hardware follow-up.
+
+Simulator 0.4.14 passes 103 Rust tests, 31 Python tests and strict lint/formatting.
+The [manual image record](qualification/sedsnet-4.2.4-manual-image.json) tracks
+native AMD64/ARM64 image validation and publication separately.
+
+## Earlier mixed-version run (2026-10-19)
+
+Cargo initially retained registry SDK4.2.3 in the hosted backend despite a declared
+candidate path patch. That passing firmware4.2.4/host4.2.3 run is preserved in
+[separate evidence](https://github.com/Rylan-Meilutis/SEDSnet/blob/main/docs/qualification-4.2.4-mixed-host423-2026-10-19.json).
+It was not used as the all-current release gate. The current record above uses
+verified SDK4.2.4 source in both hosted and embedded builds.
+
 ## SEDSnet 4.2.3 / simulator 0.4.13 (qualified and published, 2026-10-17)
 
 The [qualification record](qualification/sedsnet-4.2.3.md) and retained JSON

@@ -1,0 +1,92 @@
+{
+  "version": "v0.4.14",
+  "sedsnet": "4.2.4",
+  "phase": "native ARM64 independent build stages passed; full images/publication pending",
+  "native_arm64_stages": [
+    {
+      "target": "builder",
+      "exit": 0,
+      "wall_seconds": 66.43565958412364
+    },
+    {
+      "target": "uart-tests",
+      "exit": 0,
+      "wall_seconds": 97.14519475027919
+    },
+    {
+      "target": "renode",
+      "exit": 0,
+      "wall_seconds": 43.96217270800844
+    }
+  ],
+  "native_tests": {
+    "package_version": "0.4.14",
+    "native_rust_tests_passed": 103,
+    "python_tests_passed": 31,
+    "board_selector_suites_passed": 8,
+    "format": "passed",
+    "strict_clippy": "passed in authorized run",
+    "metadata_delta": {
+      "files": [
+        "ActuatorBoard26/sim/run_full.py",
+        "ActuatorBoard26/tests/test_build_script.py",
+        "DAQ-Board/sim/run_full.py",
+        "DAQ-Board/tests/test_build_script.py",
+        "FlightComputer26/sim/run_full.py",
+        "FlightComputer26/tests/test_build_script.py",
+        "PowerBoard26/sim/run_full.py",
+        "PowerBoard26/tests/test_build_script.py",
+        "RFBoard26/sim/run_full.py",
+        "RFBoard26/tests/test_build_script.py",
+        "ValveBoard26/sim/run_full.py",
+        "ValveBoard26/tests/test_build_script.py",
+        "gateway-board/sim/run_full.py",
+        "gateway-board/tests/test_build_script.py",
+        "gateway-board26/sim/run_full.py",
+        "gateway-board26/tests/test_build_script.py"
+      ],
+      "change": "Image version strings only; firmware/runtime behavior unchanged",
+      "simulator_package": "0.4.14"
+    },
+    "alignment_predicate_only_source_delta": true,
+    "candidate_sdk_source_guards": "Five resolved-source regressions and exact embedded-version checks pass"
+  },
+  "selectors": {
+    "ActuatorBoard26": {
+      "selector_tests_passed": 14,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "DAQ-Board": {
+      "selector_tests_passed": 14,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "FlightComputer26": {
+      "selector_tests_passed": 16,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "PowerBoard26": {
+      "selector_tests_passed": 13,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "RFBoard26": {
+      "selector_tests_passed": 13,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "ValveBoard26": {
+      "selector_tests_passed": 14,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "gateway-board": {
+      "selector_tests_passed": 14,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    },
+    "gateway-board26": {
+      "selector_tests_passed": 14,
+      "only_runner_change_since_review": "0.4.13 -> 0.4.14 image version strings"
+    }
+  },
+  "limits": [
+    "Full AMD64/ARM64 images are built after published SDK and GroundStation source are available.",
+    "No organization Actions settings changed."
+  ]
+}

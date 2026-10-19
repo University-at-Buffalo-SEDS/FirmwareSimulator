@@ -130,7 +130,9 @@ namespace Antmicro.Renode.Peripherals.CAN
                         var generation = resetGeneration;
                         var capturedSlot = slot;
                         var token = ++slotGeneration[capturedSlot];
-                        bus.Enqueue(new WireRequest(this, slot, WireMicroseconds(slot), () => {
+                        uint arbitration;
+                        var duration = WireMicroseconds(slot, out arbitration);
+                        bus.Enqueue(new WireRequest(this, slot, duration, arbitration, () => {
                             if(generation != resetGeneration || token != slotGeneration[capturedSlot] || (pacedPending & mask) == 0) return;
                             pacedPending &= ~mask;
                             pacedCompleted |= mask;
@@ -162,32 +164,47 @@ namespace Antmicro.Renode.Peripherals.CAN
             inner.Reset();
         }
 
-        private ulong WireMicroseconds(uint slot)
+        private ulong WireMicroseconds(uint slot, out uint arbitration)
         {
             var header = messageRam.ReadBytes(0x278 + 72 * slot, 8);
+            arbitration = WireArbitrationKey(BitConverter.ToUInt32(header, 0));
             var word = BitConverter.ToUInt32(header, 4);
             var dlc = (word >> 16) & 15;
             var bytes = dlc <= 8 ? dlc : new uint[] { 12, 16, 20, 24, 32, 48, 64 }[dlc - 9];
             var nbtp = inner.ReadDoubleWord(0x1C);
             var clocksPerBit = (((nbtp >> 16) & 511) + 1) *
                 (3 + ((nbtp >> 8) & 255) + (nbtp & 127));
-            // Extended-ID CAN FD without BRS is used by these boards. Include
-            // CRC, delimiters/intermission and conservative bit stuffing.
-            // Payload-dependent stuffing and identifier arbitration are not
-            // cycle-exact; a shared wire still prevents zero-time bursts.
+            // Conservatively include CAN FD extended-ID overhead even for the
+            // standard identifiers used here, plus CRC and intermission.
+            // Stuffing is conservative rather than payload-bit exact. The
+            // shared scheduler arbitrates identifier priority between each
+            // controller's FIFO head at the next free frame boundary.
             var bits = 67UL + 8UL * bytes;
             bits += (bits + 4) / 5;
             return Math.Max(1UL, (bits * clocksPerBit * 1000000UL + clockFrequency - 1) / clockFrequency);
         }
 
+        private static uint WireArbitrationKey(uint header)
+        {
+            // Arbitration compares the base11 identifier first. A standard
+            // data/remote frame beats an extended frame with the same base.
+            var baseId = (header >> 18) & 0x7ffu;
+            var remote = (header & (1u << 29)) != 0;
+            if((header & (1u << 30)) == 0)
+                return (baseId << 21) | (remote ? 1u << 20 : 0u);
+            return (baseId << 21) | (1u << 20) | (1u << 19)
+                | ((header & 0x3ffffu) << 1) | (remote ? 1u : 0u);
+        }
+
         private sealed class WireRequest
         {
-            public WireRequest(object owner, uint slot, ulong duration, Action complete) {
-                Owner = owner; Slot = slot; Duration = duration; Complete = complete;
+            public WireRequest(object owner, uint slot, ulong duration, uint arbitration, Action complete) {
+                Owner = owner; Slot = slot; Duration = duration; Arbitration = arbitration; Complete = complete;
             }
             public readonly object Owner;
             public readonly uint Slot;
             public readonly ulong Duration;
+            public readonly uint Arbitration;
             public readonly Action Complete;
         }
 
@@ -217,7 +234,19 @@ namespace Antmicro.Renode.Peripherals.CAN
             private void Tick() {
                 if(active != null) { active.Complete(); active = null; }
                 lock(queue) {
-                    if(queue.First != null) { active = queue.First.Value; queue.RemoveFirst(); }
+                    // TX FIFO mode preserves a controller's accepted order.
+                    // Only its oldest queued slot may compete for the wire;
+                    // among those heads CAN selects the lowest arbitration key.
+                    // Scan bounded slots without allocating per-frame scratch.
+                    LinkedListNode<WireRequest> selected = null;
+                    for(var node = queue.First; node != null; node = node.Next) {
+                        bool head = true;
+                        for(var earlier = queue.First; earlier != node; earlier = earlier.Next) {
+                            if(ReferenceEquals(earlier.Value.Owner, node.Value.Owner)) { head = false; break; }
+                        }
+                        if(head && (selected == null || node.Value.Arbitration < selected.Value.Arbitration)) selected = node;
+                    }
+                    if(selected != null) { active = selected.Value; queue.Remove(selected); }
                 }
                 if(active != null) {
                     timer.Limit = active.Duration;

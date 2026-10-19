@@ -157,6 +157,22 @@ class RouteRecoveryTests(unittest.TestCase):
                 recovery.main()
             self.assertEqual(runs, [(True, "600000")])
 
+    def test_six_hour_profile_keeps_short_gate_and_continuous_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = []
+            suite = SimpleNamespace(load_layout_for_build=mock.Mock(), network_sample_count=lambda layouts, count: count)
+            suite.run_network_simulation = lambda *args, **kwargs: runs.append((
+                kwargs.get("ultra_soak", False), recovery.os.environ.get("SEDS_FIRMWARE_SIM_SOAK_MS"),
+                suite.network_sample_count({}, 12)))
+            specification = SimpleNamespace(loader=mock.Mock())
+            with mock.patch.object(recovery.importlib.util, "spec_from_file_location", return_value=specification), \
+                 mock.patch.object(recovery.importlib.util, "module_from_spec", return_value=suite), \
+                 mock.patch.dict(recovery.os.environ, {}, clear=True), \
+                 mock.patch("sys.argv", ["test-route-recovery", "--workspace", tmp, "--image", "candidate",
+                     "--ultra-soak", "--soak-ms", "21600000", "--soak-samples", "360"]):
+                recovery.main()
+            self.assertEqual(runs, [(False, None, 12), (True, "21600000", 360)])
+
     def test_fault_preserves_end_to_end_checks_and_requires_failed_submission(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -186,6 +202,74 @@ class RouteRecoveryTests(unittest.TestCase):
             self.assertEqual(missing_route["sample"], 2)
             self.assertEqual(topology["assertions"][-1]["maximum"], 0)
             self.assertEqual(topology["assertions"][-1]["sample"], 9)
+
+    def test_evidence_capture_preserves_paths_and_does_not_invoke_a_shell(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "saved evidence"
+            command = ["docker", "run", "--rm", "image", "bay"]
+            recovery.configure_evidence_capture(command, directory)
+            self.assertTrue(directory.is_dir())
+            self.assertEqual(command[:2], ["docker", "run"])
+            self.assertEqual(command[2:6], ["-v", f"{directory.resolve()}:/diagnostics", "-e", "FIRMWARE_SIM_DIAGNOSTICS_DIR=/diagnostics"])
+            self.assertEqual(command[-3:], ["--rm", "image", "bay"])
+
+    def test_recording_soak_uses_large_prepared_cards_and_observes_fc_writer(self):
+        for board, filesystem in [("DAQ-Board", "fat32:SEDSDAQ.ID"), ("FlightComputer26", "fat32")]:
+            card = {"model": "sd_card", "capacity_bytes": 4*1024*1024}
+            layout = {"peripherals": [card], "execution": {"memory_probes": []}}
+            recovery.configure_soak_storage(layout, board)
+            self.assertEqual(card["capacity_bytes"], 64*1024**3)
+            self.assertEqual(card["filesystem"], filesystem)
+            count = len(layout["execution"]["memory_probes"])
+            recovery.configure_soak_storage(layout, board)
+            self.assertEqual(len(layout["execution"]["memory_probes"]), count)
+            if board == "DAQ-Board":
+                probes = {p["name"]: p for p in layout["execution"]["memory_probes"]}
+                self.assertEqual(probes["sd_raw_records_dropped"]["maximum"], 0)
+                self.assertEqual(probes["sd_raw_records_io_lost"]["maximum"], 0)
+                self.assertIn("sd_raw_adc_drained", probes)
+                self.assertIn("sd_raw_records_flushed", probes)
+            if board == "FlightComputer26":
+                probes = {p["name"]: p for p in layout["execution"]["memory_probes"]}
+                self.assertEqual(probes["sd_ready"]["minimum"], 1)
+                self.assertEqual(probes["sd_processed_records"]["minimum"], 1)
+                self.assertTrue(probes["sd_processed_records"]["ignore_leading_zeroes"])
+                self.assertEqual(probes["sd_write_errors"]["maximum"], 0)
+        with self.assertRaises(ValueError):
+            recovery.configure_soak_storage({}, "FlightComputer26")
+
+    def test_sd_progress_spans_resets_and_flush_is_required_only_after_its_period(self):
+        short = {"sample_count": 7, "assertions": []}
+        recovery.configure_storage_assertions(short, require_flush=False)
+        self.assertEqual(short["assertions"][0]["minimum_gain"], 1)
+        self.assertEqual(short["assertions"][0]["to_sample"], 6)
+        self.assertFalse(any(a["probe"] == "sd_flushed_records" for a in short["assertions"]))
+        long = {"sample_count": 360, "assertions": [], "reboots": [{"node":"groundstation","after_sample":120},{"node":"flight","after_sample":240}]}
+        recovery.configure_storage_assertions(long, require_flush=True)
+        progress = [a for a in long["assertions"] if a["probe"] == "sd_processed_records"]
+        self.assertEqual([(a["from_sample"], a["to_sample"]) for a in progress], [(0,239),(240,359)])
+        self.assertTrue(all(a["minimum_gain"] == 1 for a in progress))
+        self.assertEqual(long["assertions"][-1]["sample"], 359)
+        self.assertEqual(long["assertions"][-1]["minimum"], 1)
+
+    def test_ack_fault_expiry_checks_follow_actual_restarts(self):
+        for nodes in (["groundstation"], ["rf"]):
+            with self.subTest(nodes=nodes), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                checks = [dict(name=f"rf no CAN expiry outside injected ACK loss at sample {n}",
+                               node="rf", probe="can_tx_expired", sample=n, maximum=0)
+                          for n in (0, 6, 8, 10)]
+                (root / "topology.json").write_text(json.dumps(dict(
+                    sample_count=12, assertions=checks, host_log_assertions=[])))
+                recovery.configure_restarts(root, nodes, [6, 10])
+                actual = json.loads((root / "topology.json").read_text())["assertions"]
+                self.assertEqual(actual[0]["maximum"], 0)
+                for check, index in zip(actual[1:], (6, 8, 10)):
+                    if "rf" in nodes and index in (6, 10):
+                        self.assertEqual(check["sample"], index)
+                        self.assertEqual(check["maximum"], 0)
+                    else:
+                        self.assertEqual((check["from_sample"], check["to_sample"], check["maximum_gain"]), (index-1, index, 0))
 
 if __name__ == "__main__":
     unittest.main()

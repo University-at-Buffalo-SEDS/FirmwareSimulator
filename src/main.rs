@@ -44,6 +44,7 @@ mod tests {
         MemoryProbe {
             name: name.into(),
             symbol: name.into(),
+            byte_offset: 0,
             minimum,
             maximum,
             max_end_drop: None,

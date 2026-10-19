@@ -202,10 +202,17 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
     public sealed class SedsNeoM9N : ISPIPeripheral
     {
-        public SedsNeoM9N(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
+        public SedsNeoM9N(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
         {
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
+            updateTimer = new LimitTimer(machine.ClockSource, 1000, this,
+                "gpsFix", limit: 1000, enabled: true, eventEnabled: true);
+            updateTimer.LimitReached += () => {
+                elapsedSeconds++;
+                // One pending fix bounds storage when the host stops reading.
+                if(output.Count == 0) FillNmea();
+            };
             Reset();
         }
 
@@ -219,8 +226,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(faulted) return 0xff;
             // Host clocks data with 0xff. Configuration bytes are accepted;
             // the deterministic NMEA stream resumes on subsequent clocks.
-            if(output.Count == 0) FillNmea();
-            return output.Dequeue();
+            return output.Count == 0 ? (byte)0xff : output.Dequeue();
         }
 
         public void FinishTransmission() { position = 0; }
@@ -236,12 +242,27 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
         private void FillNmea()
         {
-            const string sentences =
-                "$GNGGA,120000.00,4300.0000,N,07846.8000,W,1,12,0.8,300.0,M,-34.0,M,,*6E\r\n" +
-                "$GNRMC,120000.00,A,4300.0000,N,07846.8000,W,0.0,0.0,290826,,,A*65\r\n";
-            foreach(var character in sentences) output.Enqueue((byte)character);
+            var utc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                .AddSeconds(elapsedSeconds);
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            var time = utc.ToString("HHmmss", culture) + ".00";
+            EnqueueNmea("GNGGA," + time + ",4300.0000,N,07846.8000,W,1,12,0.8,300.0,M,-34.0,M,,");
+            EnqueueNmea("GNRMC," + time + ",A,4300.0000,N,07846.8000,W,0.0,0.0,"
+                + utc.ToString("ddMMyy", culture) + ",,,A");
         }
 
+        private void EnqueueNmea(string body)
+        {
+            byte checksum = 0;
+            foreach(var character in body) checksum ^= (byte)character;
+            var sentence = "$" + body + "*" + checksum.ToString("X2",
+                System.Globalization.CultureInfo.InvariantCulture) + "\r\n";
+            foreach(var character in sentence) output.Enqueue((byte)character);
+        }
+
+        // External GPS time continues across an MCU reset and SPI polling gaps.
+        private readonly LimitTimer updateTimer;
+        private ulong elapsedSeconds;
         private readonly Queue<byte> output = new Queue<byte>();
         private int position;
         private ulong transactions;

@@ -26,6 +26,8 @@ pub struct PeripheralSpec {
     pub noise_lsb: Option<u32>,
     #[serde(default)]
     pub capacity_bytes: Option<u64>,
+    #[serde(default)]
+    pub filesystem: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -127,10 +129,22 @@ fn validate(spec: &PeripheralSpec) -> Result<()> {
     match spec.kind.as_str() {
         "imu" | "barometer" | "gps" => Ok(()),
         "storage" => {
+            if let Some(filesystem) = &spec.filesystem {
+                let marker = filesystem.strip_prefix("fat32:");
+                ensure!(
+                    filesystem == "fat32"
+                        || marker.is_some_and(|name| !name.is_empty()
+                            && name.len() <= 12
+                            && name.bytes().all(|c| c.is_ascii_uppercase()
+                                || c.is_ascii_digit()
+                                || b"._-".contains(&c))),
+                    "unsupported storage filesystem fixture"
+                );
+            }
             if let Some(capacity) = spec.capacity_bytes {
                 ensure!(
-                    capacity >= 512 && capacity % 512 == 0,
-                    "storage capacity_bytes must be a positive multiple of 512"
+                    capacity >= 512 && capacity % 512 == 0 && capacity <= (1_u64 << 41),
+                    "storage capacity_bytes must be a positive multiple of 512, at most 2 TiB"
                 );
             }
             Ok(())

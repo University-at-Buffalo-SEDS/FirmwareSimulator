@@ -32,6 +32,13 @@ check_renode() {
 
 python3 "$(dirname "${BASH_SOURCE[0]}")/../tests/watchdog-contract/run.py" --image "$image"
 
+sdk_source="$("${docker_command[@]}" --rm --entrypoint cat "$image" /opt/firmware-sim/groundstation-sedsnet-source.txt)"
+printf '%s\n' "$sdk_source"
+grep -Eq '^SEDSnet v4\.' <<< "$sdk_source"
+if [[ -n "${EXPECTED_SEDSNET_VERSION:-}" ]]; then
+    grep -Eq "^SEDSnet v${EXPECTED_SEDSNET_VERSION//./\\.}([[:space:]]|$)" <<< "$sdk_source"
+fi
+
 catalog="$("${docker_command[@]}" --rm "$image" list-mcus)"
 "${docker_command[@]}" --rm --entrypoint dotnet "$image" \
     /opt/firmware-sim/uart-check/UartConcurrency.dll

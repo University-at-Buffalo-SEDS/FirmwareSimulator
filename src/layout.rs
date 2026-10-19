@@ -306,6 +306,9 @@ fn default_true() -> bool {
 pub struct MemoryProbe {
     pub name: String,
     pub symbol: String,
+    /// Byte offset from the named symbol for aligned array/struct word dumps.
+    #[serde(default)]
+    pub byte_offset: u32,
     #[serde(default)]
     pub minimum: Option<u32>,
     #[serde(default)]
@@ -537,6 +540,7 @@ mod tests {
         execution.memory_probes.push(MemoryProbe {
             name: "telemetry_stack_remaining".into(),
             symbol: "g_telemetry_stack_remaining".into(),
+            byte_offset: 0,
             minimum: Some(8192),
             maximum: None,
             max_end_drop: None,

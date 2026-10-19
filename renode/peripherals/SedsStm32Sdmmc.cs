@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Diagnostics;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals.Bus;
 
 namespace Antmicro.Renode.Peripherals.Storage
 {
     // STM32 SDMMC v2 receive/data-path model. It implements card discovery,
-    // single/multiple-block reads, FIFO status, IDMA writes, interrupts, and
+    // single/multiple-block FIFO and IDMA transfers, interrupts, and
     // deterministic removal/failure injection.
-    public sealed class SedsStm32Sdmmc : IDoubleWordPeripheral, IKnownSize
+    public sealed class SedsStm32Sdmmc : IDoubleWordPeripheral, IKnownSize, IDisposable
     {
         public SedsStm32Sdmmc(IMachine machine, ulong failureEvery = 0,
             ulong disconnectAfter = ulong.MaxValue)
@@ -52,7 +54,7 @@ namespace Antmicro.Renode.Peripherals.Storage
                 // with CMD.CPSMEN bit 12 (older STM32 blocks used bit 10).
                 if((value & (1u << 12)) != 0) ExecuteCommand(value & 0x3f);
                 break;
-            case 0x28: dataLength = value; registers[offset] = value; break;
+            case 0x28: dataLength = value & 0x01ffffffu; registers[offset] = dataLength; break;
             case 0x2c: dataControl = value; registers[offset] = value; break;
             case 0x38: status &= ~value; break;
             case 0x3c: interruptMask = value; registers[offset] = value; break;
@@ -69,12 +71,119 @@ namespace Antmicro.Renode.Peripherals.Storage
         public void LoadCardBytes(byte[] bytes)
         {
             if(bytes == null || bytes.Length == 0) throw new ArgumentException("SD card image cannot be empty");
-            card = new byte[((bytes.Length + BlockSize - 1) / BlockSize) * BlockSize];
-            Array.Copy(bytes, card, bytes.Length);
+            CreateCard(((ulong)bytes.Length + BlockSize - 1) / BlockSize * BlockSize);
+            card.Write(bytes, 0, bytes.Length);
+            MarkRange(0, (ulong)bytes.Length);
+        }
+
+        private void CreateCard(ulong capacity)
+        {
+            if(capacity < BlockSize || capacity % BlockSize != 0 || capacity > (1UL << 41))
+                throw new ArgumentOutOfRangeException("capacity", "SDHC capacity must be a positive multiple of 512 bytes, at most 2 TiB");
+            Dispose();
+            backingPath = Path.Combine(Path.GetTempPath(), "seds-sd-" + Guid.NewGuid().ToString("N") + ".img");
+            card = new FileStream(backingPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+            card.SetLength((long)capacity); // Sparse zero-filled image; no capacity-sized allocation.
+            dirtyPages.Clear();
             cardPresent = true;
             highCapacity = true;
             selected = false;
             applicationCommand = false;
+        }
+
+        public void Dispose()
+        {
+            cardPresent = false; writing = false;
+            if(card != null) { card.Dispose(); card = null; }
+            if(backingPath != null) { File.Delete(backingPath); backingPath = null; }
+        }
+
+        private void MarkRange(ulong offset, ulong length)
+        {
+            if(length == 0) return;
+            for(var page = offset / PageSize; page <= (offset + length - 1) / PageSize; page++)
+                dirtyPages.Add((long)page);
+        }
+
+        // Explicit test-fixture preparation only. Blank-card and removal tests
+        // retain their normal behavior unless the descriptor opts in.
+        public string FilesystemFixture
+        {
+            get { return filesystemFixture; }
+            set
+            {
+                var marker = ParseFixture(value);
+                filesystemFixture = value;
+                if(card != null && !String.IsNullOrEmpty(value)) PrepareFilesystem(marker);
+            }
+        }
+        private static string ParseFixture(string fixture)
+        {
+            if(String.IsNullOrEmpty(fixture) || fixture == "fat32") return null;
+            if(!fixture.StartsWith("fat32:")) throw new ArgumentException("unsupported SD filesystem fixture");
+            var name = fixture.Substring(6);
+            if(name.Length == 0 || name.Length > 12) throw new ArgumentException("invalid SD fixture marker name");
+            foreach(var c in name)
+                if(!(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '.' && c != '_' && c != '-')
+                    throw new ArgumentException("invalid SD fixture marker name");
+            return name;
+        }
+        private void RunFilesystemTool(string tool, string arguments)
+        {
+            card.Dispose(); card = null;
+            try
+            {
+                var start = new ProcessStartInfo(tool, arguments) { UseShellExecute = false,
+                    RedirectStandardOutput = true, RedirectStandardError = true };
+                using(var process = Process.Start(start))
+                {
+                    var output = process.StandardOutput.ReadToEnd();
+                    var error = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+                    if(process.ExitCode != 0) throw new InvalidOperationException(tool + ": " + output + error);
+                }
+            }
+            finally { card = new FileStream(backingPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read); }
+        }
+        private static string QuotePath(string path)
+        {
+            return "\"" + path.Replace("\"", "\\\"") + "\"";
+        }
+        private void PrepareFilesystem(string marker)
+        {
+            // Paths are private GUID names and marker names are validated above;
+            // no shell or caller-provided executable/arguments are accepted.
+            RunFilesystemTool("mkfs.fat", "-F 32 -n SEDSSIM " + QuotePath(backingPath));
+            if(marker != null)
+            {
+                var seed = Path.Combine(Path.GetTempPath(), "seds-marker-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    File.WriteAllText(seed, "SEDS simulated storage\n");
+                    RunFilesystemTool("mcopy", "-i " + QuotePath(backingPath) + " " + QuotePath(seed) + " ::" + marker);
+                }
+                finally { File.Delete(seed); }
+            }
+            // mkfs/mcopy update reserved/FAT/root sectors outside the MMIO path.
+            // Preserve their metadata and the single optional marker cluster in
+            // sparse exports, along with all subsequent firmware writes.
+            var boot = new byte[512]; ReadCard(0, boot);
+            var reserved = BitConverter.ToUInt16(boot, 14);
+            var fatSectors = BitConverter.ToUInt32(boot, 36);
+            var metadataEnd = ((ulong)reserved + (ulong)boot[16] * fatSectors + 4UL * boot[13]) * BlockSize;
+            MarkRange(0, Math.Min((ulong)card.Length, metadataEnd));
+        }
+
+        private void ReadCard(ulong offset, byte[] bytes)
+        {
+            card.Position = checked((long)offset);
+            var read = 0;
+            while(read < bytes.Length)
+            {
+                var count = card.Read(bytes, read, bytes.Length - read);
+                if(count == 0) throw new EndOfStreamException("short SD backing read");
+                read += count;
+            }
         }
 
         public void BeginCardImage()
@@ -97,6 +206,7 @@ namespace Antmicro.Renode.Peripherals.Storage
 
         public void EjectCard()
         {
+            writing = false;
             cardPresent = false;
             selected = false;
             fifo.Clear();
@@ -106,23 +216,39 @@ namespace Antmicro.Renode.Peripherals.Storage
         public bool GetCardPresent() { return cardPresent; }
         public void SaveCardImage(string path)
         {
-            // Retain actual firmware-written FAT sectors for host inspection.
-            // Never replace an earlier diagnostic capture.
-            using(var output = new System.IO.FileStream(path, System.IO.FileMode.CreateNew))
+            // Preserve holes while retaining every firmware-written page. Never
+            // replace an earlier diagnostic capture or allocate a full card copy.
+            card.Flush();
+            using(var output = new FileStream(path, FileMode.CreateNew))
             {
-                output.Write(card, 0, card.Length);
+                output.SetLength(card.Length);
+                var buffer = new byte[PageSize];
+                foreach(var page in dirtyPages)
+                {
+                    var offset = page * PageSize;
+                    var length = (int)Math.Min((long)PageSize, card.Length - offset);
+                    card.Position = offset;
+                    var read = 0;
+                    while(read < length)
+                    {
+                        var count = card.Read(buffer, read, length - read);
+                        if(count == 0) throw new EndOfStreamException("short SD export read");
+                        read += count;
+                    }
+                    output.Position = offset; output.Write(buffer, 0, length);
+                }
             }
         }
         public ulong GetCommandsExecuted() { return commands; }
         public ulong GetBytesRead() { return bytesRead; }
+        public ulong GetBytesWritten() { return bytesWritten; }
         public ulong CardCapacityBytes
         {
-            get { return (ulong)card.Length; }
+            get { return card == null ? 0 : (ulong)card.Length; }
             set
             {
-                if(value < BlockSize || value % BlockSize != 0 || value > int.MaxValue)
-                    throw new ArgumentOutOfRangeException("value", "card capacity must be a positive, host-sized multiple of 512 bytes");
-                LoadCardBytes(new byte[checked((int)value)]);
+                CreateCard(value);
+                if(!String.IsNullOrEmpty(filesystemFixture)) PrepareFilesystem(ParseFixture(filesystemFixture));
             }
         }
         public GPIO IRQ { get; private set; }
@@ -148,6 +274,7 @@ namespace Antmicro.Renode.Peripherals.Storage
             idmaBase1 = 0;
             commands = 0;
             bytesRead = 0;
+            bytesWritten = 0;
             selected = false;
             applicationCommand = false;
             IRQ.Set(false);
@@ -222,6 +349,11 @@ namespace Antmicro.Renode.Peripherals.Storage
                 remainingData = index == 24 ? BlockSize : dataLength;
                 writing = selected && remainingData != 0 && writeOffset + remainingData <= (ulong)card.Length;
                 if(!writing) { remainingData = 0; status |= DataTimeout; }
+                else
+                {
+                    card.Position = (long)writeOffset; MarkRange(writeOffset, remainingData);
+                    if((idmaControl & 1) != 0 && idmaBase != 0) WriteIdmaData();
+                }
                 break;
             case 55: // APP_CMD
                 applicationCommand = true;
@@ -277,8 +409,9 @@ namespace Antmicro.Renode.Peripherals.Storage
                 status |= DataTimeout;
                 return;
             }
-            var transfer = new byte[checked((int)requested)];
-            Array.Copy(card, checked((long)byteOffset), transfer, 0, transfer.Length);
+            if(requested > int.MaxValue) { status |= DataTimeout; return; }
+            var transfer = new byte[(int)requested];
+            ReadCard(byteOffset, transfer);
             PrepareData(transfer);
         }
 
@@ -319,12 +452,33 @@ namespace Antmicro.Renode.Peripherals.Storage
             return value;
         }
 
+        private void WriteIdmaData()
+        {
+            var bus = machine.GetSystemBus(this);
+            // Match the deployed HAL's single-buffer IDMA path without a
+            // transfer-sized host allocation. DATAEND remains pending until
+            // the HAL enables its mask after submitting CMD24/CMD25.
+            var scratch = new byte[4096];
+            ulong source = idmaBase;
+            while(remainingData != 0)
+            {
+                var count = (int)Math.Min((uint)scratch.Length, remainingData);
+                for(var i = 0; i < count; i++) scratch[i] = bus.ReadByte(source + (ulong)i, this);
+                card.Write(scratch, 0, count);
+                source += (uint)count; writeOffset += (uint)count;
+                bytesWritten += (uint)count; remainingData -= (uint)count;
+            }
+            writing = false;
+            status |= DataEnd | DataBlockEnd;
+        }
+
         private void WriteFifoWord(uint value)
         {
             if(!writing) return;
             for(var i = 0; i < 4 && remainingData != 0; i++)
             {
-                card[(int)writeOffset++] = (byte)(value >> (8 * i));
+                card.WriteByte((byte)(value >> (8 * i)));
+                writeOffset++; bytesWritten++;
                 remainingData--;
             }
             if(remainingData == 0)
@@ -355,7 +509,11 @@ namespace Antmicro.Renode.Peripherals.Storage
         private readonly Queue<byte> fifo = new Queue<byte>();
         private readonly List<byte> cardBuilder = new List<byte>();
         private readonly uint[] response = new uint[4];
-        private byte[] card = new byte[0];
+        private FileStream card;
+        private string backingPath;
+        private string filesystemFixture;
+        private const int PageSize = 65536;
+        private readonly SortedSet<long> dirtyPages = new SortedSet<long>();
         private bool cardPresent;
         private bool highCapacity;
         private bool selected;
@@ -375,6 +533,7 @@ namespace Antmicro.Renode.Peripherals.Storage
         private uint idmaBase1;
         private ulong commands;
         private ulong bytesRead;
+        private ulong bytesWritten;
 
         private const uint BlockSize = 512;
         private const uint RelativeCardAddress = 1;

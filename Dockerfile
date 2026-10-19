@@ -20,10 +20,12 @@ RUN git init /groundstation \
        else \
          cargo update --manifest-path /groundstation/Cargo.toml -p SEDSnet; \
        fi \
-    && cargo build --manifest-path /groundstation/Cargo.toml \
+    && cargo tree --locked --manifest-path /groundstation/Cargo.toml -p SEDSnet --depth 0 > /groundstation/sedsnet-source-proof.txt \
+    && cargo build --locked --manifest-path /groundstation/Cargo.toml \
          -p groundstation_backend --release --features hitl_mode
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS uart-tests
+RUN apt-get update && apt-get install -y --no-install-recommends dosfstools mtools && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY renode/peripherals/SedsStm32Uart.cs renode/peripherals/SedsStm32Uart.cs
 COPY tests/uart-concurrency tests/uart-concurrency
@@ -33,6 +35,9 @@ COPY renode/peripherals/SedsLtc2990.cs renode/peripherals/SedsLtc2990.cs
 COPY tests/ltc2990 tests/ltc2990
 RUN dotnet publish tests/ltc2990/Ltc2990.csproj -c Release -o /ltc-check
 RUN dotnet /ltc-check/Ltc2990.dll
+COPY renode/peripherals/SedsStm32Sdmmc.cs renode/peripherals/SedsStm32Sdmmc.cs
+COPY tests/sdmmc tests/sdmmc
+RUN dotnet run --project tests/sdmmc/Sdmmc.csproj -c Release
 
 FROM rust:1.98-bookworm AS builder
 WORKDIR /src
@@ -74,11 +79,12 @@ ENV FIRMWARE_SIM_CONTAINER=1
 ENV RENODE=/opt/renode/renode
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libudev1 \
+    && apt-get install -y --no-install-recommends ca-certificates libudev1 dosfstools mtools \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/firmware-sim /usr/local/bin/firmware-sim
 COPY --from=uart-tests /uart-check /opt/firmware-sim/uart-check
 COPY --from=groundstation /groundstation/target/release/groundstation_backend /usr/local/bin/groundstation_backend
+COPY --from=groundstation /groundstation/sedsnet-source-proof.txt /opt/firmware-sim/groundstation-sedsnet-source.txt
 COPY --from=groundstation /groundstation/backend/layout /opt/groundstation/backend/layout
 COPY --from=groundstation /groundstation/backend/config /opt/groundstation/backend/config
 COPY --from=groundstation /groundstation/backend/comms /opt/groundstation/backend/comms

@@ -1343,6 +1343,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     &probe.name,
                     sample,
                     &probe.symbol,
+                    probe.byte_offset,
                 )?;
             }
         }
@@ -1434,6 +1435,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 address
             );
         }
+    }
+    if let Some(directory) = env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).context("creating SD capture directory")?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        script += &render_sd_card_captures(&node_layouts, &directory, stamp);
     }
     script += "echo \"SEDS_BAY_COMPLETE\"\n";
     let script_path = scratch.path().join("bay.resc");
@@ -2343,6 +2352,36 @@ fn observe_endpoint_probe(
     Ok(Some(report.maximum_observed))
 }
 
+// Export only after the final measurement, without advancing firmware time.
+// The SD model preserves sparse holes and streams its written pages.
+fn render_sd_card_captures(
+    layouts: &[(String, BoardLayout)],
+    directory: &Path,
+    stamp: u128,
+) -> String {
+    let mut script = String::new();
+    for (node, layout) in layouts {
+        if !layout
+            .peripherals
+            .iter()
+            .any(|p| p.model.as_deref() == Some("sd_card"))
+        {
+            continue;
+        }
+        let controller = if layout.architecture == crate::core::ArchitectureKind::Stm32h5 {
+            "sdmmc"
+        } else {
+            "sdmmc1"
+        };
+        let name = safe(node);
+        let path = directory.join(format!("sd-{name}-{stamp}.img"));
+        let quoted =
+            serde_json::to_string(&path.to_string_lossy()).expect("serialize SD capture path");
+        script += &format!("mach set \"{name}\"\n{controller} SaveCardImage {quoted}\necho \"SEDS_BAY_SD_IMAGE {name} {stamp}\"\n");
+    }
+    script
+}
+
 fn can_fifo_model_probes(layout: &BoardLayout) -> Vec<crate::layout::MemoryProbe> {
     use crate::core::ArchitectureKind;
     let controllers: &[&str] = match layout.architecture {
@@ -2355,6 +2394,7 @@ fn can_fifo_model_probes(layout: &BoardLayout) -> Vec<crate::layout::MemoryProbe
         .map(|controller| crate::layout::MemoryProbe {
             name: format!("can_fifo_overflow_{controller}"),
             symbol: (*controller).into(),
+            byte_offset: 0,
             minimum: None,
             maximum: Some(0),
             max_end_drop: None,
@@ -2387,13 +2427,19 @@ fn render_probe_capture(
     probe: &str,
     sample: usize,
     symbol: &str,
+    byte_offset: u32,
 ) -> Result<String> {
+    ensure!(
+        byte_offset.is_multiple_of(4),
+        "memory probe offset must be word aligned"
+    );
     let marker = format!("SEDS_BAY_PROBE {} {probe} {sample}", safe(node));
     let python = format!(
-        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}))) + chr(10))",
+        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {})) + chr(10))",
         serde_json::to_string(&path.to_string_lossy())?,
         serde_json::to_string(&marker)?,
         serde_json::to_string(symbol)?,
+        byte_offset,
     );
     Ok(format!("python {}\n", serde_json::to_string(&python)?))
 }
@@ -2579,6 +2625,7 @@ fn parse_memory_profiles(
         reports.push(MemoryProbeReport {
             name: probe.name.clone(),
             symbol: probe.symbol.clone(),
+            byte_offset: probe.byte_offset,
             samples,
             minimum_observed,
             maximum_observed,
@@ -2663,6 +2710,35 @@ fn default_minimum_activity() -> u32 {
 #[cfg(test)]
 mod pico_fi_tests {
     use super::*;
+
+    #[test]
+    fn bay_exports_sparse_sd_evidence_for_each_storage_node_only() {
+        let plain: BoardLayout =
+            serde_json::from_str(include_str!("../examples/stm32g4-board.json")).unwrap();
+        let mut fc = plain.clone();
+        fc.architecture = crate::core::ArchitectureKind::Stm32h5;
+        fc.peripherals = serde_json::from_value(
+            serde_json::json!([{"type":"storage", "name":"sd", "model":"sd_card", "bus":"sdmmc1"}]),
+        )
+        .unwrap();
+        let mut daq = fc.clone();
+        daq.architecture = crate::core::ArchitectureKind::Stm32u5;
+        let script = render_sd_card_captures(
+            &[
+                ("gateway".into(), plain),
+                ("flight".into(), fc),
+                ("daq".into(), daq),
+            ],
+            Path::new("/tmp/sd evidence"),
+            123,
+        );
+        assert_eq!(script.matches("SaveCardImage").count(), 2);
+        assert!(script.contains("sdmmc SaveCardImage \"/tmp/sd evidence/sd-flight-123.img\""));
+        assert!(script.contains("sdmmc1 SaveCardImage \"/tmp/sd evidence/sd-daq-123.img\""));
+        assert!(!script.contains("sd-gateway"));
+        assert!(!script.contains("RunFor"));
+        assert!(script.contains("SEDS_BAY_SD_IMAGE flight 123"));
+    }
 
     #[test]
     fn saved_capture_keeps_minimum_fault_and_completion_guards() {
@@ -2786,9 +2862,34 @@ mod pico_fi_tests {
     }
 
     #[test]
+    fn array_probe_offsets_are_read_only_and_word_aligned() {
+        let command = render_probe_capture(
+            Path::new("/tmp/probes.txt"),
+            "gateway",
+            "stack",
+            2,
+            "g_stack",
+            508,
+        )
+        .unwrap();
+        assert!(command.contains(" + 508"));
+        assert!(!command.contains("WriteDoubleWord"));
+        assert!(render_probe_capture(
+            Path::new("/tmp/probes.txt"),
+            "gateway",
+            "stack",
+            2,
+            "g_stack",
+            3
+        )
+        .is_err());
+    }
+
+    #[test]
     fn probe_capture_uses_a_private_file_and_never_the_console() {
         let command =
-            render_probe_capture(Path::new("/tmp/probes.txt"), "rf", "pool", 2, "g_pool").unwrap();
+            render_probe_capture(Path::new("/tmp/probes.txt"), "rf", "pool", 2, "g_pool", 0)
+                .unwrap();
         assert!(command.starts_with("python "));
         assert!(command.contains("with open("));
         assert!(command.contains("ReadDoubleWord"));

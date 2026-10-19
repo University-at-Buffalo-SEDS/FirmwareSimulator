@@ -66,11 +66,11 @@ usart2: UART.SedsStm32Uart @ sysbus 0x40004400
 usart1: UART.SedsStm32Uart @ sysbus 0x40013800
     frequency: 170000000
     IRQ -> nvic@37
-spi1: SPI.STM32SPI @ sysbus 0x40013000
-    series: .L5
+spi1: SPI.SedsStm32G4Spi @ sysbus 0x40013000
     IRQ -> nvic@35
-spi2: SPI.STM32SPI @ sysbus 0x40003800
-    series: .L5
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32G4Spi.cs
+spi2: SPI.SedsStm32G4Spi @ sysbus 0x40003800
     IRQ -> nvic@36
 i2c2: I2C.STM32F7_I2C @ sysbus 0x40005800
 timer1: Timers.STM32_Timer @ sysbus 0x40012C00

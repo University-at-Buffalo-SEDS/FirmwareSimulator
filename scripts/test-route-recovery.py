@@ -37,6 +37,57 @@ def configure_allocator_probes(layout, cache):
 
 RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
 
+def configure_evidence_capture(command, directory):
+    """The output directory must be writable by the simulator container user."""
+    directory = directory.resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    command[2:2] = ["-v", f"{directory}:/diagnostics", "-e", "FIRMWARE_SIM_DIAGNOSTICS_DIR=/diagnostics"]
+
+def configure_soak_storage(layout, board):
+    """Exercise prepared cards for recording; keep blank/removal fixtures opt-in elsewhere."""
+    if board not in ("DAQ-Board", "FlightComputer26"):
+        return
+    storage = next((p for p in layout.get("peripherals", []) if p.get("model") == "sd_card"), None)
+    if storage is None:
+        raise ValueError(f"{board} needs its real SD model for the recording soak")
+    storage["capacity_bytes"] = 64 * 1024**3
+    storage["filesystem"] = "fat32:SEDSDAQ.ID" if board == "DAQ-Board" else "fat32"
+    probes = layout.setdefault("execution", {}).setdefault("memory_probes", [])
+    if board == "FlightComputer26":
+        fields = [("sd_ready", "g_sd_ready", {"minimum": 1}),
+                  ("sd_accepted_records", "g_sd_enqueued_records", {"minimum": 1}),
+                  ("sd_processed_records", "g_sd_written_records", {"minimum": 1, "ignore_leading_zeroes": True}),
+                  ("sd_flushed_records", "g_sd_flushed_records", {}),
+                  ("sd_write_errors", "g_sd_write_errors", {"maximum": 0}),
+                  ("sd_format_errors", "g_sd_format_errors", {"maximum": 0}),
+                  ("sd_lock_contention_drops", "g_sd_lock_contention_drops", {}),
+                  ("sd_unavailable_drops", "g_sd_unavailable_drops", {})]
+    else:
+        fields = [("sd_raw_adc_drained", "g_daq_raw_samples_drained_count", {}),
+                  ("sd_raw_records_accepted", "g_sd_raw_records_enqueued_count", {"minimum": 1}),
+                  ("sd_raw_records_flushed", "g_sd_raw_records_flushed_count", {}),
+                  ("sd_raw_records_dropped", "g_sd_raw_records_dropped_count", {"maximum": 0}),
+                  ("sd_raw_records_io_lost", "g_sd_raw_records_io_lost_count", {"maximum": 0})]
+    existing = {p["name"] for p in probes}
+    for name, symbol, bounds in fields:
+        if name not in existing:
+            probes.append(dict(name=name, symbol=symbol, **bounds))
+
+def configure_storage_assertions(topology, require_flush):
+    """Allow the first batching interval, then require actual writes in every boot."""
+    count = topology["sample_count"]
+    boundaries = sorted({0, count, *(r["after_sample"] for r in topology.get("reboots", []) if r["node"] == "flight")})
+    assertions = topology.setdefault("assertions", [])
+    for start, end in zip(boundaries, boundaries[1:]):
+        common = dict(name=f"FC SD writer progresses in samples {start}..{end-1}", node="flight", probe="sd_processed_records")
+        if end - start > 1:
+            assertions.append(dict(**common, from_sample=start, to_sample=end-1, minimum_gain=1))
+        else:
+            assertions.append(dict(**common, sample=start, minimum=1))
+    if require_flush:
+        assertions.append(dict(name="FC SD records reach a media flush", node="flight", probe="sd_flushed_records", sample=count-1, minimum=1))
+        assertions.append(dict(name="DAQ raw records reach a media flush", node="daq", probe="sd_raw_records_flushed", sample=count-1, minimum=1))
+
 def configure_restarts(directory, nodes, samples=None):
     """Restart selected processes/MCUs without restarting their peers."""
     path = directory / "topology.json"
@@ -69,6 +120,19 @@ def configure_restarts(directory, nodes, samples=None):
             assertion["minimum"] = assertion.pop("minimum_gain")
             assertion["sample"] = assertion.pop("to_sample")
             assertion.pop("from_sample")
+    # Fault-scoped expiry guards follow the requested boot boundaries too.
+    # A host-only restart cannot reset an RF counter; a real RF reset must.
+    for assertion in topology["assertions"]:
+        if " no CAN expiry outside injected ACK loss at sample " not in assertion["name"]:
+            continue
+        sample = assertion.get("sample", assertion.get("to_sample"))
+        node = assertion["node"]
+        for key in ("sample", "maximum", "from_sample", "to_sample", "maximum_gain"):
+            assertion.pop(key, None)
+        if sample == 0 or (node in nodes and sample in samples):
+            assertion.update(sample=sample, maximum=0)
+        else:
+            assertion.update(from_sample=sample-1, to_sample=sample, maximum_gain=0)
     host_runs = 1 + (len(samples) if "groundstation" in nodes else 0)
     restart_checks = {
         "GroundStation preference survives discovery and process restart",
@@ -184,9 +248,15 @@ def main():
                         choices=("valve", "actuator"),
                         help="output board to observe while Gateway is detached from CAN")
     parser.add_argument("--fault-elf", help="alternate ELF relative to the output board, for negative controls")
-    parser.add_argument("--ultra-soak", action="store_true", help="run the normal short gate, then the complete ten-minute seven-board soak")
+    parser.add_argument("--ultra-soak", action="store_true", help="run the short gate, then the complete seven-board soak (default: ten minutes)")
     parser.add_argument("--restart-regression", action="store_true", help="run the short gate, then a 120-second restart regression (not ten-minute qualification)")
     parser.add_argument("--soak-only", action="store_true", help="run only the requested long test; does not qualify the short gate")
+    parser.add_argument("--soak-ms", type=int, default=600000,
+                        help="ultra-soak simulated duration in milliseconds (default: 600000)")
+    parser.add_argument("--soak-samples", type=int, default=12,
+                        help="ultra-soak health/command observations (default: 12; use 360 for six hours)")
+    parser.add_argument("--evidence-dir", type=Path,
+                        help="retain full logs, memory probes and sparse SD images in this container-writable directory")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--restart-nodes", nargs="+", choices=RESTART_NODES,
                         help="override long-test reboot group; unselected peers stay powered")
@@ -205,6 +275,11 @@ def main():
         parser.error("--ultra-soak uses the full-system fault/reboot schedule, not the short route-loss scenario")
     if args.fault_elf and not args.disconnect_node:
         parser.error("--fault-elf requires --disconnect-node")
+    if args.soak_ms != 600000 or args.soak_samples != 12:
+        if not args.ultra_soak:
+            parser.error("custom soak duration/samples require --ultra-soak")
+    if args.soak_ms < 600000 or args.soak_samples < 12 or args.soak_ms // args.soak_samples < 1000:
+        parser.error("soak requires at least ten minutes, twelve samples and one second per sample")
     root = args.workspace.resolve()
     spec = importlib.util.spec_from_file_location("board_suite", root / "ActuatorBoard26/sim/run_full.py")
     suite = importlib.util.module_from_spec(spec)
@@ -214,6 +289,8 @@ def main():
         subdir = "Release" if board.name == "FlightComputer26" else "Release_Script"
         layout = load_layout(board, subdir)
         configure_allocator_probes(layout, board / "build" / subdir / "CMakeCache.txt")
+        if args.ultra_soak:
+            configure_soak_storage(layout, board.name)
         fault_repo = {"valve": "ValveBoard26", "actuator": "ActuatorBoard26"}.get(args.disconnect_node)
         if args.fault_elf and board.name == fault_repo:
             layout["artifacts"]["elf"] = args.fault_elf
@@ -227,6 +304,9 @@ def main():
     os.environ.pop("SEDS_FIRMWARE_SIM_SOURCE", None)
     container = f"seds-route-recovery-{os.getpid()}"
     def run(command, label):
+        long_test = "ten-minute" in label
+        if long_test and (args.soak_ms != 600000 or args.soak_samples != 12):
+            label = label.replace("ten-minute", f"{args.soak_ms / 60000:g}-minute")
         if args.restart_regression:
             label = label.replace("ten-minute", "120-second restart regression")
         mount = next(value for value in command if value.endswith(":/simulation:ro"))
@@ -242,19 +322,25 @@ def main():
         if args.disconnect_node:
             configure_fault(directory, args.disconnect_node)
         run_kind = args.disconnect_node or "baseline"
-        if "ten-minute" in label:
-            run_kind = "ten-minute-soak"
+        if long_test and not args.restart_regression:
+            run_kind = "ten-minute-soak" if args.soak_ms == 600000 and args.soak_samples == 12 else f"soak-{args.soak_ms}ms-{args.soak_samples}samples"
         elif "120-second restart regression" in label:
             run_kind = "restart-regression"
-        if args.restart_nodes and run_kind in ("ten-minute-soak", "restart-regression"):
+        if args.restart_nodes and long_test:
             configure_restarts(directory, args.restart_nodes, args.restart_samples)
             run_kind += "-" + "-".join(args.restart_nodes)
             if args.restart_samples:
                 run_kind += "-samples-" + "-".join(map(str, args.restart_samples))
+        if args.ultra_soak:
+            recording_topology = json.loads(topology_path.read_text())
+            configure_storage_assertions(recording_topology, require_flush=long_test)
+            topology_path.write_text(json.dumps(recording_topology, indent=2))
         if args.fault_elf:
             run_kind += "-negative-control"
         evidence = root / f"route-recovery-{run_kind}.json"
         evidence.write_text((directory / "topology.json").read_text())
+        if args.evidence_dir:
+            configure_evidence_capture(command, args.evidence_dir)
         command[2:2] = ["--name", container]
         started = time.monotonic()
         process = subprocess.Popen(command)
@@ -282,7 +368,10 @@ def main():
     if not args.soak_only:
         suite.run_network_simulation(UI(), root / "ActuatorBoard26", "stm32g4", "Release_Script")
     if args.ultra_soak or args.restart_regression:
-        os.environ["SEDS_FIRMWARE_SIM_SOAK_MS"] = "120000" if args.restart_regression else "600000"
+        os.environ["SEDS_FIRMWARE_SIM_SOAK_MS"] = "120000" if args.restart_regression else str(args.soak_ms)
+        if args.soak_samples != 12:
+            original_sample_count = suite.network_sample_count
+            suite.network_sample_count = lambda layouts, requested: original_sample_count(layouts, max(requested, args.soak_samples))
         suite.run_network_simulation(UI(), root / "ActuatorBoard26", "stm32g4", "Release_Script", ultra_soak=True)
     print("PASS: long test only; short gate not executed" if args.soak_only else "PASS: firmware network and route recovery", flush=True)
 

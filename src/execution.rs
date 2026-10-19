@@ -41,6 +41,7 @@ pub struct OtaPowerCutReport {
 pub struct MemoryProbeReport {
     pub name: String,
     pub symbol: String,
+    pub byte_offset: u32,
     pub samples: Vec<u32>,
     pub minimum_observed: u32,
     pub maximum_observed: u32,
@@ -136,6 +137,10 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
                     .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
             "invalid memory probe name {}",
             probe.name
+        );
+        ensure!(
+            probe.byte_offset % 4 == 0,
+            "memory probe offset must be word aligned"
         );
         ensure!(
             !probe.symbol.is_empty()
@@ -779,6 +784,12 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX)
                 ));
+                if let Some(filesystem) = &peripheral.filesystem {
+                    overlay.push_str(&format!(
+                        "    FilesystemFixture: {}\n",
+                        serde_json::to_string(filesystem)?
+                    ));
+                }
             }
             _ => bail!(
                 "peripheral {} selects unsupported model/bus {model}/{bus} on {:?}",
@@ -849,10 +860,20 @@ fn render_script(
             duration_ms as f64 / 1000.0
         ));
         for probe in &layout.execution.memory_probes {
-            profile_script.push_str(&format!(
+            if probe.byte_offset == 0 {
+                profile_script.push_str(&format!(
                 "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
                 probe.name, sample, probe.symbol
             ));
+            } else {
+                let read = format!("print('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {}))", serde_json::to_string(&probe.symbol).expect("serialize probe symbol"), probe.byte_offset);
+                profile_script.push_str(&format!(
+                    "echo \"SEDS_PROBE {} {}\"\npython {}\n",
+                    probe.name,
+                    sample,
+                    serde_json::to_string(&read).expect("serialize probe command")
+                ));
+            }
         }
     }
     if let Some(directory) = std::env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
@@ -1245,6 +1266,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         reports.push(MemoryProbeReport {
             name: probe.name.clone(),
             symbol: probe.symbol.clone(),
+            byte_offset: probe.byte_offset,
             samples,
             minimum_observed,
             maximum_observed,
@@ -1587,6 +1609,23 @@ mod tests {
     }
 
     #[test]
+    fn prepared_large_sd_fixture_is_explicit_in_the_generated_platform() {
+        let board = layout(
+            "stm32h5",
+            r#"[{"type":"storage","name":"sd","model":"sd_card","bus":"sdmmc1","capacity_bytes":68719476736,"filesystem":"fat32:SEDSDAQ.ID"}]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(overlay.contains("CardCapacityBytes: 68719476736"));
+        assert!(overlay.contains("FilesystemFixture: \"fat32:SEDSDAQ.ID\""));
+        let blank = render_peripheral_overlay(&layout(
+            "stm32h5",
+            r#"[{"type":"storage","name":"sd","model":"sd_card","bus":"sdmmc1"}]"#,
+        ))
+        .unwrap();
+        assert!(!blank.contains("FilesystemFixture:"));
+    }
+
+    #[test]
     fn h5_sd_card_maps_logical_bus_to_platform_controller() {
         let board = layout(
             "stm32h5",
@@ -1644,6 +1683,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            byte_offset: 0,
             minimum: None,
             maximum: None,
             max_end_drop: None,
@@ -1708,6 +1748,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            byte_offset: 0,
             minimum: None,
             maximum: None,
             max_end_drop: None,
@@ -1728,6 +1769,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            byte_offset: 0,
             minimum: None,
             maximum: None,
             max_end_drop: None,

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-19",
+  "status": "passed",
+  "failure": "A declared Cargo path patch was ignored because the lockfile retained registry SDK4.2.3; compilation alone did not establish candidate source selection.",
+  "fix": [
+    "Select candidate version explicitly in an isolated lockfile or temporarily use a direct path dependency.",
+    "Check resolved Cargo metadata for package version, source, manifest path and reachability.",
+    "Embed the actual Cargo source tree in simulator images and keep the lock fixed for proof and compilation."
+  ],
+  "regressions": {
+    "candidate_path_accepted": true,
+    "old_registry_lock_rejected": true,
+    "same_version_registry_rejected": true,
+    "wrong_checkout_rejected": true,
+    "unused_optional_override_rejected": true,
+    "exact_image_version_match": [
+      "accept",
+      "reject",
+      "reject"
+    ]
+  },
+  "macos_candidate": {
+    "name": "SEDSnet",
+    "version": "4.2.4",
+    "manifest_path": "/Users/rylan/Documents/GitKraken/SEDS/SEDSnet/Cargo.toml",
+    "source": null
+  },
+  "limits": [
+    "Old mixed-host qualification is retained separately and cannot satisfy the all-current release gate.",
+    "Production GroundStation manifest remains SEDSnet major version4."
+  ]
+}

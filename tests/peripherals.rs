@@ -15,6 +15,7 @@ fn devices_survive_fault_and_disconnect_behaviors() {
         channel_samples: Vec::new(),
         noise_lsb: None,
         capacity_bytes: None,
+        filesystem: None,
     };
     let mut imu = base("imu", "imu1");
     imu.failure_every = Some(3);
@@ -69,6 +70,7 @@ fn report_identifies_instruction_coupled_devices() {
         channel_samples: Vec::new(),
         noise_lsb: None,
         capacity_bytes: None,
+        filesystem: None,
     };
     let report = exercise_all(&[coupled], 1, 1).unwrap();
     assert!(report[0].instruction_coupled);
@@ -91,8 +93,24 @@ fn supports_24_bit_spi_sigma_delta_adc() {
         channel_samples: vec![1_048_576],
         noise_lsb: Some(2),
         capacity_bytes: None,
+        filesystem: None,
     };
     let report = exercise_all(&[adc], 16, 7).unwrap();
     assert_eq!(report[0].successful_reads, 16);
     assert!(report[0].instruction_coupled);
+}
+
+#[test]
+fn storage_fixture_validation_covers_large_cards_and_marker_boundaries() {
+    let make = |capacity, filesystem| {
+        serde_json::from_value::<PeripheralSpec>(serde_json::json!({
+            "type":"storage", "name":"sd", "model":"sd_card", "bus":"sdmmc1",
+            "capacity_bytes": capacity, "filesystem":filesystem
+        }))
+        .unwrap()
+    };
+    assert!(exercise_all(&[make(64_u64 << 30, "fat32:SEDSDAQ.ID")], 1, 0).is_ok());
+    assert!(exercise_all(&[make((1_u64 << 41) + 512, "fat32")], 1, 0).is_err());
+    assert!(exercise_all(&[make(1_u64 << 30, "fat32:../bad")], 1, 0).is_err());
+    assert!(exercise_all(&[make(1_u64 << 30, "ext4")], 1, 0).is_err());
 }
