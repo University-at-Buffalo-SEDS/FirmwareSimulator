@@ -54,10 +54,9 @@ impl Session {
         // TCP can apply stream backpressure. Do not consume a body that
         // cannot fit the bounded UART queue, or evict an accepted command to
         // admit it. Keep serving the opposite direction while reads pause.
-        let can_receive = !self.hello
-            || total == 4
-            || (state.uart_tx_packets.len() < PICO_PACKET_QUEUE_DEPTH
-                && state.uart_tx_bytes.saturating_add(total) <= PICO_UART_QUEUE_BYTES);
+        // The production core owns one complete pending receive frame outside
+        // the mailbox. Read at most that frame, then retain it under pressure.
+        let can_receive = true;
         let mut bytes = [0; 4100];
         let need = total - self.incoming.len();
         if need != 0 && can_receive {
@@ -76,8 +75,9 @@ impl Session {
                 }
                 self.write_started = Instant::now();
                 self.hello = true;
+                state.ethernet_connected = true;
                 self.incoming.clear();
-            } else if total > 4 && can_receive {
+            } else if total > 4 && state.uart_has_room(total) {
                 let mut frame = vec![0xa5, 0x5a];
                 frame.extend_from_slice(&self.incoming[2..]);
                 ensure!(
@@ -90,7 +90,7 @@ impl Session {
         }
         if self.hello && self.outgoing.is_empty() {
             if let Some(frame) = state.host_packets.pop_front() {
-                state.host_packet_bytes -= frame.len();
+                state.host_packet_bytes -= state.packet_cost(frame.len());
                 ensure!(
                     frame.len() >= 5 && frame.len() <= 4100,
                     "invalid gateway UART frame"
@@ -126,9 +126,13 @@ pub(super) fn run(listener: TcpListener, uart_path: &Path, stop: impl Fn() -> bo
     let mut uart = OpenOptions::new().read(true).write(true).open(uart_path)?;
     configure_raw_nonblocking(uart.as_raw_fd())?;
     listener.set_nonblocking(true)?;
-    let mut state = PicoBridgeState::default();
+    let mut state = PicoBridgeState::ethernet();
     let mut session = None;
     while !stop() {
+        state.ethernet_connected = session.as_ref().is_some_and(|peer: &Session| peer.hello);
+        if !state.ethernet_connected {
+            state.clear_disconnected_upload();
+        }
         read_gateway_uart(&mut state, &mut uart)?;
         drain_gateway_uart_tx(&mut state, &mut uart)?;
         if session.is_none() {
@@ -165,7 +169,7 @@ pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> boo
     let discovery = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
     discovery.set_nonblocking(true)?;
     let identity = hardware_mac(&discovery.local_addr()?.port().to_le_bytes());
-    let mut state = PicoBridgeState::default();
+    let mut state = PicoBridgeState::ethernet();
     let mut session = None;
     let mut next_query = Instant::now();
     let mut query = None;
@@ -173,6 +177,10 @@ pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> boo
     let mut best: Option<([u8; 6], std::net::SocketAddr)> = None;
     let mut nonce = 1u64;
     while !stop() {
+        state.ethernet_connected = session.as_ref().is_some_and(|peer: &Session| peer.hello);
+        if !state.ethernet_connected {
+            state.clear_disconnected_upload();
+        }
         read_gateway_uart(&mut state, &mut uart)?;
         drain_gateway_uart_tx(&mut state, &mut uart)?;
         let now = Instant::now();
@@ -309,10 +317,6 @@ mod tests {
             host.read_exact(&mut hello).unwrap();
             assert_eq!(&hello, b"PICOFI1");
             host.write_all(b"PICOFI1").unwrap();
-            master.write_all(&[0xa5, 0x5a, 1, 0, value]).unwrap();
-            let mut frame = [0; 5];
-            host.read_exact(&mut frame).unwrap();
-            assert_eq!(frame, [0xb5, 0x4e, 1, 0, value]);
             host.write_all(&[0xb5, 0x4e, 1, 0, value + 1]).unwrap();
             let mut collected = vec![];
             while collected.len() < 5 {
@@ -326,6 +330,10 @@ mod tests {
                 thread::sleep(Duration::from_millis(1));
             }
             assert_eq!(collected, [0xa5, 0x5a, 1, 0, value + 1]);
+            master.write_all(&[0xa5, 0x5a, 1, 0, value]).unwrap();
+            let mut frame = [0; 5];
+            host.read_exact(&mut frame).unwrap();
+            assert_eq!(frame, [0xb5, 0x4e, 1, 0, value]);
             host.shutdown(std::net::Shutdown::Both).unwrap();
         }
         stop.store(true, Ordering::Release);
@@ -339,7 +347,7 @@ mod tests {
         host.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let (socket, _) = listener.accept().unwrap();
         let mut peer = Session::new(socket).unwrap();
-        let mut state = PicoBridgeState::default();
+        let mut state = PicoBridgeState::ethernet();
         host.write_all(b"PICOFI1").unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         while !peer.hello || !peer.outgoing.is_empty() {
@@ -349,26 +357,26 @@ mod tests {
         }
         let mut hello = [0; 7];
         host.read_exact(&mut hello).unwrap();
-        for index in 0..PICO_PACKET_QUEUE_DEPTH {
+        for index in 0..PICO_ETHERNET_MAILBOX_DEPTH {
             enqueue_gateway_uart_packet(&mut state, vec![index as u8; 8]);
         }
         let accepted = state.uart_tx_packets.clone();
         host.write_all(&[0xb5, 0x4e, 1, 0, 42]).unwrap();
-        while peer.incoming.len() < 4 {
+        while peer.incoming.len() < 5 {
             assert!(Instant::now() < deadline, "header did not arrive");
             peer.service(&mut state).unwrap();
             thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(state.uart_tx_packets, accepted);
-        assert_eq!(peer.incoming, [0xb5, 0x4e, 1, 0]);
+        assert_eq!(peer.incoming, [0xb5, 0x4e, 1, 0, 42]);
         let first = state.uart_tx_packets.pop_front().unwrap();
-        state.uart_tx_bytes -= first.len();
+        state.uart_tx_bytes -= state.packet_cost(first.len());
         while !peer.incoming.is_empty() {
             assert!(Instant::now() < deadline, "paused body did not resume");
             peer.service(&mut state).unwrap();
             thread::sleep(Duration::from_millis(1));
         }
-        assert_eq!(state.uart_tx_packets.len(), PICO_PACKET_QUEUE_DEPTH);
+        assert_eq!(state.uart_tx_packets.len(), PICO_ETHERNET_MAILBOX_DEPTH);
         assert_eq!(state.uart_tx_packets.front(), accepted.get(1));
         assert_eq!(
             state.uart_tx_packets.back().unwrap(),
@@ -385,9 +393,13 @@ mod tests {
         let (socket, _) = listener.accept().unwrap();
         let worker = thread::spawn(move || {
             let mut peer = Session::new(socket).unwrap();
-            let mut state = PicoBridgeState::default();
-            enqueue_host_packet(&mut state, vec![0xa5, 0x5a, 3, 0, 11, 12, 13]);
+            let mut state = PicoBridgeState::ethernet();
+            let mut injected = false;
             while peer.service(&mut state).is_ok() {
+                if peer.hello && !injected {
+                    enqueue_host_packet(&mut state, vec![0xa5, 0x5a, 3, 0, 11, 12, 13]);
+                    injected = true;
+                }
                 thread::sleep(Duration::from_millis(1));
             }
             state

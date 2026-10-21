@@ -414,6 +414,9 @@ struct PicoBridgeState {
     uart_rx: Vec<u8>,
     uart_tx_packets: VecDeque<Vec<u8>>,
     uart_tx_offset: usize,
+    ethernet_mailboxes: bool,
+    ethernet_connected: bool,
+    uart_tx_active: Option<Vec<u8>>,
     uart_tx_bytes: usize,
     host_reads: VecDeque<[u8; PICO_I2C_SLOT_SIZE]>,
     host_packets: VecDeque<Vec<u8>>,
@@ -797,14 +800,43 @@ fn gateway_uart_to_i2c_response(frame: &[u8]) -> Option<Vec<u8>> {
     Some(frame.to_vec())
 }
 
+const PICO_ETHERNET_MAILBOX_DEPTH: usize = 128;
+const PICO_ETHERNET_MAILBOX_BYTES: usize = 16_384;
+impl PicoBridgeState {
+    fn ethernet() -> Self {
+        Self {
+            ethernet_mailboxes: true,
+            ..Self::default()
+        }
+    }
+    fn packet_cost(&self, wire_len: usize) -> usize {
+        // Production stores kind + payload, excluding the four-byte envelope.
+        if self.ethernet_mailboxes {
+            wire_len.saturating_sub(3)
+        } else {
+            wire_len
+        }
+    }
+    fn uart_has_room(&self, wire_len: usize) -> bool {
+        let (depth, bytes) = if self.ethernet_mailboxes {
+            (PICO_ETHERNET_MAILBOX_DEPTH, PICO_ETHERNET_MAILBOX_BYTES)
+        } else {
+            (PICO_PACKET_QUEUE_DEPTH, PICO_UART_QUEUE_BYTES)
+        };
+        wire_len <= PICO_UART_MAX_FRAME
+            && self.uart_tx_packets.len() < depth
+            && self.packet_cost(wire_len) <= bytes.saturating_sub(self.uart_tx_bytes)
+    }
+    fn clear_disconnected_upload(&mut self) {
+        self.host_packets.clear();
+        self.host_packet_bytes = 0;
+    }
+}
 fn enqueue_gateway_uart_packet(state: &mut PicoBridgeState, packet: Vec<u8>) -> bool {
-    if packet.len() > PICO_UART_MAX_FRAME
-        || state.uart_tx_packets.len() >= PICO_PACKET_QUEUE_DEPTH
-        || packet.len() > PICO_UART_QUEUE_BYTES.saturating_sub(state.uart_tx_bytes)
-    {
+    if !state.uart_has_room(packet.len()) {
         return false;
     }
-    state.uart_tx_bytes += packet.len();
+    state.uart_tx_bytes += state.packet_cost(packet.len());
     state.uart_tx_packets.push_back(packet);
     true
 }
@@ -814,6 +846,31 @@ fn drain_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut fs::File) -> Re
 }
 
 fn step_gateway_uart_tx(state: &mut PicoBridgeState, uart: &mut impl Write) -> Result<()> {
+    // The UART worker owns one in-flight frame outside the shared mailbox.
+    // It returns queue credit immediately on pop, and retains partial writes.
+    if state.ethernet_mailboxes {
+        if state.uart_tx_active.is_none() {
+            state.uart_tx_active = state.uart_tx_packets.pop_front();
+            if let Some(packet) = &state.uart_tx_active {
+                state.uart_tx_bytes -= state.packet_cost(packet.len());
+            }
+        }
+        if let Some(packet) = &state.uart_tx_active {
+            match uart.write(&packet[state.uart_tx_offset..]) {
+                Ok(0) => bail!("Gateway UART closed during Pico-Fi transfer"),
+                Ok(length) => {
+                    state.uart_tx_offset += length;
+                    if state.uart_tx_offset == packet.len() {
+                        state.uart_tx_active = None;
+                        state.uart_tx_offset = 0;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error).context("writing Ethernet Pico UART"),
+            }
+        }
+        return Ok(());
+    }
     let Some(packet) = state.uart_tx_packets.front() else {
         return Ok(());
     };
@@ -862,8 +919,16 @@ fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
     // Byte-backed Pico mailboxes retain accepted packets. At saturation the
     // network reader pauses; further unaccepted upstream UART traffic can be
     // refused, but must never evict an accepted SDT template or receipt.
+    if state.ethernet_mailboxes && !state.ethernet_connected {
+        return;
+    }
+    let bytes = if state.ethernet_mailboxes {
+        PICO_ETHERNET_MAILBOX_BYTES
+    } else {
+        PICO_PACKET_QUEUE_BYTES
+    };
     if state.host_packets.len() >= PICO_HOST_MAILBOX_DEPTH
-        || frame.len() > PICO_PACKET_QUEUE_BYTES.saturating_sub(state.host_packet_bytes)
+        || state.packet_cost(frame.len()) > bytes.saturating_sub(state.host_packet_bytes)
     {
         state.host_packet_rejections += 1;
         if env::var_os("FIRMWARE_SIM_TRACE_PICO_ACKS").is_some() {
@@ -874,7 +939,7 @@ fn enqueue_host_packet(state: &mut PicoBridgeState, frame: Vec<u8>) {
         }
         return;
     }
-    state.host_packet_bytes += frame.len();
+    state.host_packet_bytes += state.packet_cost(frame.len());
     state.host_packets.push_back(frame);
 }
 
@@ -3415,6 +3480,69 @@ mod pico_fi_tests {
         assert_eq!(second[4], PICO_I2C_END);
         assert_eq!(u32::from_le_bytes(second[6..10].try_into().unwrap()), 14);
         assert_eq!(u16::from_le_bytes(second[14..16].try_into().unwrap()), 6);
+    }
+
+    #[test]
+    fn dual_core_ethernet_mailboxes_match_production_depth_bytes_and_kind_cost() {
+        let mut state = PicoBridgeState::ethernet();
+        state.ethernet_connected = true;
+        for _ in 0..128 {
+            assert!(enqueue_gateway_uart_packet(&mut state, vec![1; 128]));
+        }
+        assert_eq!(state.uart_tx_bytes, 128 * 125);
+        assert!(!enqueue_gateway_uart_packet(&mut state, vec![2; 5]));
+        for n in 0..128 {
+            enqueue_host_packet(&mut state, vec![n; 128]);
+        }
+        assert_eq!(state.host_packets.len(), 128);
+        enqueue_host_packet(&mut state, vec![9; 5]);
+        assert_eq!(state.host_packet_rejections, 1);
+        assert_eq!(state.host_packets.front().unwrap()[0], 0);
+        let mut state = PicoBridgeState::ethernet();
+        state.ethernet_connected = true;
+        for _ in 0..3 {
+            assert!(enqueue_gateway_uart_packet(&mut state, vec![1; 4100]));
+        }
+        assert!(!enqueue_gateway_uart_packet(&mut state, vec![1; 4100]));
+        assert!(enqueue_gateway_uart_packet(&mut state, vec![1; 4096]));
+        assert_eq!(state.uart_tx_bytes, 16_384);
+    }
+    #[test]
+    fn ethernet_inflight_uart_returns_credit_without_overwriting_partial_frame() {
+        struct Blocked;
+        impl Write for Blocked {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut s = PicoBridgeState::ethernet();
+        assert!(enqueue_gateway_uart_packet(&mut s, vec![42; 128]));
+        step_gateway_uart_tx(&mut s, &mut Blocked).unwrap();
+        assert_eq!(s.uart_tx_bytes, 0);
+        assert!(s.uart_tx_packets.is_empty());
+        for _ in 0..128 {
+            assert!(enqueue_gateway_uart_packet(&mut s, vec![43; 128]));
+        }
+        assert_eq!(s.uart_tx_active.as_ref().unwrap(), &vec![42; 128]);
+        let mut output = Vec::new();
+        step_gateway_uart_tx(&mut s, &mut output).unwrap();
+        assert_eq!(output, vec![42; 128]);
+        assert!(s.uart_tx_active.is_none());
+    }
+    #[test]
+    fn disconnected_ethernet_upload_does_not_replay_stale_telemetry() {
+        let mut s = PicoBridgeState::ethernet();
+        enqueue_host_packet(&mut s, vec![1; 5]);
+        assert!(s.host_packets.is_empty());
+        s.ethernet_connected = true;
+        enqueue_host_packet(&mut s, vec![2; 5]);
+        assert_eq!(s.host_packets.len(), 1);
+        s.clear_disconnected_upload();
+        assert!(s.host_packets.is_empty());
+        assert_eq!(s.host_packet_bytes, 0);
     }
 
     #[test]

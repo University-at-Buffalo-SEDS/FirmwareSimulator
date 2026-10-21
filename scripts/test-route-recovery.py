@@ -9,11 +9,115 @@ from pathlib import Path
 import subprocess
 import time
 
+def built_subdir(board):
+    return "Release" if board.name in {"FlightComputer26", "RFBoard26"} else "Release_Script"
+
 def configured_pico_baud(cache):
     match = re.search(r"^GATEWAY_PICO_UART_BAUD_RATE:STRING=(\d+)$", cache.read_text(), re.MULTILINE)
     if not match or int(match.group(1)) == 0:
         raise ValueError("Gateway build must declare a positive Pico UART baud")
     return int(match.group(1))
+
+def configure_hardware_fill_profile(directory, topology):
+    """Match the field P6/Ethernet path and require every sustained window.
+
+    No artificial loss, CPU speed-up, or reduced source rate is introduced.
+    A separate captured baseline describes the observed fault, not a desired
+    simulator output that we force by probabilistic dropping.
+    """
+    duration=topology['virtual_time_ms']
+    if duration<70000 or topology.get('reboots') or topology.get('can_ack_events') or topology.get('can_link_events'):
+        raise ValueError('hardware fill baseline requires >=70 seconds and no scheduled resets/link faults')
+    if topology.get('sample_count', 0)*10000 != duration:
+        raise ValueError('hardware fill probes must be spaced exactly ten seconds apart')
+    stations=[host for host in topology.get('host_nodes',[]) if host['name']=='groundstation']
+    links=[link for link in topology.get('links',[]) if link['name']=='fill_pico']
+    if len(stations)!=1 or len(links)!=1:
+        raise ValueError('hardware fill baseline requires one GroundStation and its Ethernet fill link')
+    serial=[link for link in stations[0].get('serial_links',[]) if link['link']=='fill_pico']
+    if len(serial)!=1 or serial[0].get('transport')!='pico_fi_discovery_to_uart' or serial[0].get('env')!='GS_FILL_PICO_DISCOVERY_PORT':
+        raise ValueError('hardware fill baseline requires Pi Ethernet discovery/TCP, without a GS-side Pico or I2C')
+    link=links[0]
+    endpoints={(e['node'],e['peripheral']) for e in link.get('endpoints',[])}
+    if link.get('kind')!='pico_fi' or link.get('baud_rate')!=1000000 or endpoints!={('groundstation','fill_box'),('gateway','usart2')}:
+        raise ValueError('hardware fill baseline requires Ethernet to one gateway-side Pico-Fi and USART2 at 1 Mbaud')
+    link['transport_path']=['GroundStation26 main Ethernet','UDP discovery + framed TCP','gateway-side Pico-Fi','Gateway USART2']
+    windows=(duration-20000)//10000-1 # Permit one final scheduler boundary only.
+    calibration=directory/'hardware-fill-calibration.json'
+    calibration.write_text(json.dumps({'kg50_input':'p6_differential'}))
+    for host in topology['host_nodes']:
+        if host['name']=='groundstation':
+            host.setdefault('env',{}).update(GS_SIM_VALIDATE_FILL_DELIVERY='1',
+                GS_LOADCELL_CALIBRATION_PATH='/simulation/'+calibration.name)
+    checks=topology.setdefault('host_log_assertions',[])
+    # The host's nominal-rate diagnostic assumes the 250 Hz configured cap
+    # is a guaranteed producer cadence. P6 gain/auxiliary settling makes that
+    # assumption false. Preserve its raw windows, then require >=99.5% of the
+    # actual firmware publications plus the same freshness and zero-CAN-loss
+    # limits in mandatory source-aware evidence validation after execution.
+    checks.append(dict(name='Every sustained delivery window is available for source-aware validation',
+        node='groundstation',contains='sustained fill delivery ',minimum_occurrences=windows))
+    # Probe the radio throughout the same run, including after discovery TTLs.
+    # Schedule from simulator sample markers, never slow host wall-clock sleeps.
+    rounds = topology['sample_count'] - 1
+    for host in stations:
+        host['env'].update(GS_SIM_VALIDATE_SOAK_COMMANDS='1',
+            GS_SIM_VALIDATE_SOAK_AV_BAY='1',
+            GS_SIM_SOAK_COMMAND_SAMPLES=','.join(str(i) for i in range(1, rounds + 1)),
+            GS_SIM_MANAGED_VARIABLE_MAX_LATENCY_MS='500')
+    checks.append(dict(name='Every sustained RF control round returns destination receipts',
+        node='groundstation',contains='full-bay RF soak control acknowledged:',minimum_occurrences=rounds))
+    applied = topology.setdefault('assertions', [])
+    for sample in range(1, topology['sample_count']):
+        enabled = (sample - 1) % 2
+        for node in ['rf', 'power', 'flight']:
+            applied.append(dict(name=f'{node} applied RF underglow round {sample}',
+                node=node,probe='underglow_enabled',sample=sample,minimum=enabled,maximum=enabled))
+            applied.append(dict(name=f'{node} advanced RF underglow round {sample}',
+                node=node,probe='underglow_updates',from_sample=sample-1,to_sample=sample,minimum_gain=1))
+        applied.append(dict(name=f'FC executed non-actuating RF command round {sample}',
+            node='flight',probe='network_flight_commands_processed',
+            from_sample=sample-1,to_sample=sample,minimum_gain=1))
+
+
+def configure_hardware_fill_probes(layout, board):
+    if board == 'DAQ-Board':
+        probes=layout.setdefault('execution',{}).setdefault('memory_probes',[])
+        probes.append(dict(name='publication_failure_snapshot_words',symbol='g_telemetry_alloc_failure_stack_words'))
+        for index,name in [(1,'queue_budget'),(2,'shared_bytes'),(3,'rx_bytes'),(4,'tx_bytes'),(5,'queue_storage_bytes'),(7,'discovery_bytes'),(8,'schema_bytes'),(16,'result'),(17,'type'),(18,'tick'),(19,'element_count'),(20,'admission_rejections')]:
+            probes.append(dict(name='publication_failure_'+name,symbol='g_telemetry_alloc_failure_stack',byte_offset=4*index))
+        return
+    if board not in ('gateway-board26','gateway-board'):
+        return
+    probes=layout.setdefault('execution',{}).setdefault('memory_probes',[])
+    existing={p['name'] for p in probes}
+    for name in ['can_first_drop_tick','can_first_drop_phase']:
+        if name not in existing:probes.append(dict(name=name,symbol='g_sim_'+name))
+    counters={
+        'can_admission_fail':'g_gateway_can_admission_fail',
+        'can_handoff_fail':'g_gateway_can_rx_handoff_fail',
+        'queue_service_fail':'g_gateway_queue_service_fail',
+        'cached_transit_checks':'g_gateway_cached_checks',
+        'cached_transit_denied':'g_gateway_cached_denied'}
+    for name,symbol in counters.items():
+        if name not in existing:probes.append(dict(name=name,symbol=symbol))
+    for index,name in enumerate(('version','queue_budget','shared_bytes','rx_bytes','tx_bytes',
+            'queue_storage_bytes','reliable_rx_bytes','discovery_bytes','schema_bytes',
+            'managed_bytes','pending_bytes','template_count','template_bytes','chunk_payload_bytes',
+            'type_stats_count','type_stats_bytes')):
+        key='network_memory_'+name
+        if key not in existing:
+            probe=dict(name=key,symbol='g_telemetry_alloc_failure_stack',byte_offset=4*index)
+            if index==0:probe.update(minimum=1,maximum=1)
+            probes.append(probe)
+    probes.extend([
+        dict(name='network_gps_priority',symbol='g_telemetry_alloc_failure_stack',byte_offset=64),
+        dict(name='network_gps_type_exists',symbol='g_telemetry_alloc_failure_stack',byte_offset=68,minimum=1)])
+    for name,index in [('actuator',5),('valve',6),('daq',7)]:
+        probes.append(dict(name=name+'_can_frames',symbol='g_can_rx_sender_frames',byte_offset=4*index))
+        probes.append(dict(name=name+'_can_drops',symbol='g_can_rx_sender_dropped',byte_offset=4*index))
+    for index,name in enumerate(('uart','can','network_queues','discovery','time','ota','wait')):
+        probes.append(dict(name='service_'+name+'_ms',symbol='g_gateway_service_ms',byte_offset=4*index))
 
 def configure_allocator_probes(layout, cache):
     """Use allocator-specific diagnostics; never turn a missing fault probe into zero."""
@@ -35,12 +139,29 @@ def configure_allocator_probes(layout, cache):
         if name not in existing:
             probes.append(dict(name=name, symbol="g_telemetry_" + name, **bounds))
 
+def validate_fill_evidence(directory, duration_ms):
+    # Import by absolute sibling path so both CLI and importlib-based tests use
+    # the same validation module without altering interpreter search paths.
+    spec=importlib.util.spec_from_file_location('fill_delivery_report',
+        Path(__file__).with_name('fill_delivery_report.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    result=module.analyze(module.load_diagnostics(directory), expected_duration_ms=duration_ms)
+    (Path(directory)/'source-aware-delivery.json').write_text(json.dumps(result,indent=2)+'\n')
+    if not result['passed']:
+        raise RuntimeError('Source-aware fill delivery failed; see source-aware-delivery.json')
+    return result
+
 RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
 
 def configure_evidence_capture(command, directory):
     """The output directory must be writable by the simulator container user."""
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
+    if hasattr(os,'getgid'):
+        # The container's unprivileged simulator UID differs from the host UID.
+        # Grant the diagnostics directory's host group, not world write access.
+        directory.chmod(directory.stat().st_mode | 0o070)
+        command[2:2]=['--group-add',str(directory.stat().st_gid)]
     command[2:2] = ["-v", f"{directory}:/diagnostics", "-e", "FIRMWARE_SIM_DIAGNOSTICS_DIR=/diagnostics"]
 
 def configure_soak_storage(layout, board):
@@ -262,7 +383,17 @@ def main():
                         help="override long-test reboot group; unselected peers stay powered")
     parser.add_argument("--restart-samples", nargs="+", type=int,
                         help="restart the selected group after these samples (default: two-thirds)")
+    parser.add_argument('--hardware-fill-profile',action='store_true',
+        help='Run the captured P6/1-Mbaud Ethernet fill baseline with continuous rate/freshness checks; no injected outage')
+    parser.add_argument('--fill-duration-ms',type=int,default=120000,
+        help='hardware fill simulated duration; >=70000 and a multiple of10000 (600000 for ten minutes)')
     args = parser.parse_args()
+    if args.fill_duration_ms<70000 or args.fill_duration_ms%10000:
+        parser.error('--fill-duration-ms requires >=70000 and exact ten-second windows')
+    if args.fill_duration_ms!=120000 and not args.hardware_fill_profile:
+        parser.error('--fill-duration-ms requires --hardware-fill-profile')
+    if args.hardware_fill_profile and (args.ultra_soak or args.restart_regression or args.disconnect_node or args.fault_elf or args.restart_nodes):
+        parser.error('--hardware-fill-profile is a separate no-outage baseline')
     if args.soak_only and not (args.ultra_soak or args.restart_regression):
         parser.error("--soak-only requires --ultra-soak or --restart-regression")
     if args.restart_nodes and not (args.ultra_soak or args.restart_regression):
@@ -281,14 +412,18 @@ def main():
     if args.soak_ms < 600000 or args.soak_samples < 12 or args.soak_ms // args.soak_samples < 1000:
         parser.error("soak requires at least ten minutes, twelve samples and one second per sample")
     root = args.workspace.resolve()
+    if args.hardware_fill_profile and args.evidence_dir is None:
+        args.evidence_dir=root/('hardware-fill-evidence-'+str(time.time_ns()))
     spec = importlib.util.spec_from_file_location("board_suite", root / "ActuatorBoard26/sim/run_full.py")
     suite = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(suite)
     load_layout = suite.load_layout_for_build
     def load_built_layout(board, _subdir):
-        subdir = "Release" if board.name == "FlightComputer26" else "Release_Script"
+        subdir = built_subdir(board)
         layout = load_layout(board, subdir)
         configure_allocator_probes(layout, board / "build" / subdir / "CMakeCache.txt")
+        if args.hardware_fill_profile:
+            configure_hardware_fill_probes(layout,board.name)
         if args.ultra_soak:
             configure_soak_storage(layout, board.name)
         fault_repo = {"valve": "ValveBoard26", "actuator": "ActuatorBoard26"}.get(args.disconnect_node)
@@ -298,8 +433,8 @@ def main():
     suite.load_layout_for_build = load_built_layout
     os.environ.update(SEDS_FIRMWARE_SIM_SUITE_ROOT=str(root),
                       SEDS_FIRMWARE_SIM_IMAGE=args.image, SEDS_FIRMWARE_SIM_SKIP_BUILD="1",
-                      SEDS_FIRMWARE_SIM_NETWORK_TIME_MS="40000" if args.disconnect_node else "16000",
-                      SEDS_FIRMWARE_SIM_NETWORK_SAMPLES="10" if args.disconnect_node else "6",
+                      SEDS_FIRMWARE_SIM_NETWORK_TIME_MS=str(args.fill_duration_ms) if args.hardware_fill_profile else ("40000" if args.disconnect_node else "16000"),
+                      SEDS_FIRMWARE_SIM_NETWORK_SAMPLES=str(args.fill_duration_ms//10000) if args.hardware_fill_profile else ("10" if args.disconnect_node else "6"),
                       SEDS_FIRMWARE_SIM_DOCKER_NETWORK="host")
     os.environ.pop("SEDS_FIRMWARE_SIM_SOURCE", None)
     container = f"seds-route-recovery-{os.getpid()}"
@@ -317,11 +452,13 @@ def main():
             if link["kind"] == "pico_fi":
                 link["baud_rate"] = configured_pico_baud(root / "gateway-board26/build/Release_Script/CMakeCache.txt")
         for host in topology["host_nodes"]:
-            host.setdefault("env", {})["GS_BIND_ADDRESS"] = "127.0.0.1:0"
+            host.setdefault("env", {}).update(GS_BIND_ADDRESS="127.0.0.1:0",GS_HTTPS_BIND_ADDRESS="off")
+        if args.hardware_fill_profile:
+            configure_hardware_fill_profile(directory,topology)
         topology_path.write_text(json.dumps(topology, indent=2))
         if args.disconnect_node:
             configure_fault(directory, args.disconnect_node)
-        run_kind = args.disconnect_node or "baseline"
+        run_kind = "hardware-fill-baseline" if args.hardware_fill_profile else (args.disconnect_node or "baseline")
         if long_test and not args.restart_regression:
             run_kind = "ten-minute-soak" if args.soak_ms == 600000 and args.soak_samples == 12 else f"soak-{args.soak_ms}ms-{args.soak_samples}samples"
         elif "120-second restart regression" in label:
@@ -350,6 +487,8 @@ def main():
                     result = process.wait(timeout=10)
                     if result:
                         raise subprocess.CalledProcessError(result, command)
+                    if args.hardware_fill_profile:
+                        validate_fill_evidence(args.evidence_dir, args.fill_duration_ms)
                     break
                 except subprocess.TimeoutExpired:
                     elapsed = time.monotonic() - started

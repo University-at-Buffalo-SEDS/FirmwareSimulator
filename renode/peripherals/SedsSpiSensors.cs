@@ -307,6 +307,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                         : format == 2 ? signedCode : ((ScanMask() != 0 ? (uint)channel : 0u) << 28) | (signedCode & 0x0fffffffu);
                 }
                 if(value == 0x78) ResetRegisters();
+                if(value == 0x68) channel = 15; // Restart SCAN at the highest enabled ID.
                 position++;
                 return faulted ? (byte)0xff : (byte)0;
             }
@@ -319,8 +320,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 position++;
                 if(position == dataBytes + 1)
                 {
-                    samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
-                    channel = (channel + 7) & 7;
+                    if(channel < 12) samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
+                    // Internal temperature/reference fixtures stay steady during long soaks.
+                    channel = (channel + 15) & 15;
                 }
                 return result;
             }
@@ -352,10 +354,14 @@ namespace Antmicro.Renode.Peripherals.Sensors
             return address == 0 ? 4 : address >= 7 && address <= 10 ? 3 : address == 15 ? 2 : 1;
         }
 
-        private byte ScanMask()
+        private ushort ScanMask()
         {
-            byte mask;
-            return registers.TryGetValue((7 << 2) + 2, out mask) ? mask : (byte)0;
+            // SCAN's low 16 bits select single-ended, differential, and
+            // internal channels. The high byte contains scan timing options.
+            byte high, low;
+            registers.TryGetValue((7 << 2) + 1, out high);
+            registers.TryGetValue((7 << 2) + 2, out low);
+            return (ushort)((high << 8) | low);
         }
 
         private void SelectChannel()
@@ -366,10 +372,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 channel = (Register(6) >> 4) & 7;
                 return;
             }
-            for(var i = 0; i < 8; i++)
+            for(var i = 0; i < 16; i++)
             {
                 if((mask & (1 << channel)) != 0) return;
-                channel = (channel + 7) & 7;
+                channel = (channel + 15) & 15;
             }
         }
 
@@ -402,8 +408,12 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private void ResetRegisters()
         {
             registers.Clear();
-            for(var i = 0; i < samples.Length; i++) samples[i] = (uint)(i + 1) * 0x100000u;
-            channel = 7; // SCAN visits enabled inputs from MSb to LSb.
+            for(var i = 0; i < samples.Length; i++) samples[i] = ((uint)(i + 1) * 0x100000u) & 0x00ffffffu;
+            // IDs 8..11 are the four differential channel pairs. In
+            // particular, ID 9 is the DAQ's P6 CH2-CH3 input.
+            for(var i = 8; i < 12; i++) samples[i] = (samples[2 * (i - 8)] - samples[2 * (i - 8) + 1]) & 0x00ffffffu;
+            samples[12] = 305652u; // Nominal 25 C die-sensor fixture at the board's 2.4 V reference.
+            channel = 15; // SCAN visits enabled inputs from MSb to LSb.
         }
 
         private readonly Dictionary<int, byte> registers = new Dictionary<int, byte>();
@@ -413,7 +423,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private int position;
         private bool reading;
         private bool faulted;
-        private readonly uint[] samples = new uint[8];
+        private readonly uint[] samples = new uint[16];
         private int channel;
         private int registerAddress;
         private int registerByte;

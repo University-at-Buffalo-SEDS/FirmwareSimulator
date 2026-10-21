@@ -57,6 +57,24 @@ class Test {
         Equal(Read(4), 0x00200022); // MUX mode always reports CH_ID=0 (5.6).
         adc.Reset();
         Equal(Read(3), 0x100000);
+        adc.Reset();
+        Write(0x46, 0x82, 0x14, 0xcf, 0xf0, 0x03, 0x08);
+        Write(0x5e, 0x00, 0x02, 0x01); // Differential P6/ID9 plus CH0.
+        Write(0x68);
+        Equal(Read(4), 0x9ff00000); // CH2-CH3 = -0x100000, sign extended/tagged.
+        Equal(Read(4), 0x00100000);
+        Equal(Read(4), 0x9ff00011);
+        Write(0x5e, 0x00, 0x02, 0x00); // P6-only fast scan must not become MUX/CH0.
+        Write(0x68);
+        Equal(Read(4), 0x9ff00022);
+        Equal(Read(4), 0x9ff00033);
+        Write(0x5e, 0x00, 0x10, 0x00); // TEMP-only scan must complete, not time out as CH0.
+        Write(0x68);
+        Equal(Read(4), 0xc004a9f4);
+        for(var i=0; i<1000; i++) Equal(Read(4), 0xc004a9f4);
+        Write(0x5e, 0x00, 0x80, 0x00); // Highest channel ID fits the 4-bit tag.
+        Write(0x68);
+        Equal(Read(4), 0xf0000000);
     }
 }
 '''
