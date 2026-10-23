@@ -10,6 +10,7 @@ RUN git init /groundstation \
     && git -C /groundstation remote add origin "${GROUNDSTATION_REPOSITORY}" \
     && git -C /groundstation fetch --depth 1 origin "${GROUNDSTATION_REF}" \
     && git -C /groundstation checkout --detach FETCH_HEAD \
+    && git -C /groundstation submodule update --init --recursive \
     && if [ -n "${GROUNDSTATION_SEDSNET_GIT_REV}" ]; then \
          cargo add --manifest-path /groundstation/backend/Cargo.toml \
            SEDSnet --git https://github.com/Rylan-Meilutis/SEDSnet.git \
