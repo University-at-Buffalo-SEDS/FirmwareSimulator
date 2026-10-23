@@ -16,6 +16,7 @@ fn devices_survive_fault_and_disconnect_behaviors() {
         noise_lsb: None,
         capacity_bytes: None,
         filesystem: None,
+        position: None,
     };
     let mut imu = base("imu", "imu1");
     imu.failure_every = Some(3);
@@ -71,6 +72,7 @@ fn report_identifies_instruction_coupled_devices() {
         noise_lsb: None,
         capacity_bytes: None,
         filesystem: None,
+        position: None,
     };
     let report = exercise_all(&[coupled], 1, 1).unwrap();
     assert!(report[0].instruction_coupled);
@@ -94,6 +96,7 @@ fn supports_24_bit_spi_sigma_delta_adc() {
         noise_lsb: Some(2),
         capacity_bytes: None,
         filesystem: None,
+        position: None,
     };
     let report = exercise_all(&[adc], 16, 7).unwrap();
     assert_eq!(report[0].successful_reads, 16);
@@ -113,4 +116,38 @@ fn storage_fixture_validation_covers_large_cards_and_marker_boundaries() {
     assert!(exercise_all(&[make((1_u64 << 41) + 512, "fat32")], 1, 0).is_err());
     assert!(exercise_all(&[make(1_u64 << 30, "fat32:../bad")], 1, 0).is_err());
     assert!(exercise_all(&[make(1_u64 << 30, "ext4")], 1, 0).is_err());
+}
+
+#[test]
+fn gps_positions_require_valid_coordinates_and_a_gps_device() {
+    let make = |kind: &str, latitude, longitude, altitude_m| {
+        serde_json::from_value::<PeripheralSpec>(serde_json::json!({
+            "type":kind,"name":"sensor", "position": {"latitude":latitude,
+            "longitude":longitude,"altitude_m":altitude_m}
+        }))
+        .unwrap()
+    };
+    assert!(exercise_all(&[make("gps", 31.758, -102.046, 890.016)], 1, 0).is_ok());
+    assert!(exercise_all(&[make("gps", -90.0, 180.0, -100.0)], 1, 0).is_ok());
+    for (lat, lon) in [
+        (90.001, 0.0),
+        (-90.001, 0.0),
+        (0.0, 180.001),
+        (0.0, -180.001),
+    ] {
+        assert!(exercise_all(&[make("gps", lat, lon, 0.0)], 1, 0).is_err());
+    }
+    assert!(exercise_all(&[make("imu", 0.0, 0.0, 0.0)], 1, 0).is_err());
+    let mut invalid = make("gps", 0.0, 0.0, 0.0);
+    for nonfinite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        invalid.position.as_mut().unwrap().altitude_m = nonfinite;
+        assert!(exercise_all(&[invalid.clone()], 1, 0).is_err());
+        invalid.position.as_mut().unwrap().altitude_m = 0.0;
+        invalid.position.as_mut().unwrap().latitude = nonfinite;
+        assert!(exercise_all(&[invalid.clone()], 1, 0).is_err());
+        invalid.position.as_mut().unwrap().latitude = 0.0;
+        invalid.position.as_mut().unwrap().longitude = nonfinite;
+        assert!(exercise_all(&[invalid.clone()], 1, 0).is_err());
+        invalid.position.as_mut().unwrap().longitude = 0.0;
+    }
 }

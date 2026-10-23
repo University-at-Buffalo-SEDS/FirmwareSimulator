@@ -1,6 +1,31 @@
 use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
+/// Geographic fix emitted by an instruction-coupled GPS model.
+/// Omit it to retain the historical fixture at 43N, 78.78W and 300m.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpsPosition {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude_m: f64,
+}
+
+impl GpsPosition {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.latitude.is_finite() && (-90.0..=90.0).contains(&self.latitude),
+            "GPS latitude must be finite and between-90 and90 degrees"
+        );
+        ensure!(
+            self.longitude.is_finite() && (-180.0..=180.0).contains(&self.longitude),
+            "GPS longitude must be finite and between-180 and180 degrees"
+        );
+        ensure!(self.altitude_m.is_finite(), "GPS altitude_m must be finite");
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct PeripheralSpec {
     #[serde(rename = "type")]
@@ -28,6 +53,8 @@ pub struct PeripheralSpec {
     pub capacity_bytes: Option<u64>,
     #[serde(default)]
     pub filesystem: Option<String>,
+    #[serde(default)]
+    pub position: Option<GpsPosition>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +135,13 @@ fn exercise(spec: &PeripheralSpec, iterations: u64, seed: u64) -> Result<DeviceR
 
 fn validate(spec: &PeripheralSpec) -> Result<()> {
     ensure!(!spec.name.is_empty(), "peripheral name cannot be empty");
+    if let Some(position) = &spec.position {
+        ensure!(
+            spec.kind == "gps",
+            "position is supported only for GPS peripherals"
+        );
+        position.validate()?;
+    }
     ensure!(
         spec.model.is_some() == spec.bus.is_some(),
         "peripheral model and bus must be specified together"

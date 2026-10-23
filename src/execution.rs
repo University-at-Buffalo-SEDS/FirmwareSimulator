@@ -671,8 +671,17 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         };
         match (layout.architecture, model, bus) {
             (ArchitectureKind::Stm32g4, "neo_m9n", "spi1") => {
+                let position = if let Some(position) = &peripheral.position {
+                    position.validate()?;
+                    format!(
+                        "    latitude: {}\n    longitude: {}\n    altitudeM: {}\n",
+                        position.latitude, position.longitude, position.altitude_m
+                    )
+                } else {
+                    String::new()
+                };
                 overlay.push_str(&format!(
-                    "layoutDevice{index}: Sensors.SedsNeoM9N @ spi1\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutDevice{index}: Sensors.SedsNeoM9N @ spi1\n{position}    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX),
                     source_root.join("SedsSpiSensors.cs").display(),
@@ -1555,6 +1564,25 @@ mod tests {
             ]"#,
         );
         assert!(render_peripheral_overlay(&board).is_err());
+    }
+
+    #[test]
+    fn gps_overlay_uses_explicit_site_and_keeps_legacy_default() {
+        let board = layout(
+            "stm32g4",
+            r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1",
+            "position":{"latitude":31.758,"longitude":-102.046,"altitude_m":890.016}}]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(
+            overlay.contains("latitude: 31.758\n    longitude: -102.046\n    altitudeM: 890.016\n")
+        );
+        let board = layout(
+            "stm32g4",
+            r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
+        );
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert!(!overlay.contains("latitude:"));
     }
 
     #[test]

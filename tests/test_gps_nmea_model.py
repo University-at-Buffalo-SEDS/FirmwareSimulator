@@ -39,7 +39,7 @@ class Program {
   for(var i=0;i<1024;i++){var b=gps.Transmit(0xff);if(b==0xff){gps.FinishTransmission();return text.ToString();}text.Append((char)b);}
   throw new Exception("GPS output grew without bound");
  }
- static void Check(string text,string time,string date) {
+ static void Check(string text,string time,string date,string coordinates="4300.0000,N,07846.8000,W",string altitude="300.0") {
   var lines=text.Split(new[]{"\r\n"},StringSplitOptions.RemoveEmptyEntries);
   Require(lines.Length==2,"exactly one bounded GGA/RMC fix");
   foreach(var line in lines){
@@ -49,6 +49,8 @@ class Program {
    Require(line.Contains(","+time+","),"virtual UTC advances independently of SPI traffic");
   }
   Require(lines[1].Contains(","+date+",,,A*"),"RMC date and active fix");
+  Require(lines[0].Contains(","+coordinates+",1,12,0.8,"+altitude+",M,"),"GGA position and altitude");
+  Require(lines[1].Contains(",A,"+coordinates+",0.0,0.0,"),"RMC position agrees with GGA");
  }
  static void Main(){
   var gps=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine());var clock=LimitTimer.Last;
@@ -61,6 +63,22 @@ class Program {
   for(var i=0;i<86400;i++)clock.Fire();gps.Reset();Check(Read(gps),"000012.00","020126");
   var bad=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),failureEvery:1);
   Require(bad.Transmit(0xff)==0xff,"configured SPI failure remains a failure");
+  System.Threading.Thread.CurrentThread.CurrentCulture=new System.Globalization.CultureInfo("fr-FR");
+  var site=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),latitude:31.758,longitude:-102.046,altitudeM:890.016);
+  Check(Read(site),"000000.00","010126","3145.4800,N,10202.7600,W","890.016");
+  var southern=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),latitude:-33.5,longitude:151.25,altitudeM:-5.5);
+  Check(Read(southern),"000000.00","010126","3330.0000,S,15115.0000,E","-5.5");
+  var rounding=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),latitude:89.999999999,longitude:-179.999999999,altitudeM:0);
+  Check(Read(rounding),"000000.00","010126","9000.0000,N,18000.0000,W","0.0");
+  foreach(var invalid in new[]{Double.NaN,Double.PositiveInfinity,Double.NegativeInfinity,90.1,-90.1}) {
+   bool rejected=false;try {new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),latitude:invalid);}catch(ArgumentOutOfRangeException){rejected=true;}Require(rejected,"invalid latitude rejected");
+  }
+  foreach(var invalid in new[]{Double.NaN,Double.PositiveInfinity,Double.NegativeInfinity,180.1,-180.1}) {
+   bool rejected=false;try {new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),longitude:invalid);}catch(ArgumentOutOfRangeException){rejected=true;}Require(rejected,"invalid longitude rejected");
+  }
+  foreach(var invalid in new[]{Double.NaN,Double.PositiveInfinity,Double.NegativeInfinity}) {
+   bool rejected=false;try {new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),altitudeM:invalid);}catch(ArgumentOutOfRangeException){rejected=true;}Require(rejected,"invalid altitude rejected");
+  }
   Console.WriteLine("PASS: real GPS model, valid NMEA, bounded1Hz, UTC rollover, reset continuity and SPI failure");
  }
 }

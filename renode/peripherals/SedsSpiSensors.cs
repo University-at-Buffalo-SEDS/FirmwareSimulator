@@ -202,8 +202,18 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
     public sealed class SedsNeoM9N : ISPIPeripheral
     {
-        public SedsNeoM9N(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
+        public SedsNeoM9N(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue,
+            double latitude = 43.0, double longitude = -78.78, double altitudeM = 300.0)
         {
+            if(Double.IsNaN(latitude) || Double.IsInfinity(latitude) || Math.Abs(latitude) > 90.0
+                || Double.IsNaN(longitude) || Double.IsInfinity(longitude) || Math.Abs(longitude) > 180.0
+                || Double.IsNaN(altitudeM) || Double.IsInfinity(altitudeM))
+            {
+                throw new ArgumentOutOfRangeException("GPS position must be finite and within geographic bounds");
+            }
+            // Format once; 1Hz emission retains bounded storage and work.
+            coordinates = FormatCoordinate(latitude, true) + "," + FormatCoordinate(longitude, false);
+            altitude = altitudeM.ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture);
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
             updateTimer = new LimitTimer(machine.ClockSource, 1000, this,
@@ -246,9 +256,21 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 .AddSeconds(elapsedSeconds);
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             var time = utc.ToString("HHmmss", culture) + ".00";
-            EnqueueNmea("GNGGA," + time + ",4300.0000,N,07846.8000,W,1,12,0.8,300.0,M,-34.0,M,,");
-            EnqueueNmea("GNRMC," + time + ",A,4300.0000,N,07846.8000,W,0.0,0.0,"
+            EnqueueNmea("GNGGA," + time + "," + coordinates + ",1,12,0.8," + altitude + ",M,-34.0,M,,");
+            EnqueueNmea("GNRMC," + time + ",A," + coordinates + ",0.0,0.0,"
                 + utc.ToString("ddMMyy", culture) + ",,,A");
+        }
+
+        private static string FormatCoordinate(double value, bool latitude)
+        {
+            var absolute = Math.Abs(value);
+            var degrees = (int)Math.Floor(absolute);
+            var minutes = Math.Round((absolute - degrees) * 60.0, 4, MidpointRounding.AwayFromZero);
+            if(minutes >= 60.0) { degrees++; minutes = 0; }
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            return degrees.ToString(latitude ? "00" : "000", culture)
+                + minutes.ToString("00.0000", culture) + ","
+                + (latitude ? (value < 0 ? "S" : "N") : (value < 0 ? "W" : "E"));
         }
 
         private void EnqueueNmea(string body)
@@ -259,6 +281,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 System.Globalization.CultureInfo.InvariantCulture) + "\r\n";
             foreach(var character in sentence) output.Enqueue((byte)character);
         }
+
+        private readonly string coordinates;
+        private readonly string altitude;
 
         // External GPS time continues across an MCU reset and SPI polling gaps.
         private readonly LimitTimer updateTimer;

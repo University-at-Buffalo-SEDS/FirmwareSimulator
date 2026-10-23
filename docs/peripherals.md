@@ -34,6 +34,35 @@ ADC `channel_samples` indexes are physical channel numbers, not positions in a
 firmware scan list. For example, DAQ's battery measurement uses ADC1 channel 5;
 an unrealistic voltage there intentionally triggers firmware power-loss logic.
 
+## GPS site configuration
+
+A `gps` peripheral can supply an explicit geographic fix. Set it to the launch
+site compiled into the FC image for normal connected-system tests:
+
+```json
+{
+  "type": "gps",
+  "name": "neo_m9n",
+  "model": "neo_m9n",
+  "bus": "spi1",
+  "position": {
+    "latitude": 31.758,
+    "longitude": -102.046,
+    "altitude_m": 890.016
+  }
+}
+```
+
+Coordinates are decimal degrees and altitude is metres above sea level. Latitude
+and longitude must be finite and within ±90 and ±180 degrees; altitude must be
+finite. The GPS model emits matching GGA/RMC fixes at the existing bounded 1Hz
+rate, including hemisphere signs and minute-to-degree rounding. SPI fault
+injection and its independent UTC clock retain their existing behavior.
+
+Omitting `position` preserves the historical fix at 43N,78.78W and300m. That site
+can intentionally exercise the FC's rejection path; it is not the current FC
+launch site. A simulated valid fix does not bypass firmware geographic guards.
+
 ## Add a peripheral
 
 `model` plus `bus` declares that the device is attached to the emulated CPU bus.
