@@ -1,0 +1,167 @@
+{
+  "proof_version": 1,
+  "case_status": "PASS",
+  "release_ready": false,
+  "release_blocker": "The independent two-radio 600-second source case failed its final-window gate. A ValveBoard battery count mismatch is under investigation. These three-radio results do not clear that release blocker.",
+  "evidence_workspace_relative": "FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/qualification-3-relay-final",
+  "summary_sha256": "502767321d0d62a13eb1b8aa5b7230a4c40501497c502330ef34eaa299a3b6d7",
+  "result": {
+    "phase": "passed",
+    "image_id": "sha256:7fd22415df986aaacbc5168c87412a2f4200764ce18a5352a8530d5094746dec",
+    "duration_virtual_ms": 60000,
+    "native_exit": 0,
+    "fallback": {
+      "result": "PASS",
+      "observations": 1432,
+      "loss_requested_ms": 22980,
+      "forwarding_ms": 23020,
+      "restored_first_observation_ms": 40040,
+      "direct_restored_ms": 42020,
+      "observer_tolerance_ms": 250,
+      "command_ack_limit_ms": 500,
+      "wire": {
+        "result": "PASS",
+        "direct_kind": 5,
+        "fallback_kind": 2,
+        "rrls_downlink_kind": 1,
+        "gs_heartbeats": 111,
+        "heartbeat_maximum": 114,
+        "configured_heartbeat_ms": 500
+      }
+    },
+    "sdk_decode_streams": [
+      {
+        "file": "rocket_radio-station-0-rx.bin",
+        "packets": 701,
+        "codec_errors": 0
+      },
+      {
+        "file": "rocket_radio-station-0-tx.bin",
+        "packets": 906,
+        "codec_errors": 0
+      },
+      {
+        "file": "rocket_radio-station-1-rx.bin",
+        "packets": 1035,
+        "codec_errors": 0
+      },
+      {
+        "file": "rocket_radio-station-1-tx.bin",
+        "packets": 425,
+        "codec_errors": 0
+      },
+      {
+        "file": "rocket_radio-station-2-rx.bin",
+        "packets": 1331,
+        "codec_errors": 0
+      },
+      {
+        "file": "rocket_radio-station-2-tx.bin",
+        "packets": 418,
+        "codec_errors": 0
+      }
+    ],
+    "postprocessor_source_unchanged": true,
+    "scope": "Seven MCU images and three simulated radios: direct GS/RF edges disabled from 20 to 40 seconds, RRLS fallback and direct restoration. Existing source/control gates and actual SDK decoding remain required. No hardware propagation claim.",
+    "finished_wall_epoch_s": 1792969754.7474737
+  },
+  "candidate_provenance": {
+    "image_verification": {
+      "image_id": "sha256:7fd22415df986aaacbc5168c87412a2f4200764ce18a5352a8530d5094746dec",
+      "runtime_sha256": {
+        "/usr/local/bin/firmware-sim": "f1a2901a4607878f0d354c2d21e4c3184aabd4e2ab84d29a3aff66416ff0926b",
+        "/opt/firmware-sim/renode/peripherals/SedsStm32H5Rtc.cs": "df86c26da06d2da139eaff7b426a45de6ace32e5ddaa40dd7173a96cd6c8a461",
+        "/opt/firmware-sim/renode/peripherals/SedsStm32System.cs": "9a74c8db6449aec4774650b497c13086852f6159efdfd189466bc7bd54d0e03b",
+        "/opt/firmware-sim/renode/platforms/stm32h523.repl": "3256610dcb28351ca8fa1ab51854347df57fcdbe1cb0b70d6a4942a58c1cc7bc"
+      },
+      "base_runtime_identical": true,
+      "backend_sha256": "968f67900a2380e2518d9e5c03b2c9611f789343ee73c3999d5f8e9afaa89713",
+      "sdk_version": "4.2.7",
+      "sdk_path": "/sdk/Cargo.toml",
+      "sdk_source": null,
+      "sdk_runtime_sha256": {
+        "build.rs": "1b5df53499363799a73ffee5d7796ae4271cb20bc6dd48e5e572fa9e5325a8dd",
+        "sedsnet_macros/src/lib.rs": "5363ede6488d76620252212122fb2c4ad78ad82235a0036e7b54174817656db7",
+        "src/admission_fairness.rs": "b34936f1a6f207268b334af681ed0fa3518f7ade44c17c6d17c6630399209850",
+        "src/binding_options.rs": "470c6a389b5cd6c81ddf281a8118ef65ff1f7dc6c4d84a6891b0feabf2074cb6",
+        "src/c_api.rs": "d7aca08bb616c2d978ea8dc98a0b5db5c0c02caefe65ad739ab6a194f53c81df",
+        "src/config.rs": "06bd646442082715c12a71235c3ca2682ff1f04078dee698c01964f7d5b34018",
+        "src/crypto.rs": "9910173f4340d1c7f5deab45a54f5b1b735af15b2c2aa5d23fdd76f83b1cdb29",
+        "src/diagnostics.rs": "1eb529c8842e0ad66720f03c13c89eb6b7529eca363668d728e02a06d5a90b93",
+        "src/discovery.rs": "4d5bfba5d2fb33da18c87d73987fb24e3ae539ff723678250e2c6cc9334cccb9",
+        "src/lib.rs": "5de23ae496e64e0d57911efd853ac0a9a6ec7b2a53a62ff50a741a2bb3584b82",
+        "src/lock.rs": "a43b02927213e23e02db4c6316e22aec7cce83936280539ec0e0ce49cdcb037b",
+        "src/macros.rs": "3b301dda1f1cc09f53ad69a9b28f609fccee19d50d2babbaf95855712ba4740e",
+        "src/memory_admission.rs": "e7970619a41e90779bee67cc91dfc4f79d46220bc5f5c8b0aea104e91af0d47f",
+        "src/packet.rs": "48a9a5411937f3c8bb89d2dd11cc1ba0b33929fbb50c35e88d78e9398fb6e785",
+        "src/packet_store.rs": "9191090dc2ebec06ee8122e6d6e8e314a4def22c751e468d4a0174002e8803f7",
+        "src/payload_codec.rs": "a2faeb48eb6813a9abf45be02631b72710f340a459014db4e2a328bd446debd5",
+        "src/python_api.rs": "338f4da903a77fd0fa387161f5e45f742c72fd5a641d990a842b64ee379a9cc8",
+        "src/queue.rs": "b697ecad9375a36fafd957231e77d83f1ba706ff8d9b4161f2b965bf36abddeb",
+        "src/relay.rs": "adc80423db351e34e0d96e1718cb09a3a1b470a6f6020c7a28195bec05e343d8",
+        "src/router.rs": "e705ffe5729d1d60df51f79e7bfe5f11315430f73c00cb7297733206497c2925",
+        "src/schema_identity.rs": "9bb0b3c959827873e32e048811094ce6fe523392981249ec09e8e2ee1f5f4974",
+        "src/shared_bytes.rs": "397fdd8b3f9aa45e6b817f223802e70656d935cedd1691a2b74b9ecf819885a4",
+        "src/side_transport.rs": "2f5cc162f80e3907145269cde3170b7ba37152095ed3c841b329d8fb23672887",
+        "src/small_map.rs": "68e2726992ee38271685f37f19d0ef945a923e4233bb5b38c429205f7fba7c5c",
+        "src/small_payload.rs": "38b53ccaf18ec14a97e922a695241be4e3898eff56a95f9d997a6e47e848d97e",
+        "src/small_sort.rs": "3309b629774f643ada331b8d824e0447dcd8ee85d2cf32c0742de1bb7c27aff9",
+        "src/tests/ack_return_identity.rs": "ad15e77a839ebf8dba01a88a0f781bcff1a5e85d9dc7222f277a857a60a2c761",
+        "src/tests/ack_split_horizon.rs": "af8575a80152a160fd64b7bae958d2ed36ce26551d2870092869b0a34f407a16",
+        "src/tests/borrowed_election.rs": "bdb047b2aa8f98f7e111b3c5150ca8df74b5593dacb2ef8664e987eec79e6ac9",
+        "src/tests/compression_memory_tests.rs": "9777e33bca239f919e2ef97839e54b27ccf126bb8f4258e2f8ce948954fc3c21",
+        "src/tests/concurrency_tests.rs": "aa549f2a9c4dc7a49827fcd2bdd6dd8e82d1a48738ae725f3807857d4362902c",
+        "src/tests/data_conversion_types.rs": "4f53ac0b6d9d8242971bffdd6fa1a883ce80a8151280e1ccf05875f65d9c0bdf",
+        "src/tests/dedupe_tests.rs": "610d357375a3ed4263e557e9d5e329b8ff133a0e4ee29ead370eaeb2a410ec3c",
+        "src/tests/discovery_liveness.rs": "09f1391d9f356e85f544af6b0e44e5e3d0db2c90666d208447d0e555d096174a",
+        "src/tests/error_display_tests.rs": "63f395a51b8d0eb5e4c9f28354635f0a33cdfe347e90bdbf611404087a2c9627",
+        "src/tests/handler_failure_tests.rs": "1ac3867acd75f49464b691faf920c31945e195a5a8c952aed2857f6a73e1539a",
+        "src/tests/independent_side_tx_relay.rs": "58ad4578b166c12edab46776ca6e389b9c01482f630aec80547e24ba75708917",
+        "src/tests/independent_side_tx_router.rs": "9f26720ef2fd992441284703975c814dd78bc89c1817754331c1c79c4c497ab0",
+        "src/tests/ingress_target_filter.rs": "2cb00a968caf3cfbf5d8d6305de97f580f644ea38ae7f00bc5126c65f42cb8f2",
+        "src/tests/mod.rs": "8d2de07158e31d1e29e12fd08ade464095b43a4ab56f388b4fa3eba357611419",
+        "src/tests/p2p_address_tests.rs": "3d5582c8188e403317155e56dd4317527c534a9e7d3bc9f0eb28662239f2b9dd",
+        "src/tests/payload_codec_negotiation.rs": "f229fa357095b707a9b467b6e6fa348ce3629d7bbb8fdf59befb7d3e9b7c4857",
+        "src/tests/payload_codec_relay.rs": "72ffdbd667d64f635b20fb7ad537485f6bef26bf7d7b36da10ed30971bfd29b2",
+        "src/tests/relay_ack_recovery.rs": "0a3ee41d7141cb0903159e5d2b7fe5d71aa5bc952b35e56f51b1e77357b0ece9",
+        "src/tests/relay_ack_split_horizon.rs": "6f24d4f356d14f5b04ac5955b20a96e3c22d2ea31069dd38526fb18fac4864b7",
+        "src/tests/relay_control_priority.rs": "d36e53ac42f2027a764d3044dfa1344c4f232b467799669afa742721e3a38783",
+        "src/tests/relay_reliable_tests.rs": "71ed116f96378cd6034b99751cc5b64f9ae1aa963a70540411288cf099754555",
+        "src/tests/relay_restart_transport.rs": "0f96dbc63bd799a4ec778c750e74e1dd0f4c8f30e18884b367d4c4f49d048724",
+        "src/tests/relay_tests.rs": "e573539681af4413930ef4a12d3bb758615012494376e06dd6fb5270d7fb9b95",
+        "src/tests/reliable_tests.rs": "9403590c190f111ef814fc2b8bf69509c5ac428bf5c3b802f501c31835ccfd8f",
+        "src/tests/reliable_tx_window_backpressure.rs": "ceb4c8fe273e69e1be05ced93fdc32461ebafa654d254efbf0cc488d5a75951e",
+        "src/tests/reliable_tx_window_backpressure_relay.rs": "c5fa772470517c8c090801d9aefca635a853201201ac6c8d35ae7d10f84676c4",
+        "src/tests/replay_ownership_relay.rs": "709b15e36907908f387e3f5f6641fe98122c3d906f1d5dbda33a98ce42cd9d88",
+        "src/tests/replay_ownership_router.rs": "e66afd8465ca2bd12b14fc78616a83a7d7eeb0bf3bd909bb7fbf020cc4454a37",
+        "src/tests/router_tests/discovery_tests.rs": "3a5cc587cb77488438f4873064f272276e16bb1522ac657f8c31e78cd31a6f3f",
+        "src/tests/router_tests/mod.rs": "69348f7820ea17f8cad0408e2112033f7d9545c77b8fea9167e143e8278eddc5",
+        "src/tests/router_tests/schema_sync_tests.rs": "d0f3b602163c192966dc1d2aaa2e30bc819257d009f25acb7540d39af77f965f",
+        "src/tests/router_tests/timesync_tests.rs": "1651efb60dbd1280c93d8650b89198fbe8d6cfbc6780b924466428190768c70f",
+        "src/tests/shared_chunk_budget_relay.rs": "47e06b0254f46bd21a2473f61de2801393c7acaceb7d497388d5d3f8cba26879",
+        "src/tests/shared_chunk_budget_router.rs": "3f9f437eff9088fff3005b6595e45192515948aaf24c904c9dca103df20eb9ac",
+        "src/tests/side_template_index.rs": "030d110721444553dbc67313537f2e00872a662b9915ce19867db2762af24f61",
+        "src/tests/tests2.rs": "65ea53ab3d203eaada3d835279ce6f6a7525bbb75bc4a5e70c2aa921fc0eec02",
+        "src/tests/tests_extra.rs": "9604dfd6bd1639e865760025df981f22ffa8090ceea08211bd3189330898afad",
+        "src/tests/tests_more.rs": "f7c9e83a069eeb4b6c4c8b8357a34cdedda411bc90b4aaa455187fae2b1a3dba",
+        "src/tests/timeout_tests.rs": "d8a7a9a5610660fd75221e44464b440206a40995b18203bf28cdb1c83cd32814",
+        "src/tests/untemplated_transport.rs": "a3d3a322aaad59be6d13e0cd488970101d7e989c8c5840727da949256649ca04",
+        "src/timesync.rs": "71214a1f9ef6e4b07848c92b5a956b8eb20f55c3bebd3eb489eb2e9b35be17ab",
+        "src/type_stats.rs": "950562a0b77bc2ceaf01d7e56c477dc4c064ff9a97c5f26f78ce986255e17a52",
+        "src/varint.rs": "37ac4c5c69dc12d026574f4fbd051ee5a0a1116ca33bea9497f71871ca19154c",
+        "src/wire_format.rs": "06b36e52ce36ce6e345216a2d5483f5c46ac86fddb06a747212d769ec97e4cb8"
+      },
+      "source_revisions": {
+        "GroundStation26": "a7480e7498bd9d517f408f9b3f094ac8ec3f2070",
+        "Seds-Ground-Station-Frontend": "01a92c97fed53d873e84361366edb1c26199fe3d",
+        "SEDSnet": "2b1983e6c31c9caffaa129ba8bc9f3b899f4fbd2"
+      },
+      "source_provenance_sha256": "254ca0eb4163922b5be3e094cbadf12042880f8767aa5ccbe0137672dfe29400",
+      "sdk_build_proof_sha256": "c89eabb39ee1590d6b411b5d2db37ac273ab689c7ff34efce736100b38451198",
+      "inspection_network": "none",
+      "no_application_or_simulator_started": true,
+      "credential_contents_read": false
+    },
+    "host_source_manifest_sha256": "3cc027c60cc242b0ad47f4ad9c5dc523c99f59814bd304dfd243b367c52e54a0"
+  }
+}
