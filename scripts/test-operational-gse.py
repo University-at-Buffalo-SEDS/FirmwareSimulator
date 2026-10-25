@@ -179,7 +179,7 @@ def run(args):
     if args.prepare_only:return
     summary={'phase':'running','scope':'Assumed sensor response;actual firmwareADC/network/ACK/operationalpolicy;no direct qualification writes','image':args.image,'milestones':[],'plant_assumptions':{'nitrogen_psi_per_second':35,'relief_psi_per_second':200,'closed_leak_psi_per_second':0,'mass_target_intentionally_unmet':not args.positive_fill,'nitrous_fill_kg_per_second':2 if args.positive_fill else None}}
     progress=lambda:(out/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
-    log=(out/'simulator.log').open('w');process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT);start=time.monotonic();origin=None;token=None;stage='ready';pressure=0.;previous_clock=0;phase=None;mass=0.;fire_clock=False;previous_valves=None;fire_saved=False;qd_ack_at=None;qd_started_at=None;fc_rejected_baseline=None
+    log=(out/'simulator.log').open('w');process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT);start=time.monotonic();origin=None;token=None;stage='ready';pressure=0.;previous_clock=0;phase=None;mass=0.;fire_clock=False;previous_valves=None;fire_saved=False;qd_ack_at=None;qd_started_at=None;fc_rejected_baseline=None;qd_queue_seen=False
     try:
         progress()
         while process.poll()is None:
@@ -275,10 +275,10 @@ def run(args):
                     qd_ack_at=now-(5000-int(re.search(r'remaining_ms: (\d+)',status['qd'])[1]))
                     assert request(origin,'/api/command','Launch',token)[0]==200
                     summary['qd']={'dispatched_model_ms':qd_started_at,'first_observed_ack_model_ms':now,'ack_model_interval_ms':[qd_ack_at,None if status_clock_upper is None else qd_ack_at+status_clock_upper-now],'settlement_contract_ms':5000,'status':status['qd']};progress();stage='qd-settling'
-                    if args.gps_loss_during_qd:atomic(diagnostics/'gps.fix','0');stage='qd-gps-loss'
+
             elif stage=='qd-gps-loss':
                 assert not status['qualification']['fire_started'],'Fire committed after live GPS was deliberately lost'
-                if not status['launch_queued']:
+                if not status['launch_queued']and status['qd']=='NotStarted':
                     code,antenna=request(origin,'/api/antenna/status',token=token)
                     fix=antenna.get('rocket')if code==200 else None
                     assert fix is None or fix['source']!='RF' or fix['stale'],'Queue cancelled without observed RF lock loss'
@@ -288,8 +288,13 @@ def run(args):
                 if status['qualification']['fire_started']:
                     assert status['qd']=='Ready','Fire without the authoritative five-second QD settlement gate'
                     summary['qd']['fire_observed_model_ms']=now;progress();stage='fire'
-                else:
-                    assert status['launch_queued']or status['qd']=='Ready','Launch queue cancelled before QD settled'
+                elif status['launch_queued']:
+                    if not qd_queue_seen:summary['qd']['queue_observed_model_ms']=now;progress()
+                    qd_queue_seen=True
+                    if args.gps_loss_during_qd:
+                        atomic(diagnostics/'gps.fix','0');summary['qd']['gps_loss_stimulus_model_ms']=now;progress();stage='qd-gps-loss'
+                elif qd_queue_seen:
+                    assert status['qd']=='Ready','Launch queue cancelled before QD settled'
             elif stage=='fire'and status['qualification']['fire_started']:
                 if not fire_saved:saved_evidence('fire-committed');fire_saved=True
                 clock=request(origin,'/api/launch_clock',token=token)[1]
