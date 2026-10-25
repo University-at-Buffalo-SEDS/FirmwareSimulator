@@ -92,6 +92,33 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     assert_eq!(report.memory_profiles["b"][0].minimum_observed, 4096);
     assert_eq!(report.link_reports[0].endpoints[0].tx_observed, Some(5));
     assert_eq!(report.assertion_reports.len(), 2);
+    // Boot evidence has a dedicated file channel, independent of Renode's
+    // asynchronous INFO logger. Missing/corrupt records must never imply boot.
+    let file_boot = mock
+        .replace(
+            "echo SEDS_NODE_BOOT_a",
+            "echo SEDS_NODE_BOOT_a > \"$SEDS_SIM_BOOT_CAPTURE_DIR/boot-a.marker\"",
+        )
+        .replace(
+            "echo SEDS_NODE_BOOT_b",
+            "echo SEDS_NODE_BOOT_b > \"$SEDS_SIM_BOOT_CAPTURE_DIR/boot-b.marker\"",
+        );
+    fs::write(&renode, &file_boot).unwrap();
+    assert_eq!(bay::run(&topology).unwrap().nodes_executed, 2);
+    fs::write(&renode, mock.replace("echo SEDS_NODE_BOOT_a", ":")).unwrap();
+    assert!(bay::run(&topology)
+        .unwrap_err()
+        .to_string()
+        .contains("did not reach its boot-success symbol"));
+    fs::write(
+        &renode,
+        file_boot.replace("echo SEDS_NODE_BOOT_a >", "echo WRONG >"),
+    )
+    .unwrap();
+    assert!(bay::run(&topology)
+        .unwrap_err()
+        .to_string()
+        .contains("invalid boot capture"));
     // Hardware FIFO loss must fail even when ordinary firmware probes pass.
     fs::write(
         &renode,
@@ -133,16 +160,83 @@ fn linked_bay_runs_two_real_elf_nodes_on_a_can_hub() {
     let error = bay::run(&topology).unwrap_err().to_string();
     assert!(error.contains("SEDS_IWDG_RESET"), "{error}");
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
-    let retained = fs::read_dir(&diagnostics)
+    let directories: Vec<_> = fs::read_dir(&diagnostics)
         .unwrap()
-        .next()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let retained = directories
+        .iter()
+        .find(|path| path.join("renode.log").is_file())
+        .unwrap();
+    let live = directories
+        .iter()
+        .find(|path| path.join("renode.stdout.log").is_file())
+        .unwrap();
+    assert!(fs::read_to_string(live.join("renode.stdout.log"))
         .unwrap()
-        .unwrap()
-        .path();
+        .contains("SEDS_IWDG_RESET"));
+    assert!(live.join("memory-probes.txt").is_file());
+    assert!(live.join("bay.resc").is_file());
     assert!(fs::read_to_string(retained.join("renode.log"))
         .unwrap()
         .contains("SEDS_IWDG_RESET"));
     assert!(retained.join("bay.resc").is_file());
+    // Evidence must already exist while execution is still in progress: an
+    // external SIGKILL cannot run the normal final artifact-writing path.
+    let release = root.join("release-live-probe");
+    fs::write(&renode, format!(
+        "#!/bin/sh\necho 'SEDS_BAY_PROBE a pool_available 0' > \"$SEDS_SIM_PROBE_CAPTURE\"\necho 0x1000 >> \"$SEDS_SIM_PROBE_CAPTURE\"\necho 'SEDS_BAY_SAMPLE_DONE 1'\nwhile [ ! -f '{}' ]; do sleep 0.02; done\necho \"There was an error executing command 'include @interrupted.repl'\"\nread ignored\n", release.display()
+    )).unwrap();
+    let live_topology = topology.clone();
+    let running = std::thread::spawn(move || bay::run(&live_topology));
+    let start = std::time::Instant::now();
+    let mut observed_during_execution = false;
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        observed_during_execution = fs::read_dir(&diagnostics)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                fs::read_to_string(entry.path().join("renode.stdout.log"))
+                    .unwrap_or_default()
+                    .contains("SEDS_BAY_SAMPLE_DONE 1")
+                    && fs::read_to_string(entry.path().join("memory-probes.txt"))
+                        .unwrap_or_default()
+                        .contains("0x1000")
+            });
+        if observed_during_execution {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    fs::write(&release, "release").unwrap();
+    let error = running.join().unwrap().unwrap_err().to_string();
+    assert!(error.contains("interrupted.repl"), "{error}");
+    assert!(
+        observed_during_execution,
+        "partial probes and checkpoint log must be readable before finalization"
+    );
+    // Launcher/runtime failures before the UART exists must retain their
+    // actual stderr instead of reporting only a generic missing-PTY timeout.
+    let mut startup_topology: serde_json::Value =
+        serde_json::from_slice(&fs::read(&topology).unwrap()).unwrap();
+    startup_topology["host_nodes"] = json!([{"name":"host", "binary":renode,
+        "serial_links":[{"link":"radio", "env":"RADIO_PORT"}]}]);
+    startup_topology["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+        "name":"radio", "kind":"uart", "endpoints":[
+            {"node":"a", "peripheral":"usart2"},
+            {"node":"host", "peripheral":"radio"}]}));
+    fs::write(&topology, serde_json::to_vec(&startup_topology).unwrap()).unwrap();
+    fs::write(
+        &renode,
+        "#!/bin/sh\necho 'diagnostic launcher unavailable' >&2\nexit 7\n",
+    )
+    .unwrap();
+    let error = bay::run(&topology).unwrap_err().to_string();
+    assert!(error.contains("did not create host UART PTY"), "{error}");
+    assert!(error.contains("diagnostic launcher unavailable"), "{error}");
     std::env::remove_var("FIRMWARE_SIM_DIAGNOSTICS_DIR");
     std::env::remove_var("RENODE");
     std::env::remove_var("FIRMWARE_SIM_CONTAINER");

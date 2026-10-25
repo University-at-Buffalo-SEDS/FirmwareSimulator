@@ -1,0 +1,46 @@
+{
+  "updated_utc": "2026-10-25T06:36:36.391068+00:00",
+  "scope": "Migrated in-progress peripheral fidelity, bounded captures and source-aware network/SD qualification",
+  "native_tests": {
+    "passed": 119,
+    "failed": 0
+  },
+  "python_tests": {
+    "ran": 69,
+    "skipped": 4,
+    "failed": 0
+  },
+  "clippy": "all targets strict passed",
+  "peripheral_docker_target": "uart-tests passed from working repository",
+  "hardware": "unavailable; no hardware execution claimed",
+  "linked_soak": "Separate source-locked cohort still running; do not infer a600second pass",
+  "remaining_radio_gap": "Linked Radio currently uses transparent UART hub; bounded three-radio shared-medium MCU+GS+RRLS validation is pending",
+  "code_sha256": {
+    "Dockerfile": "2efbc3515007f17c63c0c8e0a957c0f6a5a379baa1dfaa6a16f49a0b3196d5b8",
+    "renode/peripherals/SedsStm32Adc.cs": "3bc0dc32fcc678bbb2815c2eb7dfd9e014e47b22c8f9f8af629f3ef69b1e21c1",
+    "renode/peripherals/SedsStm32Dma.cs": "dea9f7b2623f081d6a949beb7c4f2f47f2cc6068faa7ef6f70a1da0bfcab9543",
+    "renode/platforms/stm32g491.repl": "58695e0cc1da56cae018b191707ab01ccfbd3ff0c92d87901db5b6b87553c3bd",
+    "scripts/fill_delivery_report.py": "16176fc87df47380bb26d316309cc8a5bd6dd44f68d770b236339d37c8809c07",
+    "scripts/inspect-sd-records.py": "2b759e24658d6f9dbada7cc4ad0dac0afff8c0a2dcb5263c21da6455c1df122b",
+    "scripts/test-image.sh": "2f7d7c7eb05731f62d3ed3cd6c7d757651e5e3be817977bcc0307bf040822739",
+    "scripts/test-route-recovery.py": "f66bcdd0060dd686c089f8190b8ee30a20c543920a360dfcba60a3c499fffa70",
+    "src/bay.rs": "6b937fbbf7e01b1579260f6c2740e9e79860a03a9f5f4c8f76b5c122db5216b1",
+    "src/execution.rs": "c85034243936f8cd1a988c3b8ff80073e6e3fa83f18c55b734a1e8528b209649",
+    "src/layout.rs": "475e46cebc42b3ed4413aa8409dcf67d4c2f5da68adaf625c1c18d7707b0968d",
+    "src/lib.rs": "0e63b45b4e2e486e951ea925a688e5d6482b223582e04046b77f2668bee094b4",
+    "src/main.rs": "511bc27073877cc4f34ab287cf9d2bd7522bd8858ca0b31df9db927a43fe1996",
+    "tests/bay.rs": "8508d3518a3f6b67f88f08b63f884a6afdb01446e787635fdac15894f6da1b0e",
+    "tests/test_fill_delivery_report.py": "9745e251185c3c3da0ffaba7aa7b3518f3131f7b542c7c7bfc9cbcd49aab9419",
+    "tests/test_hardware_fill_profile.py": "d6857a250caed72f7b2c234ae083f23b5536e94cf3a175049358b9fa5aabae8f",
+    "tests/test_inspect_sd_records.py": "20360518b3e54065d4397f8cf0edb39a7aa4ba242f46e1feae457528e848fc5d",
+    "tests/test_route_recovery.py": "eca4392d2ceeef8188cfe5355642baa8d5fa776a9dd4623c80a2c410a6b1cf86",
+    "renode/peripherals/SedsStm32TriggerTimer.cs": "2799a4dd65570e6b3ebe9909d48b49622bdf961b7904cd54d836a0f06fdde39e",
+    "renode/tests/adc-dma.repl": "2118fdc1ea7f398a288d022223b17672a847332394236513cb7f77793e211dd9",
+    "renode/tests/adc-dma.resc": "38925423e65a23476da0f76d5f4062a9fe07cc6ce471f1e39b8cb51e2c810feb",
+    "src/bounded_diagnostics.rs": "880a976461dc5000a6011a57a3fb21e22e725bbb9ce1a2d153e01a9c9bbe5ffa",
+    "tests/adc-dma/AdcDma.csproj": "0769583e55ce3340adff6c32b0254a30fa019587c90b895d9efe16638a699b82",
+    "tests/adc-dma/Program.cs": "e7f2a209fd3920887069c8cd9fe717f317d5865f00747b14bec9a6b366a325b8",
+    "tests/adc-registers/AdcRegisters.csproj": "fa7cad6448ecb82d6215c271b657014db5e5251557de17a76c49ce6bceb1b957",
+    "tests/adc-registers/Program.cs": "abd2834b3198c67b3ce53ec03bd55d49eeb33d803dc3039add84eee3e1276982"
+  }
+}

@@ -1,0 +1,33 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/adc-dma.repl
+cpu IsHalted true
+sysbus WriteDoubleWord 0x40000428 1699
+sysbus WriteDoubleWord 0x4000042c 199
+sysbus WriteDoubleWord 0x40000404 0x20
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x40000404)==0x20"
+sysbus WriteDoubleWord 0x50000430 0x140
+sysbus WriteDoubleWord 0x5000040c 0x483
+sysbus WriteDoubleWord 0x50000408 1
+sysbus WriteDoubleWord 0x50000408 4
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x50000408)&5==5; print('ADC_READ_SET_HAL_COMMANDS_PASS')"
+sysbus WriteDoubleWord 0x40020800 37
+sysbus WriteDoubleWord 0x4002000c 16
+sysbus WriteDoubleWord 0x40020010 0x50000440
+sysbus WriteDoubleWord 0x40020014 0x20000000
+sysbus WriteDoubleWord 0x40020008 0x5a7
+emulation RunFor "0.006s"
+python "b=monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c)==16; print('ADC_DMA_TIMER_GATE_PASS')"
+sysbus WriteDoubleWord 0x40000400 1
+emulation RunFor "0.015s"
+python "b=monitor.Machine['sysbus']; print('ADC_DMA_DIAGNOSTIC',b.ReadDoubleWord(0x4002000c),b.ReadDoubleWord(0x50000408),b.ReadDoubleWord(0x5000040c),b.ReadDoubleWord(0x40000404),b.ReadDoubleWord(0x40000428),b.ReadDoubleWord(0x4000042c)); assert b.ReadDoubleWord(0x4002000c)==9; assert b.ReadDoubleWord(0x40020000)&4==0; print('ADC_DMA_500HZ_PASS')"
+emulation RunFor "0.002s"
+python "b=monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c)==8; assert b.ReadDoubleWord(0x40020000)&4; assert b.ReadDoubleWord(0x20000000)==0x04d204d2; assert b.ReadDoubleWord(0xe000e200)&(1<<11); print('ADC_DMA_HALF_IRQ_PASS')"
+sysbus WriteDoubleWord 0x40020004 15
+emulation RunFor "0.016s"
+python "b=monitor.Machine['sysbus']; assert b.ReadDoubleWord(0x4002000c)==16; assert b.ReadDoubleWord(0x40020000)&2; assert b.ReadDoubleWord(0x2000001c)==0x04d204d2; print('ADC_DMA_CIRCULAR_COMPLETE_PASS')"
+sysbus WriteDoubleWord 0x50000408 16
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x50000408)&5==1"
+emulation RunFor "0.010s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x4002000c)==16; print('ADC_DMA_ARM_GATE_PASS')"
+quit

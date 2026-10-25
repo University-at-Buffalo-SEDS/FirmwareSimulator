@@ -1,0 +1,7 @@
+pressureRam: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+pressureAdc: Sensors.SedsStm32Adc @ sysbus 0x50000400
+    channels: 6
+    samples: "0,0,0,0,0,1234"
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs

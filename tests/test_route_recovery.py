@@ -11,6 +11,24 @@ recovery = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recovery)
 
 class RouteRecoveryTests(unittest.TestCase):
+    def test_pressure_sd_gate_requires_full_rate_and_no_drops(self):
+        for board,probe in [("ValveBoard26","pressure_sd_publish_drops"),("DAQ-Board","pressure_sd_dropped")]:
+            layout={}
+            recovery.configure_pressure_sd_probes(layout,board)
+            probes=layout["execution"]["memory_probes"]
+            self.assertEqual(next(p for p in probes if p["name"]==probe)["maximum"],0)
+            recovery.configure_pressure_sd_probes(layout,board)
+            self.assertEqual(len(layout["execution"]["memory_probes"]),len(probes))
+        topology=dict(sample_count=12,virtual_time_ms=120000)
+        recovery.configure_pressure_sd_assertions(topology)
+        self.assertEqual(len(topology["assertions"]),56)
+        self.assertEqual(len([a for a in topology["assertions"] if a["probe"]=="pressure_sd_written"]),11)
+        self.assertEqual(topology["assertions"][-1]["probe"],"pressure_sd_flushed")
+        self.assertEqual(topology["assertions"][-1]["minimum"],1)
+        self.assertEqual(topology["assertions"][0]["minimum_gain"],2492)
+        for invalid in [dict(sample_count=1,virtual_time_ms=10000),dict(sample_count=12,virtual_time_ms=600000)]:
+            with self.assertRaises(ValueError):recovery.configure_pressure_sd_assertions(invalid)
+
     def test_pico_baud_follows_actual_gateway_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "CMakeCache.txt"

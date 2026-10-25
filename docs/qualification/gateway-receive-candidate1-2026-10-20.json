@@ -1,0 +1,503 @@
+{
+  "status": "comparison 1: improved, strict delivery profile still fails; not qualified",
+  "progress": {
+    "phase": "failed",
+    "sdk_archive_sha256": "9f6361a7bd1c6cb361c0339e9d80102ac62dbbe5442b887f50c86df74ac9b750",
+    "started_unix": 1792547234.2441635,
+    "policy": "only gateway SDK changes; all other firmware and hosted backend remain frozen to P6 baseline",
+    "image": "seds-firmware-simulator:gateway-p6-model-20261020",
+    "crc32fast": {
+      "name": "crc32fast",
+      "version": "1.5.2"
+    },
+    "exit_code": 1,
+    "command": [
+      "python3",
+      "/home/rylan/seds-gateway-fidelity-20261020/validation-context/FirmwareSimulator/scripts/test-route-recovery.py",
+      "--workspace",
+      "/home/rylan/seds-gateway-fidelity-20261020/receive-pressure-candidate",
+      "--image",
+      "seds-firmware-simulator:gateway-p6-model-20261020",
+      "--hardware-fill-profile",
+      "--evidence-dir",
+      "/home/rylan/seds-gateway-fidelity-20261020/receive-pressure-candidate/diagnostics",
+      "--timeout",
+      "3600"
+    ],
+    "finished_unix": 1792548390.34491
+  },
+  "samples_10s": {
+    "gateway.can_rx_ring_drops": [
+      507,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722,
+      722
+    ],
+    "gateway.uart_tx_exhausted": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.uart_tx_pending": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "gateway.allocation_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.can_rejected_word0": [
+      55854163,
+      55854163,
+      55854163,
+      55854163,
+      1393623370,
+      1393623370,
+      55854163,
+      55854163,
+      55854163,
+      1393623370,
+      1393623370,
+      1393623370
+    ],
+    "gateway.can_rejected_word2": [
+      2228257,
+      2228256,
+      2228256,
+      2228256,
+      3415147180,
+      3234565944,
+      2228257,
+      2228257,
+      2228256,
+      3415147435,
+      3415147205,
+      3234565912
+    ],
+    "gateway.tlsf_live_bytes": [
+      47952,
+      47964,
+      47968,
+      48988,
+      47240,
+      51628,
+      50980,
+      50976,
+      51288,
+      51284,
+      51272,
+      51308
+    ],
+    "gateway.can_admission_fail": [
+      2,
+      121,
+      255,
+      352,
+      437,
+      517,
+      634,
+      771,
+      869,
+      973,
+      1078,
+      1178
+    ],
+    "gateway.cached_transit_denied": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.loadcell_network_rows": [
+      2395,
+      4809,
+      7214,
+      9626,
+      12033,
+      14440,
+      16848,
+      19253,
+      21664,
+      24070,
+      26481,
+      28900
+    ],
+    "daq.kg50_network_rows": [
+      2295,
+      4596,
+      6897,
+      9201,
+      11501,
+      13802,
+      16105,
+      18405,
+      20707,
+      23007,
+      25310,
+      27611
+    ],
+    "daq.kg50_network_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.loadcell_network_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.sd_write_errors": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.sd_raw_batch_drops": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "delivery_windows": [
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        50,
+        1070,
+        1060,
+        200
+      ],
+      "passed": false,
+      "received": [
+        2387,
+        2289,
+        10,
+        10,
+        458
+      ],
+      "start_ms": 20000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        50,
+        1020,
+        1020,
+        160
+      ],
+      "passed": false,
+      "received": [
+        2396,
+        2289,
+        10,
+        10,
+        461
+      ],
+      "start_ms": 30000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        50,
+        50,
+        1020,
+        1020,
+        230
+      ],
+      "passed": false,
+      "received": [
+        2397,
+        2291,
+        10,
+        10,
+        458
+      ],
+      "start_ms": 40000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        50,
+        50,
+        1020,
+        1020,
+        150
+      ],
+      "passed": false,
+      "received": [
+        2395,
+        2289,
+        10,
+        10,
+        459
+      ],
+      "start_ms": 50000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        50,
+        1020,
+        1020,
+        160
+      ],
+      "passed": false,
+      "received": [
+        2394,
+        2292,
+        10,
+        10,
+        458
+      ],
+      "start_ms": 60000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        50,
+        50,
+        1030,
+        1030,
+        170
+      ],
+      "passed": false,
+      "received": [
+        2392,
+        2287,
+        9,
+        9,
+        453
+      ],
+      "start_ms": 70000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        50,
+        1020,
+        1020,
+        150
+      ],
+      "passed": false,
+      "received": [
+        2399,
+        2289,
+        10,
+        10,
+        454
+      ],
+      "start_ms": 80000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        50,
+        40,
+        1100,
+        1120,
+        140
+      ],
+      "passed": false,
+      "received": [
+        2389,
+        2286,
+        10,
+        10,
+        456
+      ],
+      "start_ms": 90000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        50,
+        1090,
+        2100,
+        130
+      ],
+      "passed": false,
+      "received": [
+        2398,
+        2287,
+        10,
+        9,
+        454
+      ],
+      "start_ms": 100000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        50,
+        40,
+        2020,
+        2010,
+        200
+      ],
+      "passed": false,
+      "received": [
+        2406,
+        2290,
+        8,
+        8,
+        450
+      ],
+      "start_ms": 110000
+    }
+  ]
+}

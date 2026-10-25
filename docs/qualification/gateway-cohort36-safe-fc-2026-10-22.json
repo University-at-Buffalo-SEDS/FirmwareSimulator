@@ -1,0 +1,39 @@
+{
+  "cohort": 36,
+  "status": "failed",
+  "profile_scope": "20 ms guest instruction sample, not cycle-accurate utilization",
+  "fc_elf_sha256": "05e7117c6725adba0d92757e709e7a45af0527fe9094ddac5b30f24034bf1be4",
+  "fc_flash": {
+    "used": 474596,
+    "limit": 474624,
+    "extra_outliner_iterations": 0
+  },
+  "gateway": {
+    "can_ring_drops": 767,
+    "can_bulk_drops": 670,
+    "can_sender6_drops": 4,
+    "can_sender7_drops": 763,
+    "hardware_fifo_overflow": 162,
+    "ingress_queue_failures": 513,
+    "admission_failures": 5,
+    "allocation_failures": 0,
+    "mutex_failures": 0,
+    "first_ring_drop_tick": 1006,
+    "first_ring_drop_phase": "CAN",
+    "first_ring_drop_pc": "0x080570e8",
+    "first_ring_drop_function": "sedsnet::varint::read_u64_32_slow"
+  },
+  "daq": {
+    "publication_failures": 0,
+    "acquisition_failures": 0
+  },
+  "long_gate_started": false,
+  "hardware_validation": false,
+  "instruction_profile": {
+    "instructions": 1803134,
+    "unattributed_to_sized_symbols": 101256,
+    "copy_percent": 9.659,
+    "varint_percent": 9.474
+  },
+  "scope": "Same C33 SDK/other firmware, repaired FC extra-outliner code generation and shortened diagnostics. Original startup assertions retained."
+}

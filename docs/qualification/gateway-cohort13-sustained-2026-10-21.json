@@ -1,0 +1,3224 @@
+{
+  "scope": "seven-board real-firmware simulation; physical RF interference, antenna behavior and physical SD throughput not qualified",
+  "transport": "Pi main Ethernet discovery and framed TCP to one gateway Pico-Fi, then gateway USART2 at 1000000 baud; no I2C or GroundStation-side Pico",
+  "radio_profile": "115200 UART,64 kbit/s air,existing40% pacing; clocks and source rates unchanged",
+  "records": {
+    "receive-cohort13": {
+      "passed": true,
+      "duration_ms": 120000,
+      "progress": {
+        "phase": "passed",
+        "started_unix": 1792617364.530738,
+        "policy": "all seven firmware nodes and hosted backend use the same source-only SDK candidate; current GS dev plus delivery observer; no rate reduction or relaxed loss limits",
+        "source_manifest": {
+          "sdk_base": "13c74abf7f8194299cb60b4b31f994b2eaadd5ef",
+          "groundstation_base": "34a1fe18fb819d15b77ea875e4910d0e8315b6c1",
+          "runtime_image": "sha256:f7411549655b6b7d1997630e94f9a5ceace0edf0b8b796e9def04de7f9979878",
+          "archives": {
+            "receive-cohort13-sdk.tar.gz": "6dbefc9ea272da9dc4053db03ca8e13d0165ba81b29a7dc2cbadb45e6adfa75f",
+            "receive-cohort13-groundstation.tar.gz": "5ded49acd0a67e006483107be9f51f24d058b1e00fa3ae36d8b1974ae2ee7d55",
+            "receive-cohort13-diagnostics.tar.gz": "df58572aeb2123d7eef79510033788bf44b101e18b4ae1c698cff980ee74be13"
+          },
+          "candidate_change": "Ingress-local and dispatch-local validated routing views remove duplicate parsing without persistent validation cache; embedded reserved type lookup uses checked direct indexing. Allocation-free priority/reliable-mode queries retain current runtime schema behavior. Sustained ten-second RF underglow/FC-control receipt rounds <=500ms. Pi-hosted Ethernet discovery/TCP only; UART1M gateway, radio115200; no rates/clocks/pool area/loss thresholds changed."
+        },
+        "boards": {
+          "FlightComputer26": {
+            "seconds": 20.2,
+            "build_subdir": "Release",
+            "status": "passed"
+          },
+          "gateway-board": {
+            "seconds": 18.7,
+            "build_subdir": "Release_Script",
+            "status": "passed"
+          },
+          "DAQ-Board": {
+            "seconds": 29.3,
+            "build_subdir": "Release_Script",
+            "status": "passed"
+          },
+          "ActuatorBoard26": {
+            "seconds": 17.8,
+            "build_subdir": "Release_Script",
+            "status": "passed"
+          },
+          "ValveBoard26": {
+            "seconds": 17.9,
+            "build_subdir": "Release_Script",
+            "status": "passed"
+          },
+          "RFBoard26": {
+            "seconds": 18.9,
+            "build_subdir": "Release",
+            "status": "passed"
+          },
+          "PowerBoard26": {
+            "seconds": 18.1,
+            "build_subdir": "Release_Script",
+            "status": "passed"
+          }
+        },
+        "image": "seds-firmware-simulator:gateway-cohort13-20261021",
+        "image_id": "sha256:079fb7216bf244980ce366c3f4a0a55e426584ca2215789da695795c4748de76",
+        "finished_unix": 1792618871.0663822
+      },
+      "source_aware": {
+        "passed": true,
+        "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+        "minimum_delivery_percent": 99.5,
+        "warmup_ms": 20000,
+        "duration_ms": 120000,
+        "windows": [
+          {
+            "start_ms": 20000,
+            "produced": [
+              2400,
+              2309
+            ],
+            "received": [
+              2400,
+              2309,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.0,
+              230.9
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 30000,
+            "produced": [
+              2400,
+              2312
+            ],
+            "received": [
+              2400,
+              2312,
+              10,
+              10,
+              482
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              60
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.0,
+              231.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 40000,
+            "produced": [
+              2400,
+              2308
+            ],
+            "received": [
+              2400,
+              2308,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1010,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.0,
+              230.8
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 50000,
+            "produced": [
+              2400,
+              2313
+            ],
+            "received": [
+              2400,
+              2313,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              60
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.0,
+              231.3
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 60000,
+            "produced": [
+              2401,
+              2315
+            ],
+            "received": [
+              2402,
+              2314,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1030,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0416,
+              99.9568
+            ],
+            "source_hz": [
+              240.1,
+              231.5
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 70000,
+            "produced": [
+              2408,
+              2301
+            ],
+            "received": [
+              2408,
+              2301,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.8,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 80000,
+            "produced": [
+              2420,
+              2307
+            ],
+            "received": [
+              2420,
+              2307,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1010,
+              60
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.0,
+              230.7
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 90000,
+            "produced": [
+              2410,
+              2300
+            ],
+            "received": [
+              2409,
+              2300,
+              10,
+              9,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              99.9585,
+              100.0
+            ],
+            "source_hz": [
+              241.0,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 100000,
+            "produced": [
+              2422,
+              2301
+            ],
+            "received": [
+              2423,
+              2301,
+              9,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0413,
+              100.0
+            ],
+            "source_hz": [
+              242.2,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 110000,
+            "produced": [
+              2418,
+              2301
+            ],
+            "received": [
+              2418,
+              2301,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.8,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          }
+        ],
+        "can_drops_stable_after_warmup": true,
+        "can_drop_free_entire_run": true,
+        "startup_can_drops": 0,
+        "final_can_drops": 0,
+        "zero_counters": {
+          "gateway.allocation_failures": true,
+          "daq.loadcell_network_failures": true,
+          "daq.kg50_network_failures": true,
+          "daq.analog_report_failures": true,
+          "daq.sd_write_errors": true,
+          "daq.sd_raw_batch_drops": true,
+          "rf.panics": true,
+          "rf.tlsf_failures": true,
+          "power.panics": true,
+          "power.tlsf_failures": true,
+          "flight.panics": true,
+          "flight.tlsf_failures": true,
+          "gateway.panics": true,
+          "gateway.tlsf_failures": true,
+          "actuator.panics": true,
+          "actuator.tlsf_failures": true,
+          "valve.panics": true,
+          "valve.tlsf_failures": true,
+          "daq.panics": true,
+          "daq.tlsf_failures": true,
+          "rf.can_fifo_overflow_fdcan1": true,
+          "rf.can_fifo_overflow_fdcan2": true,
+          "power.can_fifo_overflow_fdcan1": true,
+          "power.can_fifo_overflow_fdcan2": true,
+          "flight.can_fifo_overflow_fdcan1": true,
+          "gateway.can_fifo_overflow_fdcan1": true,
+          "gateway.can_fifo_overflow_fdcan2": true,
+          "actuator.can_fifo_overflow_fdcan1": true,
+          "actuator.can_fifo_overflow_fdcan2": true,
+          "valve.can_fifo_overflow_fdcan1": true,
+          "valve.can_fifo_overflow_fdcan2": true,
+          "daq.can_fifo_overflow_fdcan1": true
+        }
+      },
+      "sustained_radio": {
+        "rounds": 11,
+        "latency_ms": [
+          90,
+          80,
+          80,
+          110,
+          80,
+          50,
+          80,
+          90,
+          70,
+          70,
+          90
+        ],
+        "maximum_ms": 110,
+        "actual_receiver_states": {
+          "rf.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "power.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "flight.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "flight.network_flight_commands_processed": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ]
+        },
+        "fc_exactly_once_between_probes": true
+      },
+      "minimum_delivery_percent": [
+        99.9585,
+        99.9568
+      ],
+      "max_sensor_gap_ms": [
+        20,
+        20,
+        1030,
+        1020,
+        60
+      ],
+      "gateway_pool_low_water": [
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748,
+        7748
+      ],
+      "gateway_admission_failures": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "all_managed_receipts": {
+        "count": 14,
+        "latency_ms": [
+          130,
+          150,
+          140,
+          90,
+          80,
+          80,
+          110,
+          80,
+          50,
+          80,
+          90,
+          70,
+          70,
+          90
+        ],
+        "maximum_ms": 150
+      },
+      "startup_discovery_ms": [
+        1570
+      ],
+      "fill_valve_ack_ms": [
+        20
+      ]
+    },
+    "receive-cohort13-soak600": {
+      "passed": true,
+      "duration_ms": 600000,
+      "progress": {
+        "phase": "passed",
+        "duration_ms": 600000,
+        "sample_count": 60,
+        "policy": "Run only after strict120-second source-aware/radio/application-state gate passes; same seven ELF/factory images, source, model image, rates, clocks and native Ethernet discovery path. No hardware or publication.",
+        "source_manifest": {
+          "sdk_base": "13c74abf7f8194299cb60b4b31f994b2eaadd5ef",
+          "groundstation_base": "34a1fe18fb819d15b77ea875e4910d0e8315b6c1",
+          "runtime_image": "sha256:f7411549655b6b7d1997630e94f9a5ceace0edf0b8b796e9def04de7f9979878",
+          "archives": {
+            "receive-cohort13-sdk.tar.gz": "6dbefc9ea272da9dc4053db03ca8e13d0165ba81b29a7dc2cbadb45e6adfa75f",
+            "receive-cohort13-groundstation.tar.gz": "5ded49acd0a67e006483107be9f51f24d058b1e00fa3ae36d8b1974ae2ee7d55",
+            "receive-cohort13-diagnostics.tar.gz": "df58572aeb2123d7eef79510033788bf44b101e18b4ae1c698cff980ee74be13"
+          },
+          "candidate_change": "Ingress-local and dispatch-local validated routing views remove duplicate parsing without persistent validation cache; embedded reserved type lookup uses checked direct indexing. Allocation-free priority/reliable-mode queries retain current runtime schema behavior. Sustained ten-second RF underglow/FC-control receipt rounds <=500ms. Pi-hosted Ethernet discovery/TCP only; UART1M gateway, radio115200; no rates/clocks/pool area/loss thresholds changed."
+        },
+        "image": "seds-firmware-simulator:gateway-cohort13-20261021",
+        "image_id": "sha256:079fb7216bf244980ce366c3f4a0a55e426584ca2215789da695795c4748de76",
+        "short_gate": "receive-cohort13/progress.json",
+        "firmware_sha256": {
+          "gateway-board26/build/Release_Script/gateway_boardBootloader.elf": "db918b987f3fb04798fe3dc6e1f1d2a0840196b58b17469c9da590c71509644f",
+          "gateway-board26/build/Release_Script/gateway_boardBootloader.bin": "a3c1a615936c8670b2bfc8a165125dbb07e61a2631a0b3a832561f3e207057e2",
+          "gateway-board26/build/Release_Script/gateway_board.elf": "40c19f52aa06d3dc71859f5fcab5e9dd59b24447041686abf1757415934cc334",
+          "gateway-board26/build/Release_Script/gateway_board.bin": "24e23fdcf2d9aef5da209defc588802ca5a189c39c40ac0c92ebed52f7608186",
+          "gateway-board26/build/Release_Script/gateway_board.launchcore.img": "a4d3de5e7d82c1043a03b8930c0fc6cafca72f00a531b26bc1695d98aaa76d17",
+          "gateway-board26/build/Release_Script/gateway_board.factory.bin": "71ac69b8070ef5e1acbeb44aa5c22d187e35506c9d41bcf4ead97748fd692baf",
+          "DAQ-Board/build/Release_Script/DAQ-BoardBootloader.elf": "01703fffcbc154a0732284678fc684fd96240a3a0a6bfe8f27c4574a8201d8f1",
+          "DAQ-Board/build/Release_Script/DAQ-BoardBootloader.bin": "0d93f72985654a1292c5eb4d1941f0a5186354a372c8e68b4c4cb4700b87b9d5",
+          "DAQ-Board/build/Release_Script/DAQ-Board.elf": "f8e6a4906f01ae0ab19efaced1a4c5176667024d7822e0520830a4ff59620c13",
+          "DAQ-Board/build/Release_Script/DAQ-Board.bin": "706fa1786142b6a85f21b77df3beeb302697042801f7f729d738d4b097bbb7d0",
+          "DAQ-Board/build/Release_Script/DAQ-Board.launchcore.img": "06841f8b21b2e9cdb94c15735c01371709e7a048905d09d2186301fef43418f6",
+          "DAQ-Board/build/Release_Script/DAQ-Board.factory.bin": "9a364eea0dac126799f43b59c198cfe2a30bee1a6dc0e0c44fefce0f332b0ad6",
+          "ActuatorBoard26/build/Release_Script/ActuationBoardBootloader.elf": "38ae32f610104574ed222ca0f957abcead1d8a060a43f0e7d4c30172fff8d7c4",
+          "ActuatorBoard26/build/Release_Script/ActuationBoardBootloader.bin": "5d6eb36f8543fb7ad2027348e9bb20d753f7c7b77a2113bc0129cc046f7fb07f",
+          "ActuatorBoard26/build/Release_Script/ActuationBoard.elf": "d5014ae07b25b8779024c319962a482b01f4d0cf11e5848212d2516cd302f3b5",
+          "ActuatorBoard26/build/Release_Script/ActuationBoard.bin": "39d8051db2e10511a1fb1653fb9dd63a8818b3e595e3b8be49be6f54d9cc03e5",
+          "ActuatorBoard26/build/Release_Script/ActuationBoard.launchcore.img": "3e533f69e12d97c97d3f544e6b6f7c1c55a75eb048e9d696131b787302e53acd",
+          "ActuatorBoard26/build/Release_Script/ActuationBoard.factory.bin": "a97991e26956b8263df2b2078c9fc4bf70a95796782f305e9d62d0a241687ce3",
+          "ValveBoard26/build/Release_Script/Valve_Board26Bootloader.elf": "0721c746e8101520c8a4bd7bb5289bc9ff5415213b4ae92e1c869dca6f7814b2",
+          "ValveBoard26/build/Release_Script/Valve_Board26Bootloader.bin": "c05d69977d4e7e4e10e89eaab28d6a7f3c1d0263a10731a8135e9e6fdf5a86a1",
+          "ValveBoard26/build/Release_Script/Valve_Board26.elf": "c4fa8bf8d89523484d704bacb0e441b1b06e37c7b19616be6a8e2b523e0c0b44",
+          "ValveBoard26/build/Release_Script/Valve_Board26.bin": "7ce2d42e5547d404aa1f0b70614ba5f174ead08cbd31a782483501170be2f9bf",
+          "ValveBoard26/build/Release_Script/Valve_Board26.launchcore.img": "0de4541ec592a4ed7510698b71256f3ae7a7ed7e050d44ccd275e2bf4a4a3979",
+          "ValveBoard26/build/Release_Script/Valve_Board26.factory.bin": "c3692a01caae06b4b6e5aefe1b930456c5b020994429158a3ed029c777fb2509",
+          "RFBoard26/build/Release/RFBoard26Bootloader.elf": "ef414665f5eccd9e2e77918d1086b44d65e87e371f67c5117c000a43349bf3a8",
+          "RFBoard26/build/Release/RFBoard26Bootloader.bin": "68aede24a0e438338d43bf9c2847c52bf03a7eb29661d5256742993e97172df5",
+          "RFBoard26/build/Release/RFBoard26.elf": "873d54d1315aaaa642b7d6e16510354f74aec3071f434edde9c47b0d69d035f2",
+          "RFBoard26/build/Release/RFBoard26.bin": "3481014bfea2332e7b3e2a11ee51899cb5885437b61a8ee671a3eb1d78671cae",
+          "RFBoard26/build/Release/RFBoard26.launchcore.img": "c13217adebd4f1741efa6b0d50ecfe41a13135fbdb17b598dd019b7c3a189a77",
+          "RFBoard26/build/Release/RFBoard26.factory.bin": "a9641bd9a7afa762b5fcbda4aade672c69a69a061b5144b8c04b25d25ba692da",
+          "PowerBoard26/build/Release_Script/PowerBoard26Bootloader.elf": "b87b2df349dc1d007008e20875cdf231498e229b8bb468a742a566d1ae30e37c",
+          "PowerBoard26/build/Release_Script/PowerBoard26Bootloader.bin": "bc39aeb726a5e6459dff21d794aabd6c3384d699f1e44ee1a6b69324a62920af",
+          "PowerBoard26/build/Release_Script/PowerBoard26.elf": "cf99c67ee750e0f82d7fdd969476586a3ece5297ac8d59547593baeddc7591e0",
+          "PowerBoard26/build/Release_Script/PowerBoard26.bin": "44abbb956faa8ac81aba9cd00cd53ef2fe5ca0b1e972e4c2ed66d5cbb06341ec",
+          "PowerBoard26/build/Release_Script/PowerBoard26.launchcore.img": "cea3552edf376606644cefd029895b8ed17a8fab86758a21aa03038d55c3c75d",
+          "PowerBoard26/build/Release_Script/PowerBoard26.factory.bin": "aa90f1bf15980c55976df5dba41894632ff94f123baa153b084e1a37c4589ccf",
+          "FlightComputer26/build/Release/FlightComputer26Bootloader.elf": "58e0d9d9ec89bfb60db46c4628400eb7ea45e80494abacc15de58ae8579f0269",
+          "FlightComputer26/build/Release/FlightComputer26Bootloader.bin": "9020f344e5ffe75580abdc3fb3ed947b6680c7b19be291f0188f026234114ac1",
+          "FlightComputer26/build/Release/FlightComputer26.elf": "7ec975c1a2a47c3cf9f6f3ada220fd62be4f7dc495fd0a422b495e141da34cc4",
+          "FlightComputer26/build/Release/FlightComputer26.bin": "a71b98b01f419eca0bc247ae7917a17cede5f36427ceadefa7b6c8059f20f75d",
+          "FlightComputer26/build/Release/FlightComputer26.launchcore.img": "1c661ec1ec415310b2c7bee0a0a1aa7e37f7fb3e183354ea83ddd83135a77334",
+          "FlightComputer26/build/Release/FlightComputer26.factory.bin": "2569b71e6bfe7f13794d05f0ee99b9ad1b9feb2193c76d2b81b07082714ba7d6"
+        },
+        "started_unix": 1792619001.4534712,
+        "command": [
+          "python3",
+          "/home/rylan/seds-gateway-fidelity-20261020/receive-cohort13/board-preparation/controller/test-route-recovery.py",
+          "--workspace",
+          "/home/rylan/seds-gateway-fidelity-20261020/receive-cohort13-soak600",
+          "--image",
+          "seds-firmware-simulator:gateway-cohort13-20261021",
+          "--hardware-fill-profile",
+          "--fill-duration-ms",
+          "600000",
+          "--evidence-dir",
+          "/home/rylan/seds-gateway-fidelity-20261020/receive-cohort13-soak600/diagnostics",
+          "--timeout",
+          "10800"
+        ],
+        "finished_unix": 1792624878.3185728
+      },
+      "source_aware": {
+        "passed": true,
+        "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+        "minimum_delivery_percent": 99.5,
+        "warmup_ms": 20000,
+        "duration_ms": 600000,
+        "windows": [
+          {
+            "start_ms": 20000,
+            "produced": [
+              2405,
+              2302
+            ],
+            "received": [
+              2404,
+              2302,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1030,
+              50
+            ],
+            "delivery_percent": [
+              99.9584,
+              100.0
+            ],
+            "source_hz": [
+              240.5,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 30000,
+            "produced": [
+              2416,
+              2302
+            ],
+            "received": [
+              2417,
+              2302,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0414,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 40000,
+            "produced": [
+              2409,
+              2302
+            ],
+            "received": [
+              2410,
+              2303,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0415,
+              100.0434
+            ],
+            "source_hz": [
+              240.9,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 50000,
+            "produced": [
+              2410,
+              2302
+            ],
+            "received": [
+              2409,
+              2301,
+              10,
+              10,
+              482
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              60
+            ],
+            "delivery_percent": [
+              99.9585,
+              99.9566
+            ],
+            "source_hz": [
+              241.0,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 60000,
+            "produced": [
+              2408,
+              2303
+            ],
+            "received": [
+              2408,
+              2304,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0434
+            ],
+            "source_hz": [
+              240.8,
+              230.3
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 70000,
+            "produced": [
+              2415,
+              2302
+            ],
+            "received": [
+              2415,
+              2301,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              99.9566
+            ],
+            "source_hz": [
+              241.5,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 80000,
+            "produced": [
+              2425,
+              2303
+            ],
+            "received": [
+              2425,
+              2303,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.5,
+              230.3
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 90000,
+            "produced": [
+              2406,
+              2300
+            ],
+            "received": [
+              2406,
+              2301,
+              9,
+              9,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0435
+            ],
+            "source_hz": [
+              240.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 100000,
+            "produced": [
+              2415,
+              2301
+            ],
+            "received": [
+              2415,
+              2300,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              99.9565
+            ],
+            "source_hz": [
+              241.5,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 110000,
+            "produced": [
+              2413,
+              2301
+            ],
+            "received": [
+              2413,
+              2301,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.3,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 120000,
+            "produced": [
+              2412,
+              2300
+            ],
+            "received": [
+              2412,
+              2300,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              60
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.2,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 130000,
+            "produced": [
+              2425,
+              2301
+            ],
+            "received": [
+              2425,
+              2301,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.5,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 140000,
+            "produced": [
+              2412,
+              2300
+            ],
+            "received": [
+              2412,
+              2300,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.2,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 150000,
+            "produced": [
+              2415,
+              2300
+            ],
+            "received": [
+              2415,
+              2301,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1030,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0435
+            ],
+            "source_hz": [
+              241.5,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 160000,
+            "produced": [
+              2416,
+              2300
+            ],
+            "received": [
+              2416,
+              2300,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 170000,
+            "produced": [
+              2414,
+              2300
+            ],
+            "received": [
+              2414,
+              2300,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.4,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 180000,
+            "produced": [
+              2420,
+              2301
+            ],
+            "received": [
+              2420,
+              2301,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.0,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 190000,
+            "produced": [
+              2406,
+              2300
+            ],
+            "received": [
+              2406,
+              2300,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 200000,
+            "produced": [
+              2414,
+              2300
+            ],
+            "received": [
+              2414,
+              2300,
+              9,
+              9,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.4,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 210000,
+            "produced": [
+              2416,
+              2300
+            ],
+            "received": [
+              2416,
+              2300,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1010,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 220000,
+            "produced": [
+              2415,
+              2300
+            ],
+            "received": [
+              2415,
+              2300,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.5,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 230000,
+            "produced": [
+              2417,
+              2301
+            ],
+            "received": [
+              2417,
+              2301,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 240000,
+            "produced": [
+              2423,
+              2300
+            ],
+            "received": [
+              2423,
+              2300,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.3,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 250000,
+            "produced": [
+              2418,
+              2301
+            ],
+            "received": [
+              2418,
+              2301,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1010,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.8,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 260000,
+            "produced": [
+              2429,
+              2300
+            ],
+            "received": [
+              2429,
+              2300,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.9,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 270000,
+            "produced": [
+              2414,
+              2300
+            ],
+            "received": [
+              2414,
+              2300,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.4,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 280000,
+            "produced": [
+              2430,
+              2301
+            ],
+            "received": [
+              2430,
+              2301,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              60
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              243.0,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 290000,
+            "produced": [
+              2416,
+              2300
+            ],
+            "received": [
+              2416,
+              2300,
+              10,
+              10,
+              489
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 300000,
+            "produced": [
+              2426,
+              2301
+            ],
+            "received": [
+              2426,
+              2301,
+              10,
+              10,
+              483
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.6,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 310000,
+            "produced": [
+              2424,
+              2303
+            ],
+            "received": [
+              2424,
+              2302,
+              10,
+              10,
+              489
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0,
+              99.9566
+            ],
+            "source_hz": [
+              242.4,
+              230.3
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 320000,
+            "produced": [
+              2418,
+              2300
+            ],
+            "received": [
+              2418,
+              2301,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0435
+            ],
+            "source_hz": [
+              241.8,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 330000,
+            "produced": [
+              2427,
+              2301
+            ],
+            "received": [
+              2428,
+              2300,
+              9,
+              9,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0412,
+              99.9565
+            ],
+            "source_hz": [
+              242.7,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 340000,
+            "produced": [
+              2416,
+              2300
+            ],
+            "received": [
+              2415,
+              2300,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              99.9586,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 350000,
+            "produced": [
+              2418,
+              2300
+            ],
+            "received": [
+              2419,
+              2300,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              50
+            ],
+            "delivery_percent": [
+              100.0414,
+              100.0
+            ],
+            "source_hz": [
+              241.8,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 360000,
+            "produced": [
+              2424,
+              2301
+            ],
+            "received": [
+              2424,
+              2301,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.4,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 370000,
+            "produced": [
+              2410,
+              2300
+            ],
+            "received": [
+              2410,
+              2300,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.0,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 380000,
+            "produced": [
+              2423,
+              2302
+            ],
+            "received": [
+              2423,
+              2302,
+              10,
+              10,
+              487
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.3,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 390000,
+            "produced": [
+              2407,
+              2300
+            ],
+            "received": [
+              2407,
+              2300,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1010,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              240.7,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 400000,
+            "produced": [
+              2417,
+              2302
+            ],
+            "received": [
+              2417,
+              2302,
+              10,
+              10,
+              488
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1010,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.2
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 410000,
+            "produced": [
+              2417,
+              2301
+            ],
+            "received": [
+              2417,
+              2301,
+              10,
+              10,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 420000,
+            "produced": [
+              2415,
+              2300
+            ],
+            "received": [
+              2415,
+              2300,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.5,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 430000,
+            "produced": [
+              2415,
+              2301
+            ],
+            "received": [
+              2415,
+              2301,
+              10,
+              10,
+              485
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.5,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 440000,
+            "produced": [
+              2424,
+              2300
+            ],
+            "received": [
+              2424,
+              2300,
+              10,
+              9,
+              486
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              242.4,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 450000,
+            "produced": [
+              2417,
+              2300
+            ],
+            "received": [
+              2417,
+              2300,
+              9,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1030,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 460000,
+            "produced": [
+              2415,
+              2301
+            ],
+            "received": [
+              2414,
+              2301,
+              10,
+              10,
+              483
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              99.9586,
+              100.0
+            ],
+            "source_hz": [
+              241.5,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 470000,
+            "produced": [
+              2416,
+              2300
+            ],
+            "received": [
+              2417,
+              2300,
+              10,
+              10,
+              484
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0414,
+              100.0
+            ],
+            "source_hz": [
+              241.6,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 480000,
+            "produced": [
+              2411,
+              2300
+            ],
+            "received": [
+              2411,
+              2300,
+              10,
+              10,
+              482
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.1,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 490000,
+            "produced": [
+              2410,
+              2300
+            ],
+            "received": [
+              2410,
+              2300,
+              10,
+              10,
+              481
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.0,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 500000,
+            "produced": [
+              2419,
+              2301
+            ],
+            "received": [
+              2418,
+              2301,
+              10,
+              10,
+              482
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              99.9587,
+              100.0
+            ],
+            "source_hz": [
+              241.9,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 510000,
+            "produced": [
+              2417,
+              2300
+            ],
+            "received": [
+              2418,
+              2300,
+              10,
+              10,
+              481
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1030,
+              1030,
+              40
+            ],
+            "delivery_percent": [
+              100.0414,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 520000,
+            "produced": [
+              2414,
+              2300
+            ],
+            "received": [
+              2413,
+              2300,
+              10,
+              10,
+              482
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1010,
+              40
+            ],
+            "delivery_percent": [
+              99.9586,
+              100.0
+            ],
+            "source_hz": [
+              241.4,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 530000,
+            "produced": [
+              2420,
+              2301
+            ],
+            "received": [
+              2421,
+              2301,
+              10,
+              10,
+              480
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0413,
+              100.0
+            ],
+            "source_hz": [
+              242.0,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 540000,
+            "produced": [
+              2412,
+              2300
+            ],
+            "received": [
+              2412,
+              2300,
+              10,
+              9,
+              481
+            ],
+            "max_gap_ms": [
+              20,
+              30,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.2,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 550000,
+            "produced": [
+              2417,
+              2301
+            ],
+            "received": [
+              2417,
+              2301,
+              9,
+              10,
+              481
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1030,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 560000,
+            "produced": [
+              2418,
+              2300
+            ],
+            "received": [
+              2418,
+              2300,
+              10,
+              10,
+              481
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1020,
+              1020,
+              40
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.8,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 570000,
+            "produced": [
+              2411,
+              2300
+            ],
+            "received": [
+              2411,
+              2300,
+              10,
+              10,
+              480
+            ],
+            "max_gap_ms": [
+              10,
+              20,
+              1020,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.1,
+              230.0
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 580000,
+            "produced": [
+              2417,
+              2301
+            ],
+            "received": [
+              2417,
+              2301,
+              10,
+              10,
+              479
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1010,
+              1020,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.7,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          },
+          {
+            "start_ms": 590000,
+            "produced": [
+              2413,
+              2301
+            ],
+            "received": [
+              2413,
+              2301,
+              10,
+              10,
+              480
+            ],
+            "max_gap_ms": [
+              20,
+              20,
+              1030,
+              1030,
+              30
+            ],
+            "delivery_percent": [
+              100.0,
+              100.0
+            ],
+            "source_hz": [
+              241.3,
+              230.1
+            ],
+            "published_samples_preserved": true,
+            "freshness_passed": true,
+            "valve_rate_passed": true,
+            "passed": true,
+            "nominal_rate_diagnostic_passed": false
+          }
+        ],
+        "can_drops_stable_after_warmup": true,
+        "can_drop_free_entire_run": true,
+        "startup_can_drops": 0,
+        "final_can_drops": 0,
+        "zero_counters": {
+          "gateway.allocation_failures": true,
+          "daq.loadcell_network_failures": true,
+          "daq.kg50_network_failures": true,
+          "daq.analog_report_failures": true,
+          "daq.sd_write_errors": true,
+          "daq.sd_raw_batch_drops": true,
+          "rf.panics": true,
+          "rf.tlsf_failures": true,
+          "power.panics": true,
+          "power.tlsf_failures": true,
+          "flight.panics": true,
+          "flight.tlsf_failures": true,
+          "gateway.panics": true,
+          "gateway.tlsf_failures": true,
+          "actuator.panics": true,
+          "actuator.tlsf_failures": true,
+          "valve.panics": true,
+          "valve.tlsf_failures": true,
+          "daq.panics": true,
+          "daq.tlsf_failures": true,
+          "rf.can_fifo_overflow_fdcan1": true,
+          "rf.can_fifo_overflow_fdcan2": true,
+          "power.can_fifo_overflow_fdcan1": true,
+          "power.can_fifo_overflow_fdcan2": true,
+          "flight.can_fifo_overflow_fdcan1": true,
+          "gateway.can_fifo_overflow_fdcan1": true,
+          "gateway.can_fifo_overflow_fdcan2": true,
+          "actuator.can_fifo_overflow_fdcan1": true,
+          "actuator.can_fifo_overflow_fdcan2": true,
+          "valve.can_fifo_overflow_fdcan1": true,
+          "valve.can_fifo_overflow_fdcan2": true,
+          "daq.can_fifo_overflow_fdcan1": true
+        }
+      },
+      "sustained_radio": {
+        "rounds": 59,
+        "latency_ms": [
+          90,
+          90,
+          60,
+          50,
+          90,
+          40,
+          50,
+          80,
+          70,
+          50,
+          60,
+          80,
+          70,
+          60,
+          50,
+          50,
+          70,
+          50,
+          60,
+          40,
+          60,
+          60,
+          60,
+          60,
+          60,
+          100,
+          50,
+          50,
+          50,
+          50,
+          40,
+          40,
+          60,
+          70,
+          50,
+          40,
+          60,
+          50,
+          70,
+          40,
+          70,
+          50,
+          70,
+          50,
+          60,
+          40,
+          50,
+          50,
+          50,
+          60,
+          50,
+          60,
+          60,
+          80,
+          80,
+          60,
+          50,
+          50,
+          50
+        ],
+        "maximum_ms": 100,
+        "actual_receiver_states": {
+          "rf.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "power.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "flight.underglow_enabled": [
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0
+          ],
+          "flight.network_flight_commands_processed": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60
+          ]
+        },
+        "fc_exactly_once_between_probes": true
+      },
+      "minimum_delivery_percent": [
+        99.9584,
+        99.9565
+      ],
+      "max_sensor_gap_ms": [
+        20,
+        30,
+        1030,
+        1030,
+        60
+      ],
+      "gateway_pool_low_water": [
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576,
+        9576
+      ],
+      "gateway_admission_failures": [
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11
+      ],
+      "all_managed_receipts": {
+        "count": 62,
+        "latency_ms": [
+          150,
+          140,
+          240,
+          90,
+          90,
+          60,
+          50,
+          90,
+          40,
+          50,
+          80,
+          70,
+          50,
+          60,
+          80,
+          70,
+          60,
+          50,
+          50,
+          70,
+          50,
+          60,
+          40,
+          60,
+          60,
+          60,
+          60,
+          60,
+          100,
+          50,
+          50,
+          50,
+          50,
+          40,
+          40,
+          60,
+          70,
+          50,
+          40,
+          60,
+          50,
+          70,
+          40,
+          70,
+          50,
+          70,
+          50,
+          60,
+          40,
+          50,
+          50,
+          50,
+          60,
+          50,
+          60,
+          60,
+          80,
+          80,
+          60,
+          50,
+          50,
+          50
+        ],
+        "maximum_ms": 240
+      },
+      "startup_discovery_ms": [
+        1400
+      ],
+      "fill_valve_ack_ms": [
+        20
+      ]
+    }
+  }
+}

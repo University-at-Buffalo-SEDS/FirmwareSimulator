@@ -81,7 +81,7 @@ class HardwareFillProfileTests(unittest.TestCase):
     self.assertEqual(gate['minimum_occurrences'],len(samples))
     self.assertEqual(gate['contains'],'full-bay RF soak control acknowledged:')
 
- def test_receipts_cannot_replace_observed_underflow_state_and_fc_execution(self):
+ def test_receipts_cannot_replace_observed_underglow_state_and_fc_execution(self):
   with tempfile.TemporaryDirectory() as tmp:
    t=topology();recovery.configure_hardware_fill_profile(Path(tmp),t)
    states=[a for a in t['assertions'] if a['probe']=='underglow_enabled']
@@ -93,4 +93,4 @@ class HardwareFillProfileTests(unittest.TestCase):
     self.assertTrue(all(a['minimum']==a['maximum'] for a in checks))
    executed=[a for a in t['assertions'] if a['probe']=='network_flight_commands_processed']
    self.assertEqual(len(executed),11)
-   self.assertTrue(all(a['minimum_gain']==1 and a['to_sample']==a['from_sample']+1 for a in executed))
+   self.assertTrue(all(a['minimum_gain']==1 and a['maximum_gain']==1 and a['to_sample']==a['from_sample']+1 for a in executed))

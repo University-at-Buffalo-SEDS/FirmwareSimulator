@@ -1,0 +1,487 @@
+{
+  "status": "reproduced; strict delivery profile failed; not qualified",
+  "image": "seds-firmware-simulator:gateway-p6-model-20261020",
+  "virtual_duration_ms": 120000,
+  "simulator_change": "MCP3564R differential P6 and internal temperature scan semantics corrected; MCU images and SDK unchanged",
+  "channels": [
+    "KG1000",
+    "KG50",
+    "VB_BATTERY",
+    "VB_CURRENT",
+    "VB_PRESSURE"
+  ],
+  "samples_10s": {
+    "gateway.can_rx_ring_drops": [
+      583,
+      1416,
+      2213,
+      2906,
+      3211,
+      3211,
+      3211,
+      3211,
+      3211,
+      3211,
+      3211,
+      3211
+    ],
+    "gateway.can_admission_fail": [
+      105,
+      105,
+      108,
+      112,
+      342,
+      588,
+      842,
+      1087,
+      1334,
+      1599,
+      1847,
+      2098
+    ],
+    "gateway.uart_tx_pending": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.uart_tx_exhausted": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.allocation_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.tlsf_live_bytes": [
+      47780,
+      47616,
+      47632,
+      47116,
+      46060,
+      46116,
+      46060,
+      46060,
+      46100,
+      46048,
+      45992,
+      45968
+    ],
+    "gateway.cached_transit_denied": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gateway.can_rejected_word0": [
+      55854163,
+      55854163,
+      1393623370,
+      55854163,
+      1393623370,
+      55854163,
+      55854163,
+      55854163,
+      55854163,
+      55854163,
+      55854163,
+      55854163
+    ],
+    "gateway.can_rejected_word2": [
+      2228257,
+      2228257,
+      3415147480,
+      2228228,
+      3415147484,
+      2621479,
+      2621478,
+      2621479,
+      2621478,
+      2621479,
+      2621479,
+      2621478
+    ],
+    "daq.loadcell_network_rows": [
+      2396,
+      4804,
+      7209,
+      9623,
+      12030,
+      14442,
+      16852,
+      19257,
+      21677,
+      24083,
+      26495,
+      28898
+    ],
+    "daq.kg50_network_rows": [
+      2354,
+      4655,
+      6956,
+      9258,
+      11558,
+      13859,
+      16161,
+      18462,
+      20764,
+      23064,
+      25369,
+      27675
+    ],
+    "daq.loadcell_network_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.kg50_network_failures": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.sd_write_errors": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "daq.sd_raw_batch_drops": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "delivery_windows": [
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        110,
+        240,
+        28710,
+        10000,
+        28470
+      ],
+      "passed": false,
+      "received": [
+        1248,
+        825,
+        0,
+        0,
+        0
+      ],
+      "start_ms": 20000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        80,
+        100,
+        38710,
+        10000,
+        38470
+      ],
+      "passed": false,
+      "received": [
+        1289,
+        775,
+        0,
+        0,
+        0
+      ],
+      "start_ms": 30000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        130,
+        160,
+        2560,
+        3590,
+        1470
+      ],
+      "passed": false,
+      "received": [
+        2223,
+        2085,
+        8,
+        7,
+        392
+      ],
+      "start_ms": 40000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        60,
+        60,
+        1020,
+        1030,
+        320
+      ],
+      "passed": false,
+      "received": [
+        2396,
+        2286,
+        10,
+        10,
+        452
+      ],
+      "start_ms": 50000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        60,
+        40,
+        1020,
+        1020,
+        270
+      ],
+      "passed": false,
+      "received": [
+        2388,
+        2278,
+        10,
+        10,
+        455
+      ],
+      "start_ms": 60000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        60,
+        60,
+        1030,
+        1030,
+        200
+      ],
+      "passed": false,
+      "received": [
+        2388,
+        2282,
+        10,
+        10,
+        458
+      ],
+      "start_ms": 70000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        60,
+        50,
+        1020,
+        1030,
+        210
+      ],
+      "passed": false,
+      "received": [
+        2404,
+        2285,
+        9,
+        9,
+        452
+      ],
+      "start_ms": 80000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        70,
+        40,
+        1010,
+        1020,
+        180
+      ],
+      "passed": false,
+      "received": [
+        2363,
+        2269,
+        10,
+        10,
+        456
+      ],
+      "start_ms": 90000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        40,
+        70,
+        1110,
+        2010,
+        290
+      ],
+      "passed": false,
+      "received": [
+        2393,
+        2280,
+        10,
+        9,
+        455
+      ],
+      "start_ms": 100000
+    },
+    {
+      "channels": [
+        "KG1000",
+        "KG50",
+        "VB_BATTERY",
+        "VB_CURRENT",
+        "VB_PRESSURE"
+      ],
+      "elapsed_ms": 10000,
+      "max_gap_ms": [
+        60,
+        70,
+        1120,
+        1130,
+        170
+      ],
+      "passed": false,
+      "received": [
+        2382,
+        2279,
+        10,
+        10,
+        456
+      ],
+      "start_ms": 110000
+    }
+  ]
+}

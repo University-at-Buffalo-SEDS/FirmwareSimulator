@@ -81,6 +81,12 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
     frequency: 170000000
     initialLimit: 0xFFFFFFFF
     IRQ -> nvic@28
+timer3: Timers.SedsStm32TriggerTimer @ sysbus 0x40000400
+    frequency: 170000000
+    initialLimit: 0xFFFF
+    IRQ -> nvic@29
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32TriggerTimer.cs
 timer6: Timers.STM32_Timer @ sysbus 0x40001000
     frequency: 170000000
     initialLimit: 0xFFFF

@@ -1,5 +1,172 @@
 # Qualification status
 
+## Current checkpoint (2026-10-25)
+
+The working tree in this repository contains the migrated ADC/DMA, bounded
+capture and source-aware delivery checks used by the Jupiter qualification.
+The native suite passes 119 tests. The Python suite runs 69 tests, with four
+existing platform/tool-dependent skips. Strict all-target Clippy and the manual
+Docker peripheral-test stage also pass. The seven active board repositories
+match the latest source-locked cohort; prior Jupiter edits remain on local
+preservation branches.
+
+The SDK `6980f9b` / GroundStation runtime `b7ffe71` cohort passes the startup,
+120-second network/source/DAQ pressure/raw/FC SD gates and GroundStation restart
+recovery. Its 600-second virtual-time soak is still running. Do not call that
+soak passed until the controller and all source/SD inspectors finish.
+
+GroundStation now contains a six-profile native three-radio reference using
+actual packed routers, Mesh and the production UART stream decoder. That is
+**not** the linked-MCU radio model: this simulator still uses a UART hub for
+radio links. Bounded shared-medium MCU execution with both GS and RRLS remains
+required before physical RF latency can be considered resolved. No LoRa airtime
+scheduler is enabled in the RFD firmware.
+
+## Earlier field-failure candidate (2026-10-21; historical evidence)
+
+Cohort13 passes the strict 120-second, seven-board real-firmware simulation with
+current GroundStation and SDK sources. The [qualification record](qualification/gateway-cohort13-qualification-2026-10-21.json)
+retains exact image/source hashes, every measured delivery window and receiver
+states. All gateway CAN-ring samples are zero. Minimum ten-second loadcell
+preservation is99.9585% /99.9568% of actual publications; maximum loadcell gaps are
+20 ms. Valve battery/current gaps are at most1,030/1,020 ms and pressure60 ms.
+All eleven sustained RF control rounds complete in50–110 ms, below the unchanged
+500 ms bound. Actual RF/PowerBoard/FC underglow values and FC non-actuating command
+execution are checked each interval; receipt logs alone cannot pass this gate.
+
+The deployment path is **Pi main Ethernet → UDP discovery + framed TCP → one
+gateway-side Pico-Fi → USART2 at1 Mbaud**. No GroundStation-side Pico or I²C hop is
+present. The profile rejects those legacy/bypassed paths. GroundStation's
+checked-in configuration and default both host discovery/TCP on the existing
+Ethernet interface. No source rate, CPU clock, ring capacity or failure limit was
+relaxed to obtain this result.
+
+SDK618 hosted tests,49 pressure cases in each packet store,eight no_std cases
+and strict Clippy pass. All seven macOS production factory images fit; the
+macOS backend passes356 tests (one existing ignored). The same frozen firmware and simulator image also pass the 600-second sustained
+gate. Its [complete evidence](qualification/gateway-cohort13-sustained-2026-10-21.json)
+shows zero CAN-ring drops, at least 99.9565% actual publication preservation in
+every window, loadcell gaps no longer than 30 ms, and 59 sustained RF rounds at
+40–100 ms. Including startup checks, managed receipts peak at 240 ms. Actual
+RF/PowerBoard/FC states and exactly-once FC probe execution pass throughout.
+A separate two-restart GroundStation/reconnection check is running.
+**That remaining gate blocks release.** Physical RFD interference/antenna effects,
+physical SD throughput and hardware timing remain outside simulator evidence.
+
+## Gateway hardware mismatch follow-up (2026-10-20; not qualified)
+
+The deployed gateway still drops DAQ CAN frames and intermittently loses valve
+sensor reports. The captured baseline and stricter simulator profile are described
+in [hardware fidelity](hardware-fidelity.md#gateway-field-regression-2026-10-20).
+The corrected ADC model now drives the actual P6 differential input, including
+settling and internal temperature channels. The 120-second baseline reproduces
+3,211 CAN-ring drops and initial valve-report gaps up to 38 seconds. Candidate1
+reduces CAN drops to 722 but still fails. Candidate2 eliminates CAN-ring drops in
+that run, but still fails DAQ publication and source-aware delivery checks.
+Candidate3 is diagnostic only: its 60-second execution was stretched to seven
+probe samples by runner warmup requirements. It is not qualification evidence;
+the controller now rejects that mismatch instead of assuming ten-second samples.
+
+Candidate4 accepts RF's GPS priority at runtime (retained delta:64 bytes) but
+still fails sustained CAN delivery. Candidate5 adds allocation-free unchanged
+address inspection and cheaper bounded scheduling hints. Its full120-second run
+has zero CAN-ring drops, zero allocator/panic faults and loadcell gaps no longer
+than90 ms. It still fails: two of ten source-aware windows fall just below99.5%
+(minimum99.4353%), and the unchanged DAQ image reports13 auxiliary publication
+refusals. [Raw candidate5 evidence](qualification/gateway-receive-candidate5-2026-10-20.json)
+and its [source-aware analysis](qualification/gateway-receive5-source-aware-2026-10-20.json)
+are retained. No assertion or source rate was relaxed to call this a pass.
+
+The next cohort builds all seven boards and current GroundStation dev with the
+same SDK candidate. Transparent relays retain address-advertisement forwarding;
+a dedicated regression caught and prevents suppressing those unchanged frames.
+A small hosted local-delivery microbenchmark regresses about3%; a noisy relay
+microbenchmark shows no statistically clear change. These are not evidence of a
+universal CPU speedup. Firmware phase timing and preservation remain the gates.
+
+All seven production macOS and simulator Linux factory images now fit with the
+same candidate. The first all-current hosted build exposed a Pico-Fi reconnect
+race in its existing end-to-end regression: a replacement peer could see its
+handshake reply before the old ready epoch was retired. GroundStation now
+publishes readiness and generation as one atomic value, retires the old epoch
+before replying, and filters old-generation receive frames. Both deterministic
+regressions and the original half-open-session test pass in the 351-test macOS
+backend suite (one existing test ignored). Cohort7's failed Linux test is retained;
+cohort8 reuses exactly those seven firmware builds and tests the backend repair
+before any simulated network execution. This is not yet sustained qualification.
+
+Cohort8 completes the all-current 120-second check and **fails**: 7,887 gateway
+CAN-ring drops; minimum source-aware loadcell delivery54.2114% and38.8118%;
+valve voltage/current do not reach the observer, and pressure's gap reaches
+118,830 ms. DAQ auxiliary publication refusals are zero throughout, with no
+allocator, panic or SD errors. Valve firmware continues accepting1 Hz voltage
+and current publications; gateway network admission failures stop growing after
+startup. This distinguishes the repaired DAQ admission issue from remaining
+forwarding/processing loss. The [raw capture](qualification/gateway-cohort8-capture-2026-10-21.json)
+and [strict analysis](qualification/gateway-cohort8-source-aware-2026-10-21.json)
+remain failed evidence.
+
+A separate bounded20 ms PC trace of the unchanged failing cohort samples
+1,825,632 gateway instructions (5.3% unmapped). Varint decoding accounts for11.4%
+of sampled instructions, Rust memcpy9.7%, compiled type lookup4.7%, with RTOS
+locking spread across several functions. These are instruction shares, not
+cycle-accurate CPU utilization or allocation ownership. Candidate9 tests a short
+varint success path and skips redundant optional dictionary hashing on known,
+bounded canonical transit. It has614 hosted tests,47 pressure tests in each
+store,7 hosted no_std tests and strict SDK lint passing; FC and gateway production
+images fit. All-node linked testing remains required; no rate, clock or queue
+limit is changed and no failed candidate is release-qualified.
+
+Candidate9's first complete delivery window preserves100% of both actual
+loadcell publications, with no CAN-ring drops in its first three samples;
+valve ACK20 ms and managed-variable updates110–180 ms. This remains partial
+run evidence. Three DAQ startup refusals remain: at323 ms the retained logical
+queue uses12,133 of12,288 bytes (TX7,646), with zero allocator-admission refusals
+and about96 KiB free. Candidate10 raises only DAQ's logical queue ceiling to
+16 KiB; the allocator pool, source cadence and zero-refusal gate are unchanged.
+
+A [negative-control RX regression](qualification/gateway-rx-fairness-regression-2026-10-21.json)
+also shows that admission fairness alone can retain a slow valve report forever
+while priority16 data keeps priority0 RX work from dispatching. Router and relay
+both fail before the repair. Bounded bulk RX fairness passes on both stores,
+keeps protected control first, preserves same-priority FIFO, and resets on clear.
+SDK616 hosted tests,47 pressure cases per store,7 no_std cases and strict lint
+pass. DAQ186 tests pass with the16 KiB ceiling. All-current candidate10, repeated
+starts/reconnects and the strict long soak still gate release.
+
+Candidate10's simulator FC image exceeds flash by116 bytes and never runs;
+its failed build record is retained. Candidate11 shares the identical ready-TX
+selector between queue-service APIs and replaces the RX cold-path iterator with
+an equivalent indexed scan. This saves400 bytes in the native FC image without
+changing queue capacities, flash layout, feature flags or dequeue eligibility.
+The private discovery test calls the shared selector with its previous all-work
+policy. SDK4.2.5 is reserved locally as the release candidate, not yet published.
+Candidate11 uses current dependency locks instead of the older comparison lock.
+
+Source-aware analysis now also fails on any auxiliary DAQ publication refusal,
+including a constant startup counter hidden behind otherwise perfect windows.
+Its new negative-control test reproduces that missing-report gate before the
+repair; mandatory firmware assertions already rejected those refused reports.
+
+A DAQ simulator-only first-refusal snapshot reuses its existing fault buffer to
+preserve the publication error, type, count, tick and16 network-memory counters.
+It distinguishes a soft budget from allocator refusal without adding production
+RAM, changing source rate, or weakening any publication-failure assertion.
+
+Gateway component counters show queue occupancy below its 16 KiB soft limit,
+while allocator admission refuses work and RF's higher-priority GPS definition
+remains unlearned. This does not support increasing the queue cap blindly. The
+next candidate decodes only changed schema definitions and prevents duplicate
+chunks from extending stalled transfers. Native tests and fitting images are
+necessary checks; sustained source preservation, repeatable startup, route
+recovery and a new long soak remain required before release.
+
+The source-aware report checks each ten-second receive window against actual
+DAQ publications (not a configured ADC cap), with >=99.5% delivery, <=500 ms
+loadcell gaps, <=3 s valve gaps and zero CAN-ring drops from boot. A per-channel
+nominal-rate diagnostic remains visible separately. Earlier release results
+below are retained evidence, not proof these field failures are fixed.
+
 ## SEDSnet 4.2.4 / simulator 0.4.14 (qualified and published, 2026-10-19)
 
 The [network record](qualification/sedsnet-4.2.4-network.json) documents the
@@ -1535,3 +1702,112 @@ Gateway physical CAN FIFO/ring loss remains zero in the preceding run, but
 6,273 CAN-to-network memory-admission failures accumulate by 32 seconds. These
 are explicit bounded shedding, not proof of loss-free throughput. Sustained
 command/telemetry and reconnect validation remains required before qualification.
+
+## 2026-10-20 physical-fill fidelity baseline
+
+The 120-second frozen seven-board run on Jupiter (`bay-1792539110287315432`)
+failed its continuous delivery gate: zero passing windows, KG1000 near 20 Hz and
+selected P6 KG50 absent. DAQ's KG50 publication count stayed at 79 after startup;
+there were no DAQ allocator failures. This run did not reproduce the field source
+rate, so it cannot qualify gateway throughput or clear the physical packet-loss
+issue. The old short-cadence gate is insufficient.
+
+A concrete peripheral-model defect was found: SCAN bits 9 (P6 differential) and
+12 (temperature) were discarded. Their responses fell back to MUX/CH0, suppressing
+P6 samples and delaying fast acquisition until the temperature timeout. The
+corrected model and strict main-Ethernet/discovery profile are under regression
+test. A repeat of the frozen baseline and then a longer soak remain required.
+No artificial loss percentage, source-rate reduction or CPU speed-up is used to
+force agreement. MCU, SDK and hosted-backend images remain frozen for comparison.
+
+
+## Continued latency and loadcell investigation (2026-10-21)
+
+Cohort11 passed all seven factory builds and 364 Linux backend tests (one
+existing test ignored), but failed the full 120-second linked run. Both loadcells
+preserved at least 99.79% of publications through 80 seconds, then deteriorated:
+the worst complete windows preserved 54.8816% and 30.3478%. CAN software drops
+rose from 53 at startup to 2,046, and the hardware FIFO also overflowed. DAQ
+publication, SD and allocator failure counters stayed zero. This is failed
+evidence, not a qualified release.
+
+Cohort12 tests smaller transient fragment metadata and a separately bounded
+fragment-insertion admission check. The regression fails on the old estimate;
+48 pressure tests pass in both stores, the SDK suite and strict Clippy pass,
+and all seven production images fit on macOS. SIM-only first-drop timing and
+worker-phase probes distinguish startup loss from later admission pressure.
+Its all-current Linux linked run must still pass before a longer soak.
+
+The hardware-fill profile now requires sustained radio control rounds at every
+ten-second sample boundary, including after discovery timeouts. Each round
+alternates underglow and sends a non-actuating FC EvaluationRelax command,
+requiring actual transmissions and destination receipts within 500 ms. Missing
+late rounds fail the run. The transport remains native Pi Ethernet UDP discovery
+and framed TCP to the one gateway-side Pico-Fi at 1 Mbaud; the AV-bay radio UART
+remains 115,200 baud. There is no second Pico or I2C hop in this qualification.
+Physical modem interference, antenna placement and RF range still require field
+validation; simulator receipt timing alone cannot qualify those effects.
+
+Cohort12 completes and also fails: 7,232 CAN software drops, with minimum
+loadcell preservation 52.3909% and 30.6823%; valve battery/current gaps reach
+4,250/3,550 ms. Admission refusals stop growing after startup, but the CPU remains
+saturated. First software loss occurs at 1,932 ms during network queue service.
+The [cohort11/12 analyses](qualification/gateway-cohort11-12-source-aware-2026-10-21.json)
+retain both failed runs. No source rate, MCU clock, allocator area or loss gate
+was relaxed.
+
+Cohort13 tests scoped routing-view reuse, direct reserved-type lookup and small
+scheduling-field reads. The [allocation negative control](qualification/gateway-metadata-allocation-regression-2026-10-21.json)
+records 576 allocations before the field-query fix and zero afterward. Its source
+passes 618 hosted SDK tests,49 pressure tests per store,8 no_std tests, strict
+Clippy, all seven macOS factory builds and356 macOS backend tests (one existing
+ignored). Linked qualification is pending. The radio gate additionally requires
+observed RF/PowerBoard/FC underglow states in each interval and FC command-execution
+counter progress; receipts alone cannot qualify a stopped application.
+
+### Current pressure/network investigation (2026-10-22)
+
+C20 proved an ADC read-set simulator bug: HAL writes ADEN then ADSTART and
+the model incorrectly cleared ADEN. TIM3 UPDATE configuration was correct.
+The exact old-model negative control fails; repaired actual Renode HAL start,
+500Hz sampling, DMA half/full/circular and explicit stop contracts pass.
+ADC, UART TX DMA and UART RX DMA contracts all pass in the C21 image.
+No physical PT firmware was changed for this model defect.
+
+C21 proves pressure capture/transport but fails19 DAQ auxiliary publications.
+C22 moves pressure CSV/pool/media work out of RX into bounded SD writer service;
+190 DAQ tests, ASan/UBSan ownership/retry and macOS factory pass.63 simulator
+Python tests require written/flushed pressure progress and recovered-card counts.
+C22 still fails startup: five CAN ring drops, eight DAQ auxiliary refusals,
+four valve pressure publish refusals. DAQ pressure accepted/written counts
+match with no SD drops. No short/long qualification is accepted.
+
+C23 reuses unchanged C22 firmware with extra read-only probes. Its run
+has zero first CAN drop tick (startup timing variation) but still fails
+network qualification. Final schema-chunk assembly refuses additional
+3418/largest3322 bytes with7856 free, then1538/largest1442 with5612 free.
+The safety reserve is unchanged. An isolated SDK prototype replaces
+repeated per-fragment B-tree metadata growth with one bounded descriptor
+allocation; it is not applied to the SDK repo or claimed as a fix yet.
+
+### Pressure reliable-delivery checkpoint, C25–C27
+
+C25 amplifier startup passes but P6 short fails PT admission/transit loss; its
+retained DAQ SD CSV independently fails sequence continuity. C26 uses Unordered
+reliable PT plus bounded source-admission retries and fails continued auxiliary
+publication refusals at startup; do not run/claim its long gate. A negative busy-SD
+handler test exposed ignored local-delivery errors in the SDK final-receipt path.
+The isolated candidate now withholds success receipts after failed Packet/Packed
+handlers and preserves retries; native heap/compact matrices and Clippy pass.
+C27 all-seven rebuild and strict startup/short/conditional-soak results are pending.
+The SD inspector verifies bounded out-of-order source sequences (including wrap)
+without accepting missing rows, duplicates, altered 4 ms timing or counter mismatch.
+No physical validation or release qualification is claimed.
+
+C28 read-only queue accounting confirms DAQ retains109–113 loadcell TX entries at
+failure; the byte sum agrees, with no queued schema/ACK/E2E records. It also fails
+five gateway startup ring drops. C29 tests a bounded backlog-aware DAQ wait policy
+instead of the unconditional1ms sleep, preserving all rates/limits/clocks and
+strict gates. Results pending. A read-only recovered C25 FC card passes formatting
+and counter reconciliation, with5840 raw/converted sensor vectors; network cohort
+qualification remains failed and no public release is accepted.

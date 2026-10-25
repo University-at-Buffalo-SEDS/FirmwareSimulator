@@ -15,7 +15,8 @@ REQUIRED_ZERO = ['gateway.allocation_failures', 'daq.loadcell_network_failures',
 def load_diagnostics(directory):
     directory = Path(directory)
     if not (directory / 'memory-probes.txt').is_file():
-        found = list(directory.glob('bay-*/memory-probes.txt'))
+        found = [path for path in directory.glob('bay-*/memory-probes.txt')
+                 if path.parent.name.removeprefix('bay-').isdigit()]
         if len(found) != 1:
             raise ValueError('Select exactly one completed bay capture')
         directory = found[0].parent

@@ -77,7 +77,7 @@ def configure_hardware_fill_profile(directory, topology):
                 node=node,probe='underglow_updates',from_sample=sample-1,to_sample=sample,minimum_gain=1))
         applied.append(dict(name=f'FC executed non-actuating RF command round {sample}',
             node='flight',probe='network_flight_commands_processed',
-            from_sample=sample-1,to_sample=sample,minimum_gain=1))
+            from_sample=sample-1,to_sample=sample,minimum_gain=1,maximum_gain=1))
 
 
 def configure_hardware_fill_probes(layout, board):
@@ -193,6 +193,54 @@ def configure_soak_storage(layout, board):
     for name, symbol, bounds in fields:
         if name not in existing:
             probes.append(dict(name=name, symbol=symbol, **bounds))
+
+def configure_pressure_sd_probes(layout, board):
+    """Opt-in current-image gate: no missing-symbol fallback or weakened counters."""
+    fields = {
+        "ValveBoard26": [("pressure_sd_captured", "g_pressure_sd_captured_samples", {}),
+            ("pressure_sd_capture_drops", "g_pressure_sd_capture_drops", {"maximum": 0}),
+            ("pressure_sd_late_half_drops", "g_pressure_sd_late_half_drops", {"maximum": 0}),
+            ("pressure_sd_published", "g_pressure_sd_published_samples", {}),
+            ("pressure_sd_publish_drops", "g_pressure_sd_publish_drops", {"maximum": 0})],
+        "DAQ-Board": [("pressure_sd_batches", "g_pressure_sd_batches_received", {}),
+            ("pressure_sd_invalid", "g_pressure_sd_invalid_batches", {"maximum": 0}),
+            ("pressure_sd_enqueued", "g_sd_pressure_records_enqueued", {}),
+            ("pressure_sd_written", "g_sd_pressure_records_written", {}),
+            ("pressure_sd_flushed", "g_sd_pressure_records_flushed", {}),
+            ("pressure_sd_dropped", "g_sd_pressure_records_dropped", {"maximum": 0})]
+    }.get(board, [])
+    probes=layout.setdefault("execution",{}).setdefault("memory_probes",[])
+    existing={p["name"] for p in probes}
+    if board == "ValveBoard26":
+        for name,address in [("adc3_cr",0x50000408),("adc3_cfgr",0x5000040c),("adc3_isr",0x50000400),
+                ("tim3_cr1",0x40000400),("tim3_cr2",0x40000404),("tim3_psc",0x40000428),("tim3_arr",0x4000042c),
+                ("dma1_ccr",0x40020008),("dma1_cndtr",0x4002000c),("dma1_cpar",0x40020010),("dmamux0",0x40020800)]:
+            if name not in existing:probes.append(dict(name=name,address=address))
+        for name in ["data_acq_pressure_init_fail_count","data_acq_pressure_read_fail_count"]:
+            if name not in existing:probes.append(dict(name=name,symbol=name,maximum=0))
+    if board in ("gateway-board","gateway-board26"):
+        for index,name in enumerate(("uart","can","network_queues","discovery","time","ota","wait")):
+            if "service_max_"+name not in existing:probes.append(dict(name="service_max_"+name,symbol="g_gateway_service_max_ms",byte_offset=4*index))
+    for name,symbol,bounds in fields:
+        if name not in existing:probes.append(dict(name=name,symbol=symbol,**bounds))
+
+def configure_pressure_sd_assertions(topology):
+    count=topology["sample_count"]
+    if count<2:raise ValueError("pressure SD gate needs at least two observations")
+    # Hardware-fill observations are ten seconds apart. After initial discovery,
+    # require the requested250Hz capture and transport, not mere nonzero activity.
+    if topology["virtual_time_ms"]//count != 10000:
+        raise ValueError("pressure SD gate requires exact ten-second observations")
+    assertions=topology.setdefault("assertions",[])
+    for sample in range(1,count):
+        for node,probe,gain in [("valve","pressure_sd_captured",2500),
+                ("valve","pressure_sd_published",2500),("daq","pressure_sd_enqueued",2500),
+                ("daq","pressure_sd_written",2500),
+                ("daq","pressure_sd_batches",625)]:
+            assertions.append(dict(name=f"250Hz PT SD {node}.{probe} round{sample}",node=node,probe=probe,
+                from_sample=sample-1,to_sample=sample,minimum_gain=gain-8,maximum_gain=gain+8))
+
+    assertions.append(dict(name="Pressure SD records reach a media flush",node="daq",probe="pressure_sd_flushed",sample=count-1,minimum=1))
 
 def configure_storage_assertions(topology, require_flush):
     """Allow the first batching interval, then require actual writes in every boot."""
@@ -387,7 +435,13 @@ def main():
         help='Run the captured P6/1-Mbaud Ethernet fill baseline with continuous rate/freshness checks; no injected outage')
     parser.add_argument('--fill-duration-ms',type=int,default=120000,
         help='hardware fill simulated duration; >=70000 and a multiple of10000 (600000 for ten minutes)')
+    parser.add_argument("--pressure-sd-logging",action="store_true",
+        help="Require current250Hz valve-to-DAQ SD capture, transport, storage and loss counters in the hardware-fill profile")
+    parser.add_argument("--pressure-sd-diagnostics",action="store_true",
+        help="Capture pressure ADC/TIM/DMA registers in any profile; does not qualify250Hz logging")
     args = parser.parse_args()
+    if args.pressure_sd_logging and not args.hardware_fill_profile:
+        parser.error("--pressure-sd-logging requires --hardware-fill-profile")
     if args.fill_duration_ms<70000 or args.fill_duration_ms%10000:
         parser.error('--fill-duration-ms requires >=70000 and exact ten-second windows')
     if args.fill_duration_ms!=120000 and not args.hardware_fill_profile:
@@ -422,10 +476,12 @@ def main():
         subdir = built_subdir(board)
         layout = load_layout(board, subdir)
         configure_allocator_probes(layout, board / "build" / subdir / "CMakeCache.txt")
-        if args.hardware_fill_profile:
+        if args.hardware_fill_profile or board.name == 'DAQ-Board':
             configure_hardware_fill_probes(layout,board.name)
-        if args.ultra_soak:
+        if args.ultra_soak or args.pressure_sd_logging:
             configure_soak_storage(layout, board.name)
+        if args.pressure_sd_logging or args.pressure_sd_diagnostics:
+            configure_pressure_sd_probes(layout, board.name)
         fault_repo = {"valve": "ValveBoard26", "actuator": "ActuatorBoard26"}.get(args.disconnect_node)
         if args.fault_elf and board.name == fault_repo:
             layout["artifacts"]["elf"] = args.fault_elf
@@ -455,6 +511,9 @@ def main():
             host.setdefault("env", {}).update(GS_BIND_ADDRESS="127.0.0.1:0",GS_HTTPS_BIND_ADDRESS="off")
         if args.hardware_fill_profile:
             configure_hardware_fill_profile(directory,topology)
+        if args.pressure_sd_logging:
+            configure_pressure_sd_assertions(topology)
+            configure_storage_assertions(topology,require_flush=True)
         topology_path.write_text(json.dumps(topology, indent=2))
         if args.disconnect_node:
             configure_fault(directory, args.disconnect_node)

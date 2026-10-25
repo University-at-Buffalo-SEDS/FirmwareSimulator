@@ -1,0 +1,561 @@
+{
+  "scope": "simulation only; seven real firmware images and GroundStation; physical RF interference and SD throughput excluded",
+  "status": "short passed; long soak pending",
+  "duration_ms": 120000,
+  "transport": "Pi main Ethernet UDP discovery + framed TCP to one gateway-side Pico-Fi, USART2 1000000 baud; no I2C or GS-side Pico",
+  "source_qualification": {
+    "progress.json": {
+      "phase": "passed",
+      "started_unix": 1792617364.530738,
+      "policy": "all seven firmware nodes and hosted backend use the same source-only SDK candidate; current GS dev plus delivery observer; no rate reduction or relaxed loss limits",
+      "source_manifest": {
+        "sdk_base": "13c74abf7f8194299cb60b4b31f994b2eaadd5ef",
+        "groundstation_base": "34a1fe18fb819d15b77ea875e4910d0e8315b6c1",
+        "runtime_image": "sha256:f7411549655b6b7d1997630e94f9a5ceace0edf0b8b796e9def04de7f9979878",
+        "archives": {
+          "receive-cohort13-sdk.tar.gz": "6dbefc9ea272da9dc4053db03ca8e13d0165ba81b29a7dc2cbadb45e6adfa75f",
+          "receive-cohort13-groundstation.tar.gz": "5ded49acd0a67e006483107be9f51f24d058b1e00fa3ae36d8b1974ae2ee7d55",
+          "receive-cohort13-diagnostics.tar.gz": "df58572aeb2123d7eef79510033788bf44b101e18b4ae1c698cff980ee74be13"
+        },
+        "candidate_change": "Ingress-local and dispatch-local validated routing views remove duplicate parsing without persistent validation cache; embedded reserved type lookup uses checked direct indexing. Allocation-free priority/reliable-mode queries retain current runtime schema behavior. Sustained ten-second RF underglow/FC-control receipt rounds <=500ms. Pi-hosted Ethernet discovery/TCP only; UART1M gateway, radio115200; no rates/clocks/pool area/loss thresholds changed."
+      },
+      "boards": {
+        "FlightComputer26": {
+          "seconds": 20.2,
+          "build_subdir": "Release",
+          "status": "passed"
+        },
+        "gateway-board": {
+          "seconds": 18.7,
+          "build_subdir": "Release_Script",
+          "status": "passed"
+        },
+        "DAQ-Board": {
+          "seconds": 29.3,
+          "build_subdir": "Release_Script",
+          "status": "passed"
+        },
+        "ActuatorBoard26": {
+          "seconds": 17.8,
+          "build_subdir": "Release_Script",
+          "status": "passed"
+        },
+        "ValveBoard26": {
+          "seconds": 17.9,
+          "build_subdir": "Release_Script",
+          "status": "passed"
+        },
+        "RFBoard26": {
+          "seconds": 18.9,
+          "build_subdir": "Release",
+          "status": "passed"
+        },
+        "PowerBoard26": {
+          "seconds": 18.1,
+          "build_subdir": "Release_Script",
+          "status": "passed"
+        }
+      },
+      "image": "seds-firmware-simulator:gateway-cohort13-20261021",
+      "image_id": "sha256:079fb7216bf244980ce366c3f4a0a55e426584ca2215789da695795c4748de76",
+      "finished_unix": 1792618871.0663822
+    },
+    "diagnostics/source-aware-delivery.json": {
+      "passed": true,
+      "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+      "minimum_delivery_percent": 99.5,
+      "warmup_ms": 20000,
+      "duration_ms": 120000,
+      "windows": [
+        {
+          "start_ms": 20000,
+          "produced": [
+            2400,
+            2309
+          ],
+          "received": [
+            2400,
+            2309,
+            10,
+            10,
+            484
+          ],
+          "max_gap_ms": [
+            10,
+            20,
+            1020,
+            1020,
+            50
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            240.0,
+            230.9
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 30000,
+          "produced": [
+            2400,
+            2312
+          ],
+          "received": [
+            2400,
+            2312,
+            10,
+            10,
+            482
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            60
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            240.0,
+            231.2
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 40000,
+          "produced": [
+            2400,
+            2308
+          ],
+          "received": [
+            2400,
+            2308,
+            10,
+            10,
+            486
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1010,
+            1010,
+            50
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            240.0,
+            230.8
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 50000,
+          "produced": [
+            2400,
+            2313
+          ],
+          "received": [
+            2400,
+            2313,
+            10,
+            10,
+            484
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            60
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            240.0,
+            231.3
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 60000,
+          "produced": [
+            2401,
+            2315
+          ],
+          "received": [
+            2402,
+            2314,
+            10,
+            10,
+            487
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1030,
+            1020,
+            40
+          ],
+          "delivery_percent": [
+            100.0416,
+            99.9568
+          ],
+          "source_hz": [
+            240.1,
+            231.5
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 70000,
+          "produced": [
+            2408,
+            2301
+          ],
+          "received": [
+            2408,
+            2301,
+            10,
+            10,
+            487
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            30
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            240.8,
+            230.1
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 80000,
+          "produced": [
+            2420,
+            2307
+          ],
+          "received": [
+            2420,
+            2307,
+            10,
+            10,
+            486
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1010,
+            1010,
+            60
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            242.0,
+            230.7
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 90000,
+          "produced": [
+            2410,
+            2300
+          ],
+          "received": [
+            2409,
+            2300,
+            10,
+            9,
+            488
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            40
+          ],
+          "delivery_percent": [
+            99.9585,
+            100.0
+          ],
+          "source_hz": [
+            241.0,
+            230.0
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 100000,
+          "produced": [
+            2422,
+            2301
+          ],
+          "received": [
+            2423,
+            2301,
+            9,
+            10,
+            486
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            50
+          ],
+          "delivery_percent": [
+            100.0413,
+            100.0
+          ],
+          "source_hz": [
+            242.2,
+            230.1
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        },
+        {
+          "start_ms": 110000,
+          "produced": [
+            2418,
+            2301
+          ],
+          "received": [
+            2418,
+            2301,
+            10,
+            10,
+            486
+          ],
+          "max_gap_ms": [
+            20,
+            20,
+            1020,
+            1020,
+            40
+          ],
+          "delivery_percent": [
+            100.0,
+            100.0
+          ],
+          "source_hz": [
+            241.8,
+            230.1
+          ],
+          "published_samples_preserved": true,
+          "freshness_passed": true,
+          "valve_rate_passed": true,
+          "passed": true,
+          "nominal_rate_diagnostic_passed": false
+        }
+      ],
+      "can_drops_stable_after_warmup": true,
+      "can_drop_free_entire_run": true,
+      "startup_can_drops": 0,
+      "final_can_drops": 0,
+      "zero_counters": {
+        "gateway.allocation_failures": true,
+        "daq.loadcell_network_failures": true,
+        "daq.kg50_network_failures": true,
+        "daq.analog_report_failures": true,
+        "daq.sd_write_errors": true,
+        "daq.sd_raw_batch_drops": true,
+        "rf.panics": true,
+        "rf.tlsf_failures": true,
+        "power.panics": true,
+        "power.tlsf_failures": true,
+        "flight.panics": true,
+        "flight.tlsf_failures": true,
+        "gateway.panics": true,
+        "gateway.tlsf_failures": true,
+        "actuator.panics": true,
+        "actuator.tlsf_failures": true,
+        "valve.panics": true,
+        "valve.tlsf_failures": true,
+        "daq.panics": true,
+        "daq.tlsf_failures": true,
+        "rf.can_fifo_overflow_fdcan1": true,
+        "rf.can_fifo_overflow_fdcan2": true,
+        "power.can_fifo_overflow_fdcan1": true,
+        "power.can_fifo_overflow_fdcan2": true,
+        "flight.can_fifo_overflow_fdcan1": true,
+        "gateway.can_fifo_overflow_fdcan1": true,
+        "gateway.can_fifo_overflow_fdcan2": true,
+        "actuator.can_fifo_overflow_fdcan1": true,
+        "actuator.can_fifo_overflow_fdcan2": true,
+        "valve.can_fifo_overflow_fdcan1": true,
+        "valve.can_fifo_overflow_fdcan2": true,
+        "daq.can_fifo_overflow_fdcan1": true
+      }
+    }
+  },
+  "radio": {
+    "sustained_rounds": 11,
+    "latency_ms": [
+      90,
+      80,
+      80,
+      110,
+      80,
+      50,
+      80,
+      90,
+      70,
+      70,
+      90
+    ],
+    "max_latency_ms": 110,
+    "all_rounds_received": true
+  },
+  "actual_receiver_states": {
+    "rf.underglow_enabled": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ],
+    "power.underglow_enabled": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ],
+    "flight.underglow_enabled": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ],
+    "flight.network_flight_commands_processed": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ]
+  },
+  "gateway_can_ring_drops": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "max_sensor_gap_ms": [
+    20,
+    20,
+    1030,
+    1020,
+    60
+  ],
+  "minimum_loadcell_preservation_percent": [
+    99.9585,
+    99.9568
+  ],
+  "unit_checks": {
+    "sdk_hosted": 618,
+    "memory_pressure_per_store": 49,
+    "no_std": 8,
+    "sdk_strict_clippy": true,
+    "mac_production_factory_images": 7,
+    "mac_backend": 356,
+    "simulator_python": 59
+  }
+}

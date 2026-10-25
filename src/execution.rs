@@ -41,6 +41,8 @@ pub struct OtaPowerCutReport {
 pub struct MemoryProbeReport {
     pub name: String,
     pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<u64>,
     pub byte_offset: u32,
     pub samples: Vec<u32>,
     pub minimum_observed: u32,
@@ -142,15 +144,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
             probe.byte_offset % 4 == 0,
             "memory probe offset must be word aligned"
         );
-        ensure!(
-            !probe.symbol.is_empty()
-                && probe
-                    .symbol
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
-            "invalid memory probe symbol {}",
-            probe.symbol
-        );
+        crate::layout::probe_address(&probe.symbol, probe.address, probe.byte_offset)?;
     }
     let renode = find_renode()?;
     let scratch = tempfile::tempdir().context("creating Renode scratch directory")?;
@@ -869,7 +863,14 @@ fn render_script(
             duration_ms as f64 / 1000.0
         ));
         for probe in &layout.execution.memory_probes {
-            if probe.byte_offset == 0 {
+            if let Some(address) = probe.address {
+                let expression = crate::layout::probe_address("", Some(address), probe.byte_offset)
+                    .expect("validated register address");
+                profile_script.push_str(&format!(
+                    "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord {}\n",
+                    probe.name, sample, expression
+                ));
+            } else if probe.byte_offset == 0 {
                 profile_script.push_str(&format!(
                 "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
                 probe.name, sample, probe.symbol
@@ -1275,6 +1276,7 @@ fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<Memory
         reports.push(MemoryProbeReport {
             name: probe.name.clone(),
             symbol: probe.symbol.clone(),
+            address: probe.address,
             byte_offset: probe.byte_offset,
             samples,
             minimum_observed,
@@ -1711,6 +1713,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            address: None,
             byte_offset: 0,
             minimum: None,
             maximum: None,
@@ -1776,6 +1779,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            address: None,
             byte_offset: 0,
             minimum: None,
             maximum: None,
@@ -1797,6 +1801,7 @@ mod tests {
         board.execution.memory_probes.push(MemoryProbe {
             name: "pool".into(),
             symbol: "pool_available".into(),
+            address: None,
             byte_offset: 0,
             minimum: None,
             maximum: None,

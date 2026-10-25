@@ -4,6 +4,7 @@ import argparse
 import csv
 import io
 import json
+import math
 from pathlib import Path
 import re
 import shutil
@@ -16,9 +17,14 @@ HEADER = ("timestamp_ms", "monotonic_ms", "sensor", "value", "raw_adc_code", "ra
 def inspect_csv(stream, name):
     header = False
     result = dict(file=name, records=0, raw_records=0, first_sequence=None, last_sequence=None,
-                  min_uptime_ticks=None, max_uptime_ticks=None, clock_frequencies_hz=[], sensors={})
+                  min_uptime_ticks=None, max_uptime_ticks=None, clock_frequencies_hz=[], sensors={},
+                  pressure_records=0, sensor_vector_records=0)
     frequencies = set()
     previous_raw = None
+    pressure_origin = None
+    pressure_seen = set()
+    pressure_floor = None
+    pressure_peak = None
     for number, row in enumerate(csv.reader(stream, strict=True), 1):
         if not row or row[0].startswith("#"):
             continue
@@ -43,7 +49,50 @@ def inspect_csv(stream, name):
             raise ValueError(f"{name}: invalid timestamp/source at record {number}")
         if fields["time_source"] == "local" and timestamp != monotonic:
             raise ValueError(f"{name}: local timestamp disagrees with uptime at record {number}")
-        if fields["raw_adc_code"]:
+        sensor = fields["sensor"]
+        if sensor in ("barometer_sample", "gyroscope_sample", "accelerometer_sample"):
+            raw = [float(v) for v in fields["raw_adc_code"].split()]
+            converted = [float(v) for v in fields["calibrated_value"].split()]
+            if len(raw) != 3 or len(converted) != 3 or not all(math.isfinite(v) for v in converted):
+                raise ValueError(f"{name}: invalid raw/converted sensor vector at record {number}")
+            limit = (0, 2**24-1) if sensor == "barometer_sample" else (-32768, 32767)
+            codes = raw[:2] if sensor == "barometer_sample" else raw
+            if not all(math.isfinite(v) and v.is_integer() and limit[0] <= v <= limit[1] for v in codes):
+                raise ValueError(f"{name}: invalid raw sensor codes at record {number}")
+            if sensor == "barometer_sample" and not math.isnan(raw[2]):
+                raise ValueError(f"{name}: derived altitude must have no raw code at record {number}")
+            if fields["raw_value"] != fields["raw_adc_code"] or fields["value"] != fields["calibrated_value"]:
+                raise ValueError(f"{name}: sensor vector columns disagree at record {number}")
+            result["sensor_vector_records"] += 1
+        elif sensor == "valve_pressure_psi":
+            code = int(fields["raw_adc_code"])
+            pressure = float(fields["calibrated_value"])
+            if not 0 <= code <= 4095 or not math.isfinite(pressure) or not 0 <= pressure <= 2000 or hz != 1000:
+                raise ValueError(f"{name}: invalid valve pressure sample at record {number}")
+            # Unordered reliable delivery may replay a delayed batch after newer
+            # samples. Verify completeness in source-clock order with bounded
+            # memory, while still rejecting duplicates, holes and altered ticks.
+            if pressure_origin is None:
+                pressure_origin = (sequence, ticks)
+            delta = ticks-pressure_origin[1]
+            if (sequence > 2**32-1 or delta % 4 or
+                    sequence != (pressure_origin[0]+delta//4) % 2**32):
+                raise ValueError(f"{name}: valve pressure sequence/time gap or duplicate at record {number}")
+            index = ticks//4
+            if index in pressure_seen or (pressure_floor is not None and index < pressure_floor):
+                raise ValueError(f"{name}: valve pressure sequence/time gap or duplicate at record {number}")
+            pressure_seen.add(index)
+            pressure_peak = index if pressure_peak is None else max(pressure_peak,index)
+            # 4096 samples cover 16.384 seconds, longer than bounded transport
+            # retries. Retire only complete prefixes; late repeats still fail.
+            while pressure_seen and pressure_peak-min(pressure_seen) >= 4096:
+                earliest = min(pressure_seen)
+                if pressure_floor is not None and earliest != pressure_floor:
+                    raise ValueError(f"{name}: valve pressure sequence/time gap or duplicate at record {number}")
+                pressure_seen.remove(earliest)
+                pressure_floor = earliest+1
+            result["pressure_records"] += 1
+        elif fields["raw_adc_code"]:
             int(fields["raw_adc_code"])
             if sequence > 2**32-1 or (previous_raw is not None and (sequence-previous_raw) % 2**32 != 1):
                 raise ValueError(f"{name}: raw record sequence gap/duplicate at record {number}")
@@ -61,11 +110,14 @@ def inspect_csv(stream, name):
         result["sensors"][fields["sensor"]] = result["sensors"].get(fields["sensor"], 0) + 1
     if not header:
         raise ValueError(f"{name}: no compatible CSV header")
+    if pressure_seen and ((pressure_floor is not None and min(pressure_seen) != pressure_floor) or
+            len(pressure_seen) != max(pressure_seen)-min(pressure_seen)+1):
+        raise ValueError(f"{name}: valve pressure sequence/time gap or duplicate at end of file")
     result["clock_frequencies_hz"] = sorted(frequencies)
     return result
 
 
-def expected_counts(capture, node):
+def expected_counts(capture, node, kind=None):
     lines = (capture/"memory-probes.txt").read_text().splitlines()
     points = {}
     for i, line in enumerate(lines[:-1]):
@@ -74,7 +126,11 @@ def expected_counts(capture, node):
             points.setdefault(tokens[2], {})[int(tokens[3])] = int(lines[i+1].strip(), 16)
     resets = sorted(set(int(x) for x in re.findall(r"SEDS_BAY_REBOOT " + re.escape(node) + r" (\d+)", (capture/"renode.log").read_text())))
     names = {"accepted": "sd_raw_records_accepted", "processed": "sd_raw_records_written", "flushed": "sd_raw_records_flushed"} if node == "daq" else {"accepted":"sd_accepted_records", "processed":"sd_processed_records", "flushed":"sd_flushed_records"}
-    if node == "daq" and "sd_raw_adc_drained" in points:
+    if kind == "pressure":
+        if node != "daq":
+            raise ValueError("pressure recording belongs to the DAQ SD card")
+        names = {"accepted":"pressure_sd_enqueued", "processed":"pressure_sd_written", "flushed":"pressure_sd_flushed"}
+    if kind != "pressure" and node == "daq" and "sd_raw_adc_drained" in points:
         names["acquired"] = "sd_raw_adc_drained"
     result = {}
     for label, name in names.items():
@@ -90,7 +146,7 @@ def expected_counts(capture, node):
 
 
 def reconcile(files, kind, expected, max_acquisition_pending_per_boot=None):
-    count = sum(f["raw_records" if kind == "raw" else "records"] for f in files)
+    count = sum(f[{"raw":"raw_records", "pressure":"pressure_records", "all":"records"}[kind]] for f in files)
     if count == 0:
         raise ValueError("no recorded data rows found")
     if expected and not (expected["flushed"] <= count <= expected["processed"] <= expected["accepted"]):
@@ -143,7 +199,7 @@ def main():
     parser.add_argument("--docker-image", help="run read-only mtools inside this simulator image")
     parser.add_argument("--capture", type=Path, help="retained bay capture containing counters and SD-image markers")
     parser.add_argument("--node", choices=["daq", "flight"], help="node to reconcile across explicit simulated reboots")
-    parser.add_argument("--kind", choices=["raw", "all"], help="record count to reconcile (defaults to raw for DAQ capture, all otherwise)")
+    parser.add_argument("--kind", choices=["raw", "pressure", "all"], help="record count to reconcile (defaults to raw for DAQ capture, all otherwise)")
     parser.add_argument("--max-acquisition-pending-per-boot", type=int,
                         help="require DAQ acquired/accepted counts to differ by at most this configured producer-batch size per boot")
     parser.add_argument("--output", type=Path, help="write the JSON summary here")
@@ -152,7 +208,7 @@ def main():
     if args.capture:
         if not args.node:
             parser.error("--capture requires --node")
-        expected = expected_counts(args.capture, args.node)
+        expected = expected_counts(args.capture, args.node, args.kind)
         if not args.image:
             markers = re.findall(r"SEDS_BAY_SD_IMAGE " + re.escape(args.node) + r" (\d+)", (args.capture/"renode.log").read_text())
             if not markers:

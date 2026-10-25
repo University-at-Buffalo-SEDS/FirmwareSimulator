@@ -57,7 +57,13 @@ namespace Antmicro.Renode.Peripherals.DMA
         {
             if(offset == 4)
             {
-                fallback.WriteDoubleWord(offset, value);
+                // Paced channels own their status/clear bits. Forward only
+                // fallback-owned channels: clearing an owned TE bit must not
+                // touch the eager DMA implementation or emit its tag warning.
+                var fallbackClear = value;
+                for(var i = 0; i < channels.Length; i++)
+                    if(channels[i].Paced) fallbackClear &= ~(15u << (4 * i));
+                if(fallbackClear != 0) fallback.WriteDoubleWord(offset, fallbackClear);
                 for(var i = 0; i < channels.Length; i++)
                 {
                     var clear = (value >> (4 * i)) & 15;
@@ -84,7 +90,9 @@ namespace Antmicro.Renode.Peripherals.DMA
                     var registerOffset = channel.Peripheral & 0x3ff;
                     var uartBase = channel.Peripheral - registerOffset;
                     channel.Receive = registerOffset == 0x24 && (value & 16) == 0;
-                    channel.Paced = (uartBase == Uart1Base || uartBase == Uart2Base)
+                    channel.PacedAdc = channel.Peripheral == Adc3Data
+                        && (value & ((1u << 14) | 16u)) == 0;
+                    channel.Paced = channel.PacedAdc || (uartBase == Uart1Base || uartBase == Uart2Base)
                         && (value & (1u << 14)) == 0
                         && (channel.Receive || (registerOffset == 0x28 && (value & 16) != 0));
                     channel.UartBase = uartBase;
@@ -96,7 +104,7 @@ namespace Antmicro.Renode.Peripherals.DMA
                         fallback.WriteDoubleWord(offset, value & ~1u);
                         if((value & 1) != 0 && !wasEnabled)
                         {
-                            if((value & 0x0f40) != 0 || channel.Count == 0)
+                            if((channel.PacedAdc ? (value & 0x0f00) != 0x0500 : (value & 0x0f40) != 0) || channel.Count == 0)
                             {
                                 channel.Flags |= 9; // transfer error
                                 channel.Control &= ~1u;
@@ -106,8 +114,8 @@ namespace Antmicro.Renode.Peripherals.DMA
                             channel.StartCount = channel.Count;
                             channel.CurrentMemory = channel.Memory;
                             var divisor = machine.GetSystemBus(this).ReadDoubleWord(channel.UartBase + 0x0c, this);
-                            channel.WireTicks = Math.Max(1ul, (ulong)divisor * 10);
-                            channel.Timer.Limit = channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1;
+                            channel.WireTicks = channel.PacedAdc ? AdcPeriodTicks() : Math.Max(1ul, (ulong)divisor * 10);
+                            channel.Timer.Limit = channel.PacedAdc ? channel.WireTicks : (channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1);
                             channel.Timer.Value = 0;
                             channel.Timer.Enabled = true;
                         }
@@ -123,6 +131,27 @@ namespace Antmicro.Renode.Peripherals.DMA
             var channel = channels[index];
             if(!channel.Paced || (channel.Control & 1) == 0) { channel.Timer.Enabled = false; return; }
             var bus = machine.GetSystemBus(this);
+            if(channel.PacedAdc)
+            {
+                // ADC3 is externally triggered by TIM3 TRGO. Its 16-bit DMA
+                // request occurs once per timer update, never as an eager copy
+                // of the entire circular buffer during HAL_ADC_Start_DMA.
+                channel.WireTicks = AdcPeriodTicks();
+                channel.Timer.Limit = channel.WireTicks;
+                var adcControl = bus.ReadDoubleWord(Adc3Data - 0x38, this);
+                var adcConfig = bus.ReadDoubleWord(Adc3Data - 0x34, this);
+                var timerControl = bus.ReadDoubleWord(Tim3Base, this);
+                var trigger = bus.ReadDoubleWord(Tim3Base + 4, this);
+                var adcRequest = bus.ReadDoubleWord(DmamuxBase + (uint)((muxChannelOffset + index) * 4), this) & 0x7f;
+                if(adcRequest != 37 || (timerControl & 1) == 0 || (trigger & 0x70) != 0x20
+                    || (adcControl & 5) != 5 || (adcConfig & 1) == 0 || (adcConfig & 0xc00) == 0
+                    || (adcConfig & 0x3e0) != 0x80)
+                    return;
+                bus.WriteWord(channel.CurrentMemory, (ushort)bus.ReadDoubleWord(Adc3Data, this), this);
+                if((channel.Control & 128) != 0) channel.CurrentMemory += 2;
+                CompleteElement(index);
+                return;
+            }
             var request = bus.ReadDoubleWord(DmamuxBase + (uint)((muxChannelOffset + index) * 4), this) & 0x7f;
             var expected = (channel.UartBase == Uart1Base ? 24u : 26u) + (channel.Receive ? 0u : 1u);
             var dmaEnable = channel.Receive ? 64u : 128u;
@@ -133,12 +162,17 @@ namespace Antmicro.Renode.Peripherals.DMA
                 channel.Timer.Limit = Math.Max(1ul, channel.WireTicks / 10);
                 return;
             }
-            channel.Timer.Limit = channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1;
+            channel.Timer.Limit = channel.PacedAdc ? channel.WireTicks : (channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1);
             if(channel.Receive)
                 bus.WriteByte(channel.CurrentMemory, bus.ReadByte(channel.Peripheral, this), this);
             else
                 bus.WriteByte(channel.Peripheral, bus.ReadByte(channel.CurrentMemory, this), this);
             if((channel.Control & 128) != 0) channel.CurrentMemory++;
+            CompleteElement(index);
+        }
+        private void CompleteElement(int index)
+        {
+            var channel = channels[index];
             channel.Count--;
             if(channel.Count == channel.StartCount / 2) channel.Flags |= 5;
             if(channel.Count == 0)
@@ -156,6 +190,12 @@ namespace Antmicro.Renode.Peripherals.DMA
                 }
             }
             UpdateInterrupt(index);
+        }
+        private ulong AdcPeriodTicks()
+        {
+            var bus = machine.GetSystemBus(this);
+            return Math.Max(1ul, ((ulong)(bus.ReadDoubleWord(Tim3Base + 0x28, this) & 0xffff) + 1)
+                * ((ulong)(bus.ReadDoubleWord(Tim3Base + 0x2c, this) & 0xffff) + 1));
         }
         public void OnGPIO(int number, bool value)
         {
@@ -191,7 +231,7 @@ namespace Antmicro.Renode.Peripherals.DMA
             {
                 c.Timer.Reset(); c.Timer.Enabled = false;
                 c.Control = c.Count = c.Peripheral = c.Memory = c.Flags = c.StartCount = c.CurrentMemory = 0;
-                c.Paced = c.FallbackIRQ = false;
+                c.Paced = c.PacedAdc = c.FallbackIRQ = false;
             }
             foreach(var output in outputs.Values) output.Set(false);
         }
@@ -201,11 +241,12 @@ namespace Antmicro.Renode.Peripherals.DMA
         private sealed class Channel
         {
             public uint Control, Count, Peripheral, Memory, Flags, StartCount, CurrentMemory;
-            public bool Paced, Receive, FallbackIRQ;
+            public bool Paced, PacedAdc, Receive, FallbackIRQ;
             public uint UartBase;
             public LimitTimer Timer;
             public ulong WireTicks;
         }
+        private const uint Adc3Data = 0x50000440, Tim3Base = 0x40000400;
         private const uint Uart1Base = 0x40013800, Uart2Base = 0x40004400, DmamuxBase = 0x40020800;
         private readonly int muxChannelOffset;
         private readonly IMachine machine;

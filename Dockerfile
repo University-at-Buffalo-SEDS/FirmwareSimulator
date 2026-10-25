@@ -39,6 +39,13 @@ RUN dotnet /ltc-check/Ltc2990.dll
 COPY renode/peripherals/SedsStm32Sdmmc.cs renode/peripherals/SedsStm32Sdmmc.cs
 COPY tests/sdmmc tests/sdmmc
 RUN dotnet run --project tests/sdmmc/Sdmmc.csproj -c Release
+COPY renode/peripherals/SedsStm32Dma.cs renode/peripherals/SedsStm32Dma.cs
+COPY tests/adc-dma tests/adc-dma
+RUN dotnet run --project tests/adc-dma/AdcDma.csproj -c Release
+
+COPY renode/peripherals/SedsStm32Adc.cs renode/peripherals/SedsStm32Adc.cs
+COPY tests/adc-registers tests/adc-registers
+RUN dotnet run --project tests/adc-registers/AdcRegisters.csproj -c Release
 
 FROM rust:1.98-bookworm AS builder
 WORKDIR /src

@@ -127,6 +127,30 @@ class FillDeliveryReportTests(unittest.TestCase):
                                                                       'SEDS_BAY_PROBE daq kg50_network_rows 6'))
             with self.assertRaises(ValueError): report.load_diagnostics(directory)
 
+    def test_only_completed_capture_is_selected_when_live_capture_is_retained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / 'bay-123'
+            live = root / 'bay-live-active'
+            for directory in [completed, live]:
+                directory.mkdir()
+                (directory / 'memory-probes.txt').write_text('SEDS_BAY_PROBE gateway value 0\n0x7\n')
+                (directory / 'groundstation-host.log').write_text('')
+            result = report.load_diagnostics(root)
+            self.assertEqual(result['samples_10s'], {'gateway.value': [7]})
+            (root / 'bay-456').mkdir()
+            (root / 'bay-456/memory-probes.txt').write_text('')
+            with self.assertRaises(ValueError):
+                report.load_diagnostics(root)
+
+    def test_live_only_capture_cannot_be_mistaken_for_a_completed_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            live = Path(tmp) / 'bay-live-active'
+            live.mkdir()
+            (live / 'memory-probes.txt').write_text('SEDS_BAY_PROBE gateway value 0\n0x7\n')
+            with self.assertRaises(ValueError):
+                report.load_diagnostics(tmp)
+
     def test_qualification_rejects_unequal_execution_and_probe_duration(self):
         with self.assertRaisesRegex(ValueError, 'cadence'):
             report.analyze(fixture(), expected_duration_ms=110000)

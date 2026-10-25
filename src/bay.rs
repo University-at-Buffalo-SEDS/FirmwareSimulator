@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
     fs::OpenOptions,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     os::fd::AsRawFd,
     os::unix::net::{UnixListener, UnixStream},
     os::unix::process::CommandExt,
@@ -38,6 +38,33 @@ fn terminate_simulator(child: &mut Child) {
     let _ = child.kill();
 }
 
+fn render_checkpoint_registers(node: &str, sample: usize) -> String {
+    let mut script = String::new();
+    for register in 0..16 {
+        script += &format!(
+            "echo \"SEDS_CHECKPOINT {sample} {} R{register}\"\ncpu GetRegister {register}\n",
+            safe(node)
+        );
+    }
+    for (name, address) in [
+        ("ICSR", 0xe000_ed04u32),
+        ("CFSR", 0xe000_ed28),
+        ("HFSR", 0xe000_ed2c),
+    ] {
+        script += &format!(
+            "echo \"SEDS_CHECKPOINT {sample} {} {name}\"\nsysbus ReadDoubleWord 0x{address:08x}\n",
+            safe(node)
+        );
+    }
+    script
+}
+
+fn execution_tail(text: &str, count: usize) -> String {
+    let mut lines = text.lines().rev().take(count).collect::<Vec<_>>();
+    lines.reverse();
+    lines.join("\n")
+}
+
 fn console_execution_failed(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     lower.contains("there was an error executing command")
@@ -45,6 +72,28 @@ fn console_execution_failed(line: &str) -> bool {
         || lower.contains("parameters did not match")
         || lower.contains("seds_iwdg_reset")
         || lower.contains("fatal error")
+        || unmapped_cpu_ram_access(&lower)
+}
+
+// Renode's default bus returns zero for unmapped memory instead of raising the
+// physical CPU's bus fault. Continuing a corrupt SRAM copy can generate millions
+// of warnings and make a failed guest look like a slow, healthy simulation.
+// Leave missing MMIO diagnostics and explicit host probes alone.
+fn unmapped_cpu_ram_access(line: &str) -> bool {
+    if !line.contains("[cpu:") || !line.contains("non existing peripheral at 0x") {
+        return false;
+    }
+    let Some((_, address)) = line.split_once("non existing peripheral at 0x") else {
+        return false;
+    };
+    let hex = address
+        .split(|ch: char| !ch.is_ascii_hexdigit())
+        .next()
+        .unwrap_or("");
+    u32::from_str_radix(hex, 16).is_ok_and(|address| {
+        (0x2000_0000..0x2200_0000).contains(&address)
+            || (0x3000_0000..0x3200_0000).contains(&address)
+    })
 }
 
 fn release_host_pty_exclusive(guard: &fs::File) -> Result<()> {
@@ -67,6 +116,10 @@ pub struct BayTopology {
     pub virtual_time_ms: u64,
     #[serde(default = "default_sample_count")]
     pub sample_count: usize,
+    /// Optional interval index for the bounded guest PC trace. By default it
+    /// follows the first checkpoint; later indices can sample a warmed system.
+    #[serde(default)]
+    pub trace_sample: Option<usize>,
     /// Enforce each board layout's end-to-end memory-drop limit. Short linked
     /// functional runs can disable this because allocator availability is
     /// intentionally bursty; minimum and maximum bounds remain enforced.
@@ -1045,6 +1098,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         topology.sample_count as u64 <= topology.virtual_time_ms,
         "bay sample_count cannot exceed virtual_time_ms"
     );
+    select_profile_interval(topology.sample_count, topology.trace_sample)?;
     for (index, node) in topology.nodes.iter().enumerate() {
         ensure!(
             !topology.nodes[..index]
@@ -1132,9 +1186,16 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
     // Probe records must not share a stream with asynchronous device logs.
-    let probe_path = scratch.path().join("memory-probes.txt");
+    let diagnostics_root = env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR").map(PathBuf::from);
+    let live_directory = crate::bounded_diagnostics::live_directory(diagnostics_root.as_deref())
+        .context("creating live bay diagnostics")?;
+    let probe_path = live_directory.as_ref().map_or_else(
+        || scratch.path().join("memory-probes.txt"),
+        |directory| directory.join("memory-probes.txt"),
+    );
     fs::write(&probe_path, "").context("creating bay probe capture")?;
     let mut script = String::new();
+    let mut boot_captures = Vec::new();
     let mut node_layouts = Vec::new();
     let mut node_reset_vectors = BTreeMap::new();
     let mut host_serial_paths = BTreeMap::new();
@@ -1316,9 +1377,19 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let configured_platform =
             crate::execution::materialize_platform(&layout, &root, &node_scratch)?;
         let marker = format!("SEDS_NODE_BOOT_{}", safe(&node.name));
+        let boot_path = probe_path
+            .parent()
+            .expect("probe directory")
+            .join(format!("boot-{}.marker", safe(&node.name)));
+        let boot_python = format!(
+            "with open({}, 'w') as f: f.write({} + chr(10))",
+            serde_json::to_string(&boot_path.to_string_lossy())?,
+            serde_json::to_string(&marker)?,
+        );
+        boot_captures.push((boot_path, marker.clone()));
         let board_initialization = crate::execution::render_board_initialization_script(&layout);
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"{}\")'\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` {}\n",
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
@@ -1335,7 +1406,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             firmware_pc,
             firmware_vtor,
             layout.execution.boot_success_symbol,
-            marker
+            serde_json::to_string(&boot_python)?
         );
         for link in &topology.links {
             for endpoint in link
@@ -1391,7 +1462,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .filter(|(_, layout)| layout.execution.trace)
         .map(|(name, _)| name.as_str())
         .collect();
-    let profile_sample = usize::from(topology.sample_count > 1);
+    let profile_sample = select_profile_interval(topology.sample_count, topology.trace_sample)?;
     for sample in 0..topology.sample_count {
         let duration_ms = base_ms + u64::from((sample as u64) < remainder_ms);
         if sample == profile_sample && !profiled_nodes.is_empty() {
@@ -1401,6 +1472,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         for (node_name, layout) in &node_layouts {
             script += &format!("mach set \"{}\"\n", safe(node_name));
+            if live_directory.is_some() {
+                script += &render_checkpoint_registers(node_name, sample);
+            }
             for probe in &layout.execution.memory_probes {
                 script += &render_probe_capture(
                     &probe_path,
@@ -1409,6 +1483,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     sample,
                     &probe.symbol,
                     probe.byte_offset,
+                    probe.address,
                 )?;
             }
         }
@@ -1512,6 +1587,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     script += "echo \"SEDS_BAY_COMPLETE\"\n";
     let script_path = scratch.path().join("bay.resc");
     fs::write(&script_path, script)?;
+    if let Some(directory) = &live_directory {
+        fs::copy(&script_path, directory.join("bay.resc"))?;
+        println!(
+            "[SIM] Live bay diagnostics retained in {}",
+            directory.display()
+        );
+    }
     let renode = env::var_os("RENODE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/bin/renode"));
@@ -1529,6 +1611,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         .args(["--disable-xwt", "--console", "--execute"])
         .arg(format!("include @{}; quit", script_path.display()))
         .env("SEDS_SIM_PROBE_CAPTURE", &probe_path)
+        .env(
+            "SEDS_SIM_BOOT_CAPTURE_DIR",
+            probe_path.parent().expect("probe directory"),
+        )
         // Renode's redirected console input handler must not observe EOF during
         // a long run. Child::wait closes an internally owned stdin handle, so
         // take and retain this private pipe below until emulation completes.
@@ -1542,12 +1628,122 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let bridge_stop = Arc::new(AtomicBool::new(false));
     let mut host_children = Vec::new();
     let mut host_pty_guards = BTreeMap::new();
+    let stdout = child.stdout.take().context("capturing Renode stdout")?;
+    let stderr = child.stderr.take().context("capturing Renode stderr")?;
+    let progress_sample_path = sample_path.clone();
+    let stderr_failure_tx = console_failure_tx.clone();
+    let stdout_failure_tx = console_failure_tx.clone();
+    let stdout_bridge_stop = bridge_stop.clone();
+    let mut stdout_log = live_directory
+        .as_ref()
+        .map(|directory| {
+            crate::bounded_diagnostics::RotatingLog::create(directory.join("renode.stdout.log"))
+        })
+        .transpose()?;
+    let mut stderr_log = live_directory
+        .as_ref()
+        .map(|directory| {
+            crate::bounded_diagnostics::RotatingLog::create(directory.join("renode.stderr.log"))
+        })
+        .transpose()?;
+    let boot_markers: Vec<String> = topology
+        .nodes
+        .iter()
+        .map(|node| format!("SEDS_NODE_BOOT_{}", safe(&node.name)))
+        .collect();
+    let stdout_boot_markers = boot_markers.clone();
+    let stdout_reader = thread::spawn(move || -> Result<String> {
+        let result = (|| -> Result<String> {
+            let mut captured =
+                crate::bounded_diagnostics::Capture::with_markers(stdout_boot_markers);
+            let mut reader = BufReader::new(stdout);
+            while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
+                if let Some(log) = &mut stdout_log {
+                    log.line(
+                        &line,
+                        line.starts_with("SEDS_BAY_SAMPLE_DONE ") || line == "SEDS_BAY_COMPLETE",
+                    )?;
+                }
+                if console_execution_failed(&line) {
+                    let _ = stdout_failure_tx.send(line.clone());
+                }
+                if line.trim() == "SEDS_BAY_COMPLETE" {
+                    // Renode closes its PTYs when the script exits. Stop the
+                    // simulated cable first; that expected close is not a live
+                    // transport failure. Probe/host validation still runs below.
+                    stdout_bridge_stop.store(true, Ordering::Release);
+                }
+                if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
+                    println!("[SIM] network sample {progress} complete");
+                    if let Some(sample) = progress.split_whitespace().next() {
+                        fs::write(&progress_sample_path, format!("{sample}\n"))
+                            .context("updating linked-bay sample marker")?;
+                    }
+                }
+                captured.push(&line);
+            }
+            if let Some(log) = &mut stdout_log {
+                log.flush()?;
+            }
+            Ok(captured.finish())
+        })();
+        if let Err(error) = &result {
+            let _ = stdout_failure_tx.send(format!("stdout diagnostic capture failed: {error}"));
+        }
+        result
+    });
+    let stderr_reader = thread::spawn(move || -> Result<String> {
+        let result = (|| -> Result<String> {
+            let mut captured = crate::bounded_diagnostics::Capture::with_markers(boot_markers);
+            let mut reader = BufReader::new(stderr);
+            while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
+                if let Some(log) = &mut stderr_log {
+                    log.line(&line, false)?;
+                }
+                if console_execution_failed(&line) {
+                    let _ = stderr_failure_tx.send(line.clone());
+                }
+                captured.push(&line);
+            }
+            if let Some(log) = &mut stderr_log {
+                log.flush()?;
+            }
+            Ok(captured.finish())
+        })();
+        if let Err(error) = &result {
+            let _ = stderr_failure_tx.send(format!("stderr diagnostic capture failed: {error}"));
+        }
+        result
+    });
     if !topology.host_nodes.is_empty() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
         while renode_pty_paths.iter().any(|path| !path.exists())
             && std::time::Instant::now() < deadline
         {
+            if child.try_wait()?.is_some() || console_failure_rx.try_recv().is_ok() {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        if let Some(path) = renode_pty_paths.iter().find(|path| !path.exists()) {
+            terminate_simulator(&mut child);
+            let _ = child.wait();
+            let stdout = stdout_reader
+                .join()
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let stderr = stderr_reader
+                .join()
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            bail!(
+                "Renode did not create host UART PTY {}; console: {}\n{}",
+                path.display(),
+                execution_tail(&stdout, 30),
+                execution_tail(&stderr, 30)
+            );
         }
         for path in &renode_pty_paths {
             ensure!(
@@ -1647,48 +1843,6 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             host_children.push(child);
         }
     }
-    let stdout = child.stdout.take().context("capturing Renode stdout")?;
-    let stderr = child.stderr.take().context("capturing Renode stderr")?;
-    let progress_sample_path = sample_path.clone();
-    let stderr_failure_tx = console_failure_tx.clone();
-    let stdout_bridge_stop = bridge_stop.clone();
-    let stdout_reader = thread::spawn(move || -> Result<String> {
-        let mut captured = String::new();
-        for line in BufReader::new(stdout).lines() {
-            let line = line?;
-            if console_execution_failed(&line) {
-                let _ = console_failure_tx.send(line.clone());
-            }
-            if line.trim() == "SEDS_BAY_COMPLETE" {
-                // Renode closes its PTYs when the script exits. Stop the
-                // simulated cable first; that expected close is not a live
-                // transport failure. Probe/host validation still runs below.
-                stdout_bridge_stop.store(true, Ordering::Release);
-            }
-            if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
-                println!("[SIM] network sample {progress} complete");
-                if let Some(sample) = progress.split_whitespace().next() {
-                    fs::write(&progress_sample_path, format!("{sample}\n"))
-                        .context("updating linked-bay sample marker")?;
-                }
-            }
-            captured.push_str(&line);
-            captured.push('\n');
-        }
-        Ok(captured)
-    });
-    let stderr_reader = thread::spawn(move || -> Result<String> {
-        let mut captured = String::new();
-        for line in BufReader::new(stderr).lines() {
-            let line = line?;
-            if console_execution_failed(&line) {
-                let _ = stderr_failure_tx.send(line.clone());
-            }
-            captured.push_str(&line);
-            captured.push('\n');
-        }
-        Ok(captured)
-    });
     let mut completed_host_reboots = BTreeSet::new();
     let status = loop {
         if let Ok(error) = console_failure_rx.try_recv() {
@@ -1813,7 +1967,28 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let stderr = stderr_reader
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stderr reader panicked"))??;
-    let combined = format!("{stdout}{stderr}");
+    let mut combined = format!("{stdout}{stderr}");
+    // Only the CPU hook creates these records. Never infer boot success from
+    // later telemetry or synthesize a marker when a hook was not observed.
+    for (path, marker) in boot_captures {
+        match fs::File::open(&path) {
+            Ok(file) => {
+                let mut record = String::new();
+                std::io::Read::read_to_string(
+                    &mut std::io::Read::take(file, marker.len() as u64 + 2),
+                    &mut record,
+                )?;
+                ensure!(
+                    record == format!("{marker}\n"),
+                    "invalid boot capture for {marker}"
+                );
+                combined.push('\n');
+                combined.push_str(&record);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("reading CPU boot capture"),
+        }
+    }
     if let Some(directory) = env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -2459,6 +2634,7 @@ fn can_fifo_model_probes(layout: &BoardLayout) -> Vec<crate::layout::MemoryProbe
         .map(|controller| crate::layout::MemoryProbe {
             name: format!("can_fifo_overflow_{controller}"),
             symbol: (*controller).into(),
+            address: None,
             byte_offset: 0,
             minimum: None,
             maximum: Some(0),
@@ -2493,18 +2669,19 @@ fn render_probe_capture(
     sample: usize,
     symbol: &str,
     byte_offset: u32,
+    address: Option<u64>,
 ) -> Result<String> {
     ensure!(
         byte_offset.is_multiple_of(4),
         "memory probe offset must be word aligned"
     );
+    let expression = crate::layout::probe_address(symbol, address, byte_offset)?;
     let marker = format!("SEDS_BAY_PROBE {} {probe} {sample}", safe(node));
     let python = format!(
-        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {})) + chr(10))",
+        "with open({}, 'a') as f: f.write({} + chr(10) + ('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord({})) + chr(10))",
         serde_json::to_string(&path.to_string_lossy())?,
         serde_json::to_string(&marker)?,
-        serde_json::to_string(symbol)?,
-        byte_offset,
+        expression,
     );
     Ok(format!("python {}\n", serde_json::to_string(&python)?))
 }
@@ -2527,6 +2704,13 @@ fn validate_probe_indices(indexed: &[(usize, u32)], sample_count: usize) -> Resu
 /// Trace only a short steady-state window. Stack tracing cannot follow every
 /// RTOS context switch and can grow huge synthetic call stacks; flat binary PCs
 /// have a fixed cost per guest instruction and are aggregated offline.
+fn select_profile_interval(sample_count: usize, requested: Option<usize>) -> Result<usize> {
+    ensure!(sample_count != 0, "profiling requires a nonzero sample count");
+    let interval = requested.unwrap_or(usize::from(sample_count > 1));
+    ensure!(interval < sample_count, "trace_sample must be less than sample_count");
+    Ok(interval)
+}
+
 fn render_cpu_profile_step(directory: &Path, nodes: &[&str], duration_ms: u64) -> Result<String> {
     let capture_ms = duration_ms.min(20);
     let mut script = String::new();
@@ -2690,6 +2874,7 @@ fn parse_memory_profiles(
         reports.push(MemoryProbeReport {
             name: probe.name.clone(),
             symbol: probe.symbol.clone(),
+            address: probe.address,
             byte_offset: probe.byte_offset,
             samples,
             minimum_observed,
@@ -2874,6 +3059,16 @@ mod pico_fi_tests {
     }
 
     #[test]
+    fn guest_cpu_profile_can_target_a_warm_interval_without_changing_defaults() {
+        assert_eq!(select_profile_interval(1, None).unwrap(), 0);
+        assert_eq!(select_profile_interval(12, None).unwrap(), 1);
+        assert_eq!(select_profile_interval(12, Some(6)).unwrap(), 6);
+        assert_eq!(select_profile_interval(12, Some(11)).unwrap(), 11);
+        assert!(select_profile_interval(12, Some(12)).is_err());
+        assert!(select_profile_interval(0, None).is_err());
+    }
+
+    #[test]
     fn guest_cpu_trace_is_bounded_and_preserves_run_duration() {
         for duration in [1u64, 20, 21, 600_000] {
             let script =
@@ -2935,6 +3130,7 @@ mod pico_fi_tests {
             2,
             "g_stack",
             508,
+            None,
         )
         .unwrap();
         assert!(command.contains(" + 508"));
@@ -2945,16 +3141,24 @@ mod pico_fi_tests {
             "stack",
             2,
             "g_stack",
-            3
+            3,
+            None,
         )
         .is_err());
     }
 
     #[test]
     fn probe_capture_uses_a_private_file_and_never_the_console() {
-        let command =
-            render_probe_capture(Path::new("/tmp/probes.txt"), "rf", "pool", 2, "g_pool", 0)
-                .unwrap();
+        let command = render_probe_capture(
+            Path::new("/tmp/probes.txt"),
+            "rf",
+            "pool",
+            2,
+            "g_pool",
+            0,
+            None,
+        )
+        .unwrap();
         assert!(command.starts_with("python "));
         assert!(command.contains("with open("));
         assert!(command.contains("ReadDoubleWord"));
@@ -2964,6 +3168,51 @@ mod pico_fi_tests {
         assert_eq!(command.lines().count(), 1);
     }
 
+    #[test]
+    fn physical_register_probes_read_without_writes_or_fake_firmware_symbols() {
+        let command = render_probe_capture(
+            Path::new("/tmp/probes.txt"),
+            "valve",
+            "adc_cr",
+            1,
+            "",
+            0,
+            Some(0x50000408),
+        )
+        .unwrap();
+        assert!(command.contains("ReadDoubleWord(0x50000408)"));
+        assert!(!command.contains("WriteDoubleWord"));
+        assert!(!command.contains("GetSymbolAddress"));
+        let alias = render_probe_capture(
+            Path::new("/tmp/probes.txt"),
+            "valve",
+            "init_fail",
+            1,
+            "data_acq_pressure_init_fail_count.lto_priv.0",
+            0,
+            None,
+        )
+        .unwrap();
+        assert!(alias.contains("data_acq_pressure_init_fail_count.lto_priv.0"));
+        assert!(!alias.contains("WriteDoubleWord"));
+        for (symbol, address, offset) in [
+            ("fake", Some(0x50000408), 0),
+            ("", Some(0x50000409), 0),
+            ("", Some(0xfffffffc), 4),
+            ("", None, 0),
+        ] {
+            assert!(render_probe_capture(
+                Path::new("/tmp/probes.txt"),
+                "valve",
+                "adc_cr",
+                1,
+                symbol,
+                offset,
+                address
+            )
+            .is_err());
+        }
+    }
     #[test]
     fn missing_duplicate_and_out_of_range_probe_indices_fail_closed() {
         assert!(validate_probe_indices(&[(0, 1), (1, 2)], 2).is_ok());
@@ -3405,6 +3654,20 @@ mod pico_fi_tests {
     }
 
     #[test]
+    fn unmapped_cpu_sram_fails_without_hiding_missing_mmio_or_host_probes() {
+        for address in ["20033000", "21f7a988", "30033000"] {
+            assert!(console_execution_failed(&format!(
+                "[WARNING] flight/sysbus: [cpu: 0x8044D16] WriteByte to non existing peripheral at 0x{address}, value 0x0.")));
+        }
+        for line in [
+            "[WARNING] flight/sysbus: [cpu: 0x8044D16] WriteByte to non existing peripheral at 0x40012300, value 0x0.",
+            "[WARNING] flight/sysbus: ReadDoubleWord from non existing peripheral at 0x21F7A988.",
+            "[WARNING] flight/sysbus: [cpu: 0x8044D16] ReadByte from non existing peripheral at 0x22000000.",
+            "[WARNING] flight/sysbus: [cpu: 0x8044D16] ReadByte from non existing peripheral at 0xnotanaddress.",
+        ] { assert!(!console_execution_failed(line), "{line}"); }
+    }
+
+    #[test]
     fn console_stdin_guard_prevents_eof_during_long_emulation() {
         let mut child = Command::new("sh")
             .args(["-c", "read _line"])
@@ -3731,5 +3994,20 @@ mod pico_fi_tests {
             .expect("runtime descendant kept the console open")
             .unwrap();
         reader.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_diagnostic_tests {
+    #[test]
+    fn checkpoint_register_reads_do_not_mutate_cpu_or_use_final_parser_markers() {
+        let script = super::render_checkpoint_registers("rf", 2);
+        assert_eq!(script.matches("cpu GetRegister ").count(), 16);
+        assert_eq!(script.matches("sysbus ReadDoubleWord ").count(), 3);
+        assert!(script.contains("SEDS_CHECKPOINT 2 rf R15"));
+        assert!(script.contains("0xe000ed28"));
+        assert!(!script.contains("SEDS_NODE"));
+        assert!(!script.contains("Write"));
+        assert!(!script.contains("Reset"));
     }
 }

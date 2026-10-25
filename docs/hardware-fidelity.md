@@ -129,7 +129,14 @@ These limits must not be treated as passed tests. Hardware release qualification
 ## Adding fidelity
 
 Implement the smallest reference-manual surface required by a real board. Add a Renode smoke overlay under `renode/tests`, a Rust contract test, and a real linked-firmware probe. An unsupported register should be visible and attributable; broad zero-returning ranges must not be described as modeled peripherals.
-# Persistent Pico-Fi link and Gateway UART timing
+# Pico-Fi link and Gateway UART timing
+
+Current qualification uses the Pi’s native Ethernet TCP listener, discovered by
+one gateway-side Pico-Fi client, then its UART link to the gateway. There is no
+GroundStation-side Pico or I2C hop. The following mailbox scenario is retained
+only for legacy regression coverage.
+
+## Legacy I2C scenario (excluded from current qualification)
 
 The UART Pico and I2C Pico are independent, continuously running devices.
 GroundStation restart replaces only its host I2C session; UART reception and
@@ -170,3 +177,71 @@ The register contract tests protected writes, feed timing, /4 and /256
 prescalers, all three MCU reset-flag offsets, flag clearing and inactive reloads.
 Window mode, early-warning interrupts, oscillator tolerance and debug-freeze
 control are not modeled. Current board firmware does not enable those modes.
+
+
+## Gateway field regression (2026-10-20)
+
+The [hardware baseline](qualification/gateway-hardware-baseline-2026-10-20.json)
+retains three read-only samples from the exact matched gateway ELF, after the
+DAQ/Pico updates and GroundStation restart. During the 7.18-second interval,
+DAQ CAN ingress advances by 3,688 frames and its ring-drop count by 1,179
+(32%). UART TX advances by 1,192 frames with zero pending frames, retries,
+exhausted transfers or UART-send failures in all three snapshots. CAN and
+network queue servicing account for about 96% of the interval. Valve sensor
+reports still stall even while valve status arrives. These observations locate
+loss before the Pico, but do not establish a single root cause for every drop.
+
+The Ethernet transport model now matches the dual-core Pico firmware's two
+128-frame / 16 KiB mailboxes. Occupancy charges one kind byte plus payload,
+excluding the wire envelope. An in-flight UART or TCP frame lives outside its
+mailbox, and partial writes retain ownership. Full uplink mailboxes reject new
+whole frames, never accepted templates/receipts; downlink applies backpressure.
+UART received while disconnected is discarded. I2C's legacy path is unchanged
+and is outside current qualification. These are transport contracts: the model
+does not execute RP2040 cores or model W5500 electrical/CPU timing.
+
+Run the separate no-outage baseline with:
+
+```sh
+python3 scripts/test-route-recovery.py --workspace /path/to/snapshot \
+  --image seds-firmware-simulator:gateway-fidelity-20261020 \
+  --hardware-fill-profile --evidence-dir /path/to/evidence --timeout 3600
+```
+
+This selects P6 differential input, one gateway-side Pico-Fi UART at 1 Mbaud (checked against the actual
+build cache), and 120 seconds of instruction-coupled execution with no scheduled
+reset or link failure. The matching hosted backend must include the opt-in
+`GS_SIM_VALIDATE_FILL_DELIVERY` observer. After 20 seconds of discovery warmup,
+every ten-second window requires delivery of at least 99.5% of actual DAQ
+publications, and valve battery/current/pressure to reach at least 0.9 Hz. The
+configured rate cap is not substituted for measured producer counts. Arrival
+gaps must remain below 500 ms for loadcells and 3 seconds for valve sensors.
+Duplicate packet IDs cannot inflate counts. Only the selected 50 kg input counts.
+Every failed window fails qualification; required passing windows prevent an
+uninitialized or missing observer from being treated as success.
+
+The earlier five correctly spaced sample intervals establish only a short
+cadence observation, despite their old '250 Hz stream' log label. They do not
+qualify sustained throughput. Graph-history row counts are decimated and must
+not substitute for ingress counts. The new threshold is a minimum acceptance
+floor, not a lossless-recording claim. Hardware-to-simulator timing agreement
+must be reported explicitly: Renode is not cycle accurate, and no random drop
+percentage or accelerated clock is used to manufacture the measured field result.
+A passing legacy release run does not qualify this new profile.
+
+The profile now rejects I2C, the manual TCP bypass, a second GS-side Pico, and
+incorrect UART baud/endpoints. Its transport path is Pi main Ethernet → UDP
+discovery/framed TCP → gateway-side Pico-Fi → USART2. HTTPS is disabled only for
+the headless hosted validation process; production listener defaults are unchanged.
+
+The first frozen 120-second Jupiter baseline failed: zero passing sustained
+windows, about 20 KG1000 reports/second, and no selected P6 KG50 reports after
+startup. Inspection found that the ADC model read only SCAN's low eight bits.
+The real firmware selects P6 with bit 9 and temperature with bit 12. Both became
+a zero-mask MUX/CH0 response, so P6 never set its completion flag and temperature
+scans waited for their timeout. The model now scans all sixteen channel IDs,
+returns signed differential CH2−CH3 data for P6, restarts from the highest enabled
+ID, and supplies a nominal temperature fixture. The Mono regression executes the
+actual C# peripheral with low-bit, P6-only, mixed P6/CH0, TEMP-only and ID15 scans.
+This is a source-model correction, not a gateway throughput fix. Re-run the
+unchanged sustained acceptance thresholds before attributing loss to the gateway.

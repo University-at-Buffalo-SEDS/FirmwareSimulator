@@ -38,3 +38,11 @@ non-reading UART descriptor and clears that flag only after reaping the owning
 host. This models terminal teardown on power cycle without recreating the radio
 cable, consuming bytes, relaxing hardware serial ownership, or touching Pico-Fi
 I2C sockets. A Linux regression covers busy-before-cleanup and repeated reopen.
+
+
+For a loaded-system PC profile, set `execution.trace: true` only on the selected
+board and set the topology's optional `trace_sample` to a zero-based interval
+index. For example, `trace_sample: 6` with twelve10-second intervals samples
+20 ms at virtual60 seconds. The index must be below `sample_count`. Defaults
+remain interval1, or0 for a single-interval run. The trace still has its existing
+20 ms window and64 MiB artifact cap; tracing must remain off for qualification.

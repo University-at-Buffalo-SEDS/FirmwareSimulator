@@ -305,7 +305,12 @@ fn default_true() -> bool {
 #[derive(Clone, Debug, Deserialize)]
 pub struct MemoryProbe {
     pub name: String,
+    #[serde(default)]
     pub symbol: String,
+    /// Read a physical register without introducing a firmware symbol.
+    /// Exactly one of address or symbol is allowed.
+    #[serde(default)]
+    pub address: Option<u64>,
     /// Byte offset from the named symbol for aligned array/struct word dumps.
     #[serde(default)]
     pub byte_offset: u32,
@@ -323,6 +328,39 @@ pub struct MemoryProbe {
     /// first real sample. If it never initializes, qualification still fails.
     #[serde(default)]
     pub ignore_leading_zeroes: bool,
+}
+
+pub fn probe_address(symbol: &str, address: Option<u64>, offset: u32) -> Result<String> {
+    anyhow::ensure!(
+        offset.is_multiple_of(4),
+        "memory probe offset must be word aligned"
+    );
+    match address {
+        Some(address) => {
+            anyhow::ensure!(
+                symbol.is_empty() && address.is_multiple_of(4),
+                "register probe needs an aligned address without a symbol"
+            );
+            let address = address
+                .checked_add(u64::from(offset))
+                .filter(|n| *n <= u64::from(u32::MAX) - 3)
+                .context("register probe address overflow")?;
+            Ok(format!("0x{address:08x}"))
+        }
+        None => {
+            anyhow::ensure!(
+                !symbol.is_empty()
+                    && symbol
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.'),
+                "invalid memory probe symbol {symbol:?}"
+            );
+            Ok(format!(
+                "monitor.Machine.SystemBus.GetSymbolAddress({}) + {offset}",
+                serde_json::to_string(symbol)?
+            ))
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -540,6 +578,7 @@ mod tests {
         execution.memory_probes.push(MemoryProbe {
             name: "telemetry_stack_remaining".into(),
             symbol: "g_telemetry_stack_remaining".into(),
+            address: None,
             byte_offset: 0,
             minimum: Some(8192),
             maximum: None,

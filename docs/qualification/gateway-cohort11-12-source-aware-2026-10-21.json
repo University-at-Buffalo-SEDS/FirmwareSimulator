@@ -1,0 +1,776 @@
+{
+  "11": {
+    "passed": false,
+    "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+    "minimum_delivery_percent": 99.5,
+    "warmup_ms": 20000,
+    "duration_ms": 120000,
+    "windows": [
+      {
+        "start_ms": 20000,
+        "produced": [
+          2405,
+          2301
+        ],
+        "received": [
+          2404,
+          2301,
+          10,
+          10,
+          480
+        ],
+        "max_gap_ms": [
+          60,
+          60,
+          1070,
+          1060,
+          80
+        ],
+        "delivery_percent": [
+          99.9584,
+          100.0
+        ],
+        "source_hz": [
+          240.5,
+          230.1
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 30000,
+        "produced": [
+          2410,
+          2302
+        ],
+        "received": [
+          2409,
+          2302,
+          10,
+          10,
+          477
+        ],
+        "max_gap_ms": [
+          60,
+          60,
+          1020,
+          1070,
+          100
+        ],
+        "delivery_percent": [
+          99.9585,
+          100.0
+        ],
+        "source_hz": [
+          241.0,
+          230.2
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 40000,
+        "produced": [
+          2409,
+          2301
+        ],
+        "received": [
+          2404,
+          2297,
+          10,
+          10,
+          477
+        ],
+        "max_gap_ms": [
+          60,
+          60,
+          1060,
+          1130,
+          100
+        ],
+        "delivery_percent": [
+          99.7924,
+          99.8262
+        ],
+        "source_hz": [
+          240.9,
+          230.1
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 50000,
+        "produced": [
+          2408,
+          2301
+        ],
+        "received": [
+          2407,
+          2302,
+          10,
+          10,
+          477
+        ],
+        "max_gap_ms": [
+          60,
+          60,
+          1060,
+          1080,
+          80
+        ],
+        "delivery_percent": [
+          99.9585,
+          100.0435
+        ],
+        "source_hz": [
+          240.8,
+          230.1
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 60000,
+        "produced": [
+          2411,
+          2300
+        ],
+        "received": [
+          2411,
+          2299,
+          10,
+          10,
+          481
+        ],
+        "max_gap_ms": [
+          60,
+          50,
+          1070,
+          1080,
+          60
+        ],
+        "delivery_percent": [
+          100.0,
+          99.9565
+        ],
+        "source_hz": [
+          241.1,
+          230.0
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 70000,
+        "produced": [
+          2405,
+          2300
+        ],
+        "received": [
+          2405,
+          2300,
+          10,
+          10,
+          480
+        ],
+        "max_gap_ms": [
+          60,
+          50,
+          1050,
+          1050,
+          70
+        ],
+        "delivery_percent": [
+          100.0,
+          100.0
+        ],
+        "source_hz": [
+          240.5,
+          230.0
+        ],
+        "published_samples_preserved": true,
+        "freshness_passed": true,
+        "valve_rate_passed": true,
+        "passed": true,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 80000,
+        "produced": [
+          2412,
+          2301
+        ],
+        "received": [
+          2132,
+          1769,
+          8,
+          9,
+          362
+        ],
+        "max_gap_ms": [
+          60,
+          90,
+          2340,
+          1290,
+          310
+        ],
+        "delivery_percent": [
+          88.3914,
+          76.8796
+        ],
+        "source_hz": [
+          241.2,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 90000,
+        "produced": [
+          2407,
+          2301
+        ],
+        "received": [
+          1321,
+          729,
+          7,
+          6,
+          95
+        ],
+        "max_gap_ms": [
+          80,
+          200,
+          2270,
+          2320,
+          600
+        ],
+        "delivery_percent": [
+          54.8816,
+          31.6819
+        ],
+        "source_hz": [
+          240.7,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 100000,
+        "produced": [
+          2414,
+          2301
+        ],
+        "received": [
+          1372,
+          704,
+          8,
+          7,
+          97
+        ],
+        "max_gap_ms": [
+          60,
+          110,
+          2170,
+          2870,
+          640
+        ],
+        "delivery_percent": [
+          56.8351,
+          30.5954
+        ],
+        "source_hz": [
+          241.4,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 110000,
+        "produced": [
+          2416,
+          2300
+        ],
+        "received": [
+          1351,
+          698,
+          8,
+          9,
+          73
+        ],
+        "max_gap_ms": [
+          100,
+          120,
+          2560,
+          2170,
+          630
+        ],
+        "delivery_percent": [
+          55.9189,
+          30.3478
+        ],
+        "source_hz": [
+          241.6,
+          230.0
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      }
+    ],
+    "can_drops_stable_after_warmup": false,
+    "can_drop_free_entire_run": false,
+    "startup_can_drops": 53,
+    "final_can_drops": 2046,
+    "zero_counters": {
+      "gateway.allocation_failures": true,
+      "daq.loadcell_network_failures": true,
+      "daq.kg50_network_failures": true,
+      "daq.analog_report_failures": true,
+      "daq.sd_write_errors": true,
+      "daq.sd_raw_batch_drops": true,
+      "rf.panics": true,
+      "rf.tlsf_failures": true,
+      "power.panics": true,
+      "power.tlsf_failures": true,
+      "flight.panics": true,
+      "flight.tlsf_failures": true,
+      "gateway.panics": true,
+      "gateway.tlsf_failures": true,
+      "actuator.panics": true,
+      "actuator.tlsf_failures": true,
+      "valve.panics": true,
+      "valve.tlsf_failures": true,
+      "daq.panics": true,
+      "daq.tlsf_failures": true,
+      "rf.can_fifo_overflow_fdcan1": true,
+      "rf.can_fifo_overflow_fdcan2": true,
+      "power.can_fifo_overflow_fdcan1": true,
+      "power.can_fifo_overflow_fdcan2": true,
+      "flight.can_fifo_overflow_fdcan1": true,
+      "gateway.can_fifo_overflow_fdcan1": true,
+      "gateway.can_fifo_overflow_fdcan2": false,
+      "actuator.can_fifo_overflow_fdcan1": true,
+      "actuator.can_fifo_overflow_fdcan2": true,
+      "valve.can_fifo_overflow_fdcan1": true,
+      "valve.can_fifo_overflow_fdcan2": true,
+      "daq.can_fifo_overflow_fdcan1": true
+    }
+  },
+  "12": {
+    "passed": false,
+    "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+    "minimum_delivery_percent": 99.5,
+    "warmup_ms": 20000,
+    "duration_ms": 120000,
+    "windows": [
+      {
+        "start_ms": 20000,
+        "produced": [
+          2406,
+          2300
+        ],
+        "received": [
+          1263,
+          796,
+          7,
+          8,
+          82
+        ],
+        "max_gap_ms": [
+          70,
+          100,
+          2030,
+          2110,
+          620
+        ],
+        "delivery_percent": [
+          52.4938,
+          34.6087
+        ],
+        "source_hz": [
+          240.6,
+          230.0
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 30000,
+        "produced": [
+          2415,
+          2301
+        ],
+        "received": [
+          1322,
+          706,
+          10,
+          8,
+          80
+        ],
+        "max_gap_ms": [
+          50,
+          120,
+          1120,
+          2020,
+          500
+        ],
+        "delivery_percent": [
+          54.7412,
+          30.6823
+        ],
+        "source_hz": [
+          241.5,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 40000,
+        "produced": [
+          2405,
+          2301
+        ],
+        "received": [
+          1260,
+          788,
+          6,
+          7,
+          71
+        ],
+        "max_gap_ms": [
+          70,
+          100,
+          2930,
+          2960,
+          470
+        ],
+        "delivery_percent": [
+          52.3909,
+          34.246
+        ],
+        "source_hz": [
+          240.5,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 50000,
+        "produced": [
+          2411,
+          2304
+        ],
+        "received": [
+          1285,
+          728,
+          8,
+          7,
+          72
+        ],
+        "max_gap_ms": [
+          60,
+          220,
+          2900,
+          3230,
+          520
+        ],
+        "delivery_percent": [
+          53.2974,
+          31.5972
+        ],
+        "source_hz": [
+          241.1,
+          230.4
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": false,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 60000,
+        "produced": [
+          2412,
+          2302
+        ],
+        "received": [
+          1313,
+          734,
+          8,
+          8,
+          76
+        ],
+        "max_gap_ms": [
+          80,
+          90,
+          1930,
+          2950,
+          580
+        ],
+        "delivery_percent": [
+          54.4362,
+          31.8853
+        ],
+        "source_hz": [
+          241.2,
+          230.2
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 70000,
+        "produced": [
+          2405,
+          2302
+        ],
+        "received": [
+          1332,
+          744,
+          8,
+          8,
+          75
+        ],
+        "max_gap_ms": [
+          60,
+          80,
+          1920,
+          2110,
+          670
+        ],
+        "delivery_percent": [
+          55.3846,
+          32.3197
+        ],
+        "source_hz": [
+          240.5,
+          230.2
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": true,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 80000,
+        "produced": [
+          2411,
+          2302
+        ],
+        "received": [
+          1288,
+          801,
+          6,
+          6,
+          67
+        ],
+        "max_gap_ms": [
+          60,
+          150,
+          2980,
+          3550,
+          470
+        ],
+        "delivery_percent": [
+          53.4218,
+          34.7958
+        ],
+        "source_hz": [
+          241.1,
+          230.2
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": false,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 90000,
+        "produced": [
+          2405,
+          2300
+        ],
+        "received": [
+          1344,
+          725,
+          6,
+          9,
+          72
+        ],
+        "max_gap_ms": [
+          70,
+          180,
+          3980,
+          1890,
+          610
+        ],
+        "delivery_percent": [
+          55.8836,
+          31.5217
+        ],
+        "source_hz": [
+          240.5,
+          230.0
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": false,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 100000,
+        "produced": [
+          2413,
+          2301
+        ],
+        "received": [
+          1266,
+          793,
+          5,
+          7,
+          73
+        ],
+        "max_gap_ms": [
+          90,
+          120,
+          4250,
+          1940,
+          540
+        ],
+        "delivery_percent": [
+          52.4658,
+          34.4633
+        ],
+        "source_hz": [
+          241.3,
+          230.1
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": false,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      },
+      {
+        "start_ms": 110000,
+        "produced": [
+          2406,
+          2300
+        ],
+        "received": [
+          1265,
+          795,
+          5,
+          8,
+          79
+        ],
+        "max_gap_ms": [
+          80,
+          130,
+          3890,
+          1940,
+          410
+        ],
+        "delivery_percent": [
+          52.5769,
+          34.5652
+        ],
+        "source_hz": [
+          240.6,
+          230.0
+        ],
+        "published_samples_preserved": false,
+        "freshness_passed": false,
+        "valve_rate_passed": false,
+        "passed": false,
+        "nominal_rate_diagnostic_passed": false
+      }
+    ],
+    "can_drops_stable_after_warmup": false,
+    "can_drop_free_entire_run": false,
+    "startup_can_drops": 977,
+    "final_can_drops": 7232,
+    "zero_counters": {
+      "gateway.allocation_failures": true,
+      "daq.loadcell_network_failures": true,
+      "daq.kg50_network_failures": true,
+      "daq.analog_report_failures": true,
+      "daq.sd_write_errors": true,
+      "daq.sd_raw_batch_drops": true,
+      "rf.panics": true,
+      "rf.tlsf_failures": true,
+      "power.panics": true,
+      "power.tlsf_failures": true,
+      "flight.panics": true,
+      "flight.tlsf_failures": true,
+      "gateway.panics": true,
+      "gateway.tlsf_failures": true,
+      "actuator.panics": true,
+      "actuator.tlsf_failures": true,
+      "valve.panics": true,
+      "valve.tlsf_failures": true,
+      "daq.panics": true,
+      "daq.tlsf_failures": true,
+      "rf.can_fifo_overflow_fdcan1": true,
+      "rf.can_fifo_overflow_fdcan2": true,
+      "power.can_fifo_overflow_fdcan1": true,
+      "power.can_fifo_overflow_fdcan2": true,
+      "flight.can_fifo_overflow_fdcan1": true,
+      "gateway.can_fifo_overflow_fdcan1": true,
+      "gateway.can_fifo_overflow_fdcan2": false,
+      "actuator.can_fifo_overflow_fdcan1": true,
+      "actuator.can_fifo_overflow_fdcan2": true,
+      "valve.can_fifo_overflow_fdcan1": true,
+      "valve.can_fifo_overflow_fdcan2": true,
+      "daq.can_fifo_overflow_fdcan1": true
+    }
+  }
+}

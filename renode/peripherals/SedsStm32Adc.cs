@@ -11,7 +11,6 @@ namespace Antmicro.Renode.Peripherals.Sensors
         public SedsStm32Adc(uint bits = 12, uint channels = 1, string samples = "", uint noiseLsb = 0, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
         {
             this.bits = bits;
-            this.channels = channels;
             this.noiseLsb = noiseLsb;
             channelSamples = new uint[channels];
             var configured = samples.Split(new[] { ',' }, System.StringSplitOptions.RemoveEmptyEntries);
@@ -49,6 +48,13 @@ namespace Antmicro.Renode.Peripherals.Sensors
             }
             if(offset == 0x08)
             {
+                uint previous;
+                registers.TryGetValue(offset, out previous);
+                var regularStart = (value & 4u) != 0 && (previous & 4u) == 0;
+                // ADEN/ADSTART/JADSTART are read-set, not ordinary RW bits.
+                // HAL masks these command properties when setting another:
+                // writing ADSTART alone must retain the latched enable bit.
+                value |= previous & 0xdu;
                 // Calibration completes synchronously. Enabling sets ADRDY;
                 // starting a conversion sets EOC/EOS and exposes a new sample.
                 value &= ~(1u << 31);
@@ -63,13 +69,17 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 if((value & (1u << 5)) != 0)
                     value &= ~((1u << 5) | (1u << 3));
                 if((value & 1u) != 0) status |= 1u;
-                if((value & (1u << 2)) != 0)
+                if(regularStart && (value & (1u << 2)) != 0)
                 {
                     conversions++;
                     if(conversions > disconnectAfter) status &= ~((1u << 2) | (1u << 3));
                     else if(failureEvery != 0 && conversions % failureEvery == 0) status |= 1u << 4;
                     else status |= (1u << 2) | (1u << 3);
-                    value &= ~(1u << 2);
+                    uint config;
+                    registers.TryGetValue(0x0c, out config);
+                    // External-triggered conversions remain armed between
+                    // timer requests. Software-triggered ones self-clear.
+                    if((config & 0xc00) == 0) value &= ~(1u << 2);
                 }
             }
             registers[offset] = value;
@@ -79,7 +89,6 @@ namespace Antmicro.Renode.Peripherals.Sensors
         {
             registers.Clear();
             status = 0;
-            sample = 2048;
             random = 1;
             conversions = 0;
         }
@@ -90,11 +99,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
         private readonly Dictionary<long, uint> registers = new Dictionary<long, uint>();
         private uint status;
-        private uint sample;
         private uint random;
         private ulong conversions;
         private readonly uint bits;
-        private readonly uint channels;
         private readonly uint[] channelSamples;
         private readonly uint noiseLsb;
         private readonly ulong failureEvery;
