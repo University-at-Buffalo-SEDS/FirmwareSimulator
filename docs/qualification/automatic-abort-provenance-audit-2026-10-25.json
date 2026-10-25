@@ -67,8 +67,12 @@
       "scope": "Root full backend native campaign; preserved explicit ignored qualification helpers. No ignored test was represented as executed."
     },
     "hitl": {
-      "status": "RUNNING_AT_DOCUMENTATION_TIME",
-      "scope": "No unverified pass claim; root records final campaign separately."
+      "log": ".workspace-progress/gs-flight-followup-hitl-tests.log",
+      "sha256": "5c549aa44dc53a1df17e88db4f3d781452f9898e661b92cd633373760fd77389",
+      "passed": 517,
+      "failed": 0,
+      "ignored": 2,
+      "scope": "Root full HITL backend campaign with latest localSDK4.2.6 path; ignored helpers explicitly unexecuted. Existing HITL abort behavior preserved."
     }
   },
   "remaining_unverified": {
