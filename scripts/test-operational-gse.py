@@ -32,7 +32,7 @@ def raw_loadcell_kg(mass):
 def mass_samples(mass):
     values=[((i+1)*0x100000)&0xffffff for i in range(16)]
     for i in range(8,12):values[i]=(values[2*(i-8)]-values[2*(i-8)+1])&0xffffff
-    values[12]=305652;values[1]=raw_loadcell_kg(mass)
+    values[12]=305652;values[0]=0;values[1]=raw_loadcell_kg(mass)
     return ','.join(str(v)for v in values)
 
 def atomic(path,text):
@@ -75,7 +75,7 @@ def prepare(args):
     (config/'checklists.json').write_text(json.dumps({'revision':0,'enforce_before_launch':True,'checklists':[{'id':'checkout','title':'Checkout','required_before_launch':True,'items':items}]}))
     # Explicit affine calibration for a synthetic ADC fixture; no completion or
     # qualification state is preset. The mass target intentionally stays unmet.
-    calibration={'version':1,'iadc':{'m':1,'b':0},'kg50_input':'amp2','extra_channels':{'kg50':{'linear':{'m':100 if args.positive_fill else 0.000001,'b':0},'zero_raw':None,'points':[],'fit':None}}}
+    calibration={'version':1,'ch1':{'m':100,'b':0},'iadc':{'m':1,'b':0},'kg50_input':'amp2','extra_channels':{'kg50':{'linear':{'m':100 if args.positive_fill else 0.000001,'b':0},'zero_raw':None,'points':[],'fit':None}}}
     (config/'calibration.json').write_text(json.dumps(calibration))
     topology=json.loads(args.template.read_text());names={'gateway','actuator','valve','daq'}
     topology.update(name='ordinary-test-fire-real-firmware-sequence-acceptance',virtual_time_ms=args.duration_ms,sample_count=args.duration_ms//1000,reboots=[],can_ack_events=[],can_link_events=[],radio_link_events=[],assertions=[],host_log_assertions=[])
@@ -165,7 +165,7 @@ def run(args):
                     assert request(origin,'/api/command','Launch',token)[0]==200;stage='fire'
                 else:
                     summary.update(phase='passed',virtual_ms=now,checks='realselftest/nitrogen;automaticdurablechecklists;actualDAQmass;Idle→Fill→Armed');progress();stage='complete'
-            elif stage=='fire':
+            elif stage=='fire'and status['qualification']['fire_started']:
                 clock=request(origin,'/api/launch_clock',token=token)[1]
                 assert status['mission_stage']=='fire'and status['qualification']['fire_started']
                 if clock['kind']=='t_minus':
