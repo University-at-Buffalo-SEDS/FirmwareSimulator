@@ -18,6 +18,13 @@ class ActualGpsProofTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):MODULE.verify_rows(skipped,30000,['primary'],expected)
         repeated=[rows[0],{'virtual_ms':20000,'primary':dict(fix,age_ms=10750)}]
         with self.assertRaises(RuntimeError):MODULE.verify_rows(repeated,20000,['primary'],expected)
+    def test_only_planned_primary_restart_boundary_may_be_unavailable(self):
+        fix=dict(source='RF',manual=False,stale=False,latitude=43.,longitude=-78.78,altitude_m=300.,age_ms=750)
+        rows=[{'virtual_ms':10000,'primary':fix,'rrls':fix},{'virtual_ms':20000,'primary':None,'rrls':fix},{'virtual_ms':30000,'primary':fix,'rrls':fix}]
+        MODULE.verify_rows(rows,30000,['primary','rrls'],{},20000)
+        with self.assertRaises(RuntimeError):MODULE.verify_rows(rows,30000,['primary','rrls'],{})
+        with self.assertRaises(RuntimeError):MODULE.verify_rows([dict(row,rrls=None)if row['virtual_ms']==20000 else row for row in rows],30000,['primary','rrls'],{},20000)
+        with self.assertRaises(RuntimeError):MODULE.verify_rows(rows,30000,['primary','rrls'],{},10000)
     def test_primary_only_is_not_duplicated_as_rrls_proof(self):
         self.assertEqual(MODULE.station_ports(1234),[('primary',1234)])
         self.assertEqual(MODULE.station_ports(1234,5678),[('primary',1234),('rrls',5678)])

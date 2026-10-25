@@ -41,21 +41,26 @@ def fixture_position(path):
     values=matches[0].get('position',{})
     return dict(latitude=float(values.get('latitude',43.)),longitude=float(values.get('longitude',-78.78)),altitude=float(values.get('altitude_m',300.)))
 
-def verify_rows(rows,until_ms,stations,expected):
+def verify_rows(rows,until_ms,stations,expected,restart_after_ms=None):
     if len(rows)!=until_ms//10000:raise RuntimeError('Missing or duplicate GPS observation intervals')
     if any(not (10000*(index+1)<=row.get('virtual_ms',-1)<10000*(index+1)+1000)for index,row in enumerate(rows)):raise RuntimeError('GPS observation interval skipped or exceeded1s sampling tolerance')
+    if restart_after_ms is not None and (restart_after_ms%10000 or not 10000<=restart_after_ms<=until_ms-10000):raise ValueError('Restart must align with one explicit observation interval')
     for name in stations:
-        if any(not valid_fix(row.get(name),**expected)for row in rows):raise RuntimeError(name+' RF GPS position/freshness failed; see bounded evidence')
-        source_ticks=[row['virtual_ms']-row[name]['age_ms']for row in rows]
+        checked=[row for row in rows if name!='primary' or row['virtual_ms']//10000*10000!=restart_after_ms]
+        if any(not valid_fix(row.get(name),**expected)for row in checked):raise RuntimeError(name+' RF GPS position/freshness failed; see bounded evidence')
+        source_ticks=[row['virtual_ms']-row[name]['age_ms']for row in checked]
+        if restart_after_ms is not None and name=='primary':
+            after=next(row for row in checked if row['virtual_ms']>restart_after_ms)
+            if after['virtual_ms']-after[name]['age_ms']<restart_after_ms:raise RuntimeError('Primary did not reacquire a new RF publication after restart')
         if any(b-a<5000 for a,b in zip(source_ticks,source_ticks[1:])):raise RuntimeError(name+' repeated old GPS fix instead of refreshed data')
     if not rows or rows[-1]['virtual_ms']<until_ms:raise RuntimeError('GPS capture ended early')
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--primary-port',type=int);p.add_argument('--rrls-port',type=int,help='Omit for primary-only two-radio qualification');p.add_argument('--output',type=Path,required=True);p.add_argument('--until-ms',type=int,default=590000);p.add_argument('--timeout',type=int,default=14400);p.add_argument('--fixture-layout',type=Path,help='FrozenRFboard.json; expectedposition from NeoM9Nposition');p.add_argument('--verify-recorded',type=Path,help='Verify bounded existingJSONL withoutlogin/network/clock');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--primary-port',type=int);p.add_argument('--rrls-port',type=int,help='Omit for primary-only two-radio qualification');p.add_argument('--output',type=Path,required=True);p.add_argument('--until-ms',type=int,default=590000);p.add_argument('--timeout',type=int,default=14400);p.add_argument('--fixture-layout',type=Path,help='FrozenRFboard.json; expectedposition from NeoM9Nposition');p.add_argument('--restart-after-ms',type=int,help='Planned primaryrestart; onlythat10sboundary maylackfix, nextwindowmustnewRFpublication');p.add_argument('--verify-recorded',type=Path,help='Verify bounded existingJSONL withoutlogin/network/clock');a=p.parse_args()
     expected=fixture_position(a.fixture_layout)if a.fixture_layout else {}
     if a.verify_recorded:
         if a.verify_recorded.stat().st_size>4*1024*1024:raise ValueError('GPS evidence exceeded4MiB')
-        rows=[json.loads(line)for line in a.verify_recorded.read_text().splitlines()];stations=['primary']+(['rrls']if rows and 'rrls'in rows[0]else[]);verify_rows(rows,a.until_ms,stations,expected);a.output.write_text(json.dumps({'result':'PASS','rows':len(rows),'stations':stations,'expected':expected,'scope':'ActualRFposition/freshness; frozenlayoutoracle; existingcapture'},indent=2)+'\n');return
+        rows=[json.loads(line)for line in a.verify_recorded.read_text().splitlines()];stations=['primary']+(['rrls']if rows and 'rrls'in rows[0]else[]);verify_rows(rows,a.until_ms,stations,expected,a.restart_after_ms);a.output.write_text(json.dumps({'result':'PASS','rows':len(rows),'stations':stations,'expected':expected,'scope':'ActualRFposition/freshness; frozenlayoutoracle; existingcapture'},indent=2)+'\n');return
     if a.primary_port is None:p.error('--primary-port required for observation')
     clock=CLOCK.ClockInput(0);deadline=time.monotonic()+a.timeout;next_sample=10000;tokens={};rows=[];total=0
     with a.output.open('xb')as out:
@@ -68,7 +73,9 @@ def main():
                     try:
                         if name not in tokens:tokens[name]=login(origin)
                         fix=request(origin,'/api/antenna/status',token=tokens[name]).get('rocket');row[name]=fix
-                    except Exception as error:row[name]=None;row[name+'_error']=type(error).__name__
+                    except Exception as error:
+                        row[name]=None;row[name+'_error']=type(error).__name__
+                        if getattr(error,'code',None)in(401,403):tokens.pop(name,None)
                 encoded=(json.dumps(row,separators=(',',':'))+'\n').encode();total+=len(encoded)
                 if total>4*1024*1024:raise RuntimeError('GPS evidence exceeded4MiB; not complete')
                 out.write(encoded);out.flush();rows.append(row);next_sample=(now//10000+1)*10000
@@ -76,6 +83,6 @@ def main():
             if closed:raise RuntimeError('Clock ended before GPS observation completed')
             time.sleep(.1)
         else:raise RuntimeError('GPS observation timed out')
-    verify_rows(rows,a.until_ms,[name for name,_ in station_ports(a.primary_port,a.rrls_port)],expected)
+    verify_rows(rows,a.until_ms,[name for name,_ in station_ports(a.primary_port,a.rrls_port)],expected,a.restart_after_ms)
     print('PASS actual RF GPS positions and refreshed fixes on '+','.join(name for name,_ in station_ports(a.primary_port,a.rrls_port))+'; samples='+str(len(rows)))
 if __name__=='__main__':main()
