@@ -1,0 +1,293 @@
+{
+  "result": "INCOMPLETE; no positive flight qualification",
+  "date": "2026-10-25",
+  "image": "sha256:2dbd5b9275695634d5580099a052e7bf0fc78bfcdd78bc0350a94accff30a36e",
+  "backend_commit": "a4c1c1f",
+  "simulator_source": "ca440b0",
+  "sdk": "edb3b19 (4.2.6)",
+  "features": [
+    "firmware_sim"
+  ],
+  "source_archive_files_unchanged": 1142,
+  "flight_attempt": {
+    "artifact_root": "FirmwareSimulator/build/ordinary-flight-host-20261025/flight-nofix-fix-qd-1",
+    "scope": "All seven MCU images, ordinary policy, synthetic raw pressure/mass and raw NMEA no-fix\u2192fix; no physical devices",
+    "process_exit": 1,
+    "reason": "Simulator/firmware gate failed",
+    "actual_qualification_stage": "armed",
+    "fire_started": false,
+    "milestones": [
+      {
+        "virtual_ms": 0,
+        "phase": "idle",
+        "mission_stage": "idle",
+        "pressure_psi": null
+      },
+      {
+        "virtual_ms": 3940,
+        "phase": "cancel_setup",
+        "mission_stage": "idle",
+        "pressure_psi": null
+      },
+      {
+        "virtual_ms": 4010,
+        "phase": "cancelled",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 4020,
+        "phase": "baseline_setup",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 4030,
+        "phase": "baseline",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 9030,
+        "phase": "self_setup",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 9050,
+        "phase": "self_open",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 9090,
+        "phase": "self_hold",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 11100,
+        "phase": "self_close",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 11120,
+        "phase": "self_open",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 11140,
+        "phase": "self_hold",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 13140,
+        "phase": "self_close",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 13160,
+        "phase": "self_open",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 13190,
+        "phase": "self_hold",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 15210,
+        "phase": "self_close",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 15230,
+        "phase": "self_open",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 15250,
+        "phase": "self_hold",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 17250,
+        "phase": "self_close",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 17270,
+        "phase": "self_open",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 17290,
+        "phase": "self_hold",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 19300,
+        "phase": "self_close",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 19320,
+        "phase": "self_finish",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 19340,
+        "phase": "idle",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 19350,
+        "phase": "baseline_setup",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 19420,
+        "phase": "baseline",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 24420,
+        "phase": "nitrogen_setup",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 24480,
+        "phase": "raising",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 25980,
+        "phase": "settling",
+        "mission_stage": "idle",
+        "pressure_psi": 50.273929595947266
+      },
+      {
+        "virtual_ms": 27980,
+        "phase": "holding",
+        "mission_stage": "idle",
+        "pressure_psi": 52.85207748413086
+      },
+      {
+        "virtual_ms": 33000,
+        "phase": "dumping",
+        "mission_stage": "idle",
+        "pressure_psi": 52.85207748413086
+      },
+      {
+        "virtual_ms": 34340,
+        "phase": "passed",
+        "mission_stage": "idle",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 34350,
+        "phase": "fill_setup",
+        "mission_stage": "fill",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 34410,
+        "phase": "filling",
+        "mission_stage": "fill",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 36980,
+        "phase": "pause_setup",
+        "mission_stage": "fill",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 37050,
+        "phase": "paused",
+        "mission_stage": "armed",
+        "pressure_psi": 0.0
+      },
+      {
+        "virtual_ms": 37050,
+        "phase": "real_mass_target_armed",
+        "mass_input_kg": 5.0399999999999805
+      }
+    ],
+    "observed_interlock": {
+      "button_interlock_satisfied": true,
+      "flight_state": "Armed",
+      "hitl_mode": false,
+      "prelaunch": true
+    },
+    "observed_antenna": {
+      "rocket": null,
+      "ground_station": null,
+      "rrls": null,
+      "rssi": null,
+      "gpsd_configured": false
+    },
+    "end_gate_error": "Required rocket_radio TX probe radio_tx_frames was removed by diagnostic probe filtering; next controller retains every topology endpoint TX/RX probe."
+  },
+  "read_only_diagnostic": {
+    "artifact_root": "FirmwareSimulator/build/ordinary-flight-host-20261025/gps-path-diagnostic-12s",
+    "scope": "Read-only all-seven-MCU RF GPS diagnostic; raw fix1 from boot; no procedure/output API commands",
+    "process_exit": 0,
+    "virtual_duration_ms": 12000,
+    "all_linked_end_gates": "PASS",
+    "rf_final_probes": {
+      "panics": 0,
+      "fdcan_rx": 1354,
+      "fdcan_tx_ok": 380,
+      "radio_rx_frames": 272,
+      "radio_tx_frames": 302,
+      "rf_gps_has_fix_word": 0,
+      "rf_gps_publish_attempts": 2,
+      "rf_gps_publish_ok": 2,
+      "rf_gps_time_valid": 1,
+      "rf_gps_time_offset_lo": 23,
+      "rf_gps_time_offset_hi": 0,
+      "rf_gps_stack_remaining": 6316,
+      "rf_gps_stack_used": 5971,
+      "can_fifo_overflow_fdcan1": 0,
+      "can_fifo_overflow_fdcan2": 0
+    },
+    "captured_recent_gps_rows": 0,
+    "antenna_snapshot_count": 13,
+    "radio_trace": "Original12s capture unfinished at model shutdown; diagnostic prefix decoding only, not strict completed-capture qualification."
+  },
+  "confirmed_gaps": [
+    "FC watchdog resume rejection stays1 because H5 RTC/register model lacked required startup behavior; flag is a safety guard, never waived.",
+    "Ordinary durable Armed must reach FC preparation through its managed-state callback; earlier weak hook did not forward the update.",
+    "RF actually admitted two GPS publications while GroundStation had no RF GPS rows or launch lock; SDK multicast dispatch is being corrected separately."
+  ],
+  "preservation": "Original outcome, controller source copy, image and raw traces retained unchanged. No failed attempt is relabeled as passed.",
+  "artifact_sha256": {
+    "flight-nofix-fix-qd-1/controller.py": "508b18ec16c276518f90f4754bdd3b48fb2808f2361c661ea919fc53b91a7a6b",
+    "flight-nofix-fix-qd-1/result.json": "3b4b64ba71c4eef636b3548c540cf38c31a6274180143259121d486b273cebaf",
+    "flight-nofix-fix-qd-1/simulator.log": "a7ba58016c153bc25e457fd36770ad3d8ce5f4ed2d188a1f3a33fedad39d2de9",
+    "gps-path-diagnostic-12s/controller.py": "ed09eb755b11cdc11c8d5eb3da3479e16f218dd0a6eb1f60e7ae6483bb8b7878",
+    "gps-path-diagnostic-12s/diagnostic-controller.py": "688d99d554ee84616463855ff3aba0551da1cde15147ae1eab94c972e56137a4",
+    "gps-path-diagnostic-12s/result.json": "b46d28390644e9b78a5ead1517f3984338484a9e874530454311ad6ea4fe1138",
+    "gps-path-diagnostic-12s/recent-gps.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+  }
+}
