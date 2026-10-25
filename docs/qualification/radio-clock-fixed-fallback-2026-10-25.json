@@ -514,5 +514,30 @@
     ],
     "interpretation": "Actual parser counts a lone retained sync prefix as a loss under arbitrary chunking. Every tested chunking accepts the same847 frames and467 eligible callbacks with zero bad length/CRC/leftover bytes. Exact runtime ISR/service boundaries were not traced; synthetic128-byte chunking also gives5 but is not asserted to reconstruct runtime event timestamps.",
     "diagnostic_only_fix": "Increment loss only if bytes are discarded rather than a single valid first sync byte retained; parsing/forwarding behavior unchanged. Frozen image and active long soaks remain unchanged."
+  },
+  "relay_wire_omissions": {
+    "scope": "Complete raw data-frame bytes received between first false/next true primary HEALTH arrival at RRLS, compared as multisets to all RRLS DOWN_DATA emitted frame bodies. Wire-observation interval, not private queue admission/expiry classification.",
+    "start_us": 23010900,
+    "end_us": 42510900,
+    "observed_input_raw_frames": 302,
+    "emitted_down_data_frames": 257,
+    "uplink_input_frames": 134,
+    "uplink_emitted_frames": 134,
+    "uplink_missing_frames": 0,
+    "unforwarded_data_frames": 45,
+    "unforwarded_types": {
+      "BAROMETER_DATA": 17,
+      "IMU_DATA": 16,
+      "GPS_SATELLITE_NUMBER": 3,
+      "BOARD_HEALTH": 4,
+      "BATTERY_VOLTAGE": 2,
+      "BATTERY_CURRENT": 2,
+      "MESSAGE_DATA": 1
+    },
+    "unforwarded_side_transport_kinds": {
+      "2": 34,
+      "1": 11
+    },
+    "classification_limit": "This proves45 observed data frames were not relayed; it does not identify which private queue removal site accounts for each of46 aggregate counter increments. It does not claim telemetry loss was benign."
   }
 }
