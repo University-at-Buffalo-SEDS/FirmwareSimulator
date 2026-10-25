@@ -1,0 +1,820 @@
+{
+  "scope": "Actual ordinary flight functional and live-GPS-loss acceptance for immutable host328c; qualification-ready remains false pending separately audited atomic automatic-abort policy fix and final current-source closure",
+  "date": "2026-10-25",
+  "image": "sha256:328c6dc8f91572eed00a2d5422579e0e930ee8ed52a35f6fede7bf4174ad26cd",
+  "backend_sha256": "262195fc41e47a82754479c959a8e5fbc7905329458af91e17ab5017436d7d5a",
+  "backend_source": "d0463bc",
+  "sdk_runtime": "8a82f55 (4.2.7)",
+  "sdk_archive": "b6bdac4 (documentation-only after runtime8a82)",
+  "simulator_binary_sha256": "f1a2901a4607878f0d354c2d21e4c3184aabd4e2ab84d29a3aff66416ff0926b",
+  "image_simulator_source": "5db8405",
+  "frontend": "2b5bc86",
+  "features": [
+    "firmware_sim"
+  ],
+  "bypass_features": [],
+  "host_archived_source_files_unchanged": 1152,
+  "cohort": "multicast-427-status-cohort-20261025/workspace",
+  "cohort_summary_sha256": "257b72476101a202c036c18276ac998b82852f2e5214782e2ba90fa2142f9c17",
+  "actual_report_cadence": "AB/VB1Hz; original2s backend freshness interlock retained",
+  "backend_tests": {
+    "passed": 536,
+    "ignored": 3,
+    "failed": 0
+  },
+  "plant_assumptions": {
+    "nitrogen_psi_per_second": 35,
+    "relief_psi_per_second": 200,
+    "closed_leak_psi_per_second": 0,
+    "mass_target_intentionally_unmet": false,
+    "nitrous_fill_kg_per_second": 2
+  },
+  "cases": {
+    "positive": {
+      "result": "PASS",
+      "process_exit": 0,
+      "model_duration_ms": 70000,
+      "milestones": [
+        {
+          "virtual_ms": 0,
+          "phase": "idle",
+          "mission_stage": "idle",
+          "pressure_psi": null
+        },
+        {
+          "virtual_ms": 3810,
+          "phase": "cancel_setup",
+          "mission_stage": "idle",
+          "pressure_psi": null
+        },
+        {
+          "virtual_ms": 3870,
+          "phase": "cancelled",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 3880,
+          "phase": "baseline_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 3890,
+          "phase": "baseline",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 8890,
+          "phase": "self_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 8910,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 8930,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 10950,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 10970,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 10990,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13000,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13020,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13040,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15050,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15090,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15130,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17130,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17150,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17190,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19190,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19230,
+          "phase": "self_finish",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19240,
+          "phase": "idle",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19250,
+          "phase": "baseline_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19420,
+          "phase": "baseline",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 24430,
+          "phase": "nitrogen_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 24510,
+          "phase": "raising",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 26010,
+          "phase": "settling",
+          "mission_stage": "idle",
+          "pressure_psi": 50.273929595947266
+        },
+        {
+          "virtual_ms": 28000,
+          "phase": "holding",
+          "mission_stage": "idle",
+          "pressure_psi": 52.207542419433594
+        },
+        {
+          "virtual_ms": 33000,
+          "phase": "dumping",
+          "mission_stage": "idle",
+          "pressure_psi": 52.207542419433594
+        },
+        {
+          "virtual_ms": 34330,
+          "phase": "passed",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 34340,
+          "phase": "fill_setup",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 35230,
+          "phase": "filling",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37770,
+          "phase": "pause_setup",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37820,
+          "phase": "paused",
+          "mission_stage": "armed",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37820,
+          "phase": "real_mass_target_armed",
+          "mass_input_kg": 5.019999999999981
+        }
+      ],
+      "qd": {
+        "dispatched_model_ms": 38070,
+        "first_observed_ack_model_ms": 38300,
+        "ack_model_interval_ms": [
+          38290,
+          38290
+        ],
+        "settlement_contract_ms": 5000,
+        "status": "Settling { remaining_ms: 4990 }",
+        "fire_observed_model_ms": 43300
+      },
+      "fc_final": {
+        "panics": 0,
+        "fdcan_rx": 1992,
+        "fdcan_tx_ok": 1555,
+        "fc_commands_received": 1,
+        "fc_commands_accepted": 1,
+        "fc_commands_processed": 1,
+        "fc_last_command_id": 1,
+        "fc_last_command_msg": 4294967295,
+        "fc_recovery_dequeued": 56,
+        "fc_config_flags": 7340661,
+        "fc_state": 3,
+        "fc_watchdog_resume_rejected": 0,
+        "fc_watchdog_resumed": 0,
+        "can_fifo_overflow_fdcan1": 0
+      },
+      "valve_final": {
+        "fdcan_rx": 47247,
+        "fdcan_tx_ok": 12873,
+        "panics": 0,
+        "launch_start_count": 1,
+        "launch_service_count": 7419,
+        "launch_elapsed_ticks": 11505,
+        "launch_pilot_attempts": 1,
+        "launch_finish_count": 1,
+        "launch_abort_seen": 0,
+        "pilot_actual_state": 0,
+        "pilot_driver_result": 0,
+        "valve_abort": 0,
+        "valve_local_ticks": 69901,
+        "launch_command_utc_lo": 1994084564,
+        "launch_command_utc_hi": 411,
+        "can_fifo_overflow_fdcan1": 0,
+        "can_fifo_overflow_fdcan2": 0
+      },
+      "actuator_final": {
+        "panics": 0,
+        "fdcan_rx": 58781,
+        "fdcan_tx_ok": 1339,
+        "ab_last_executed_command": 14,
+        "ab_sequence_active_word": 65792,
+        "ab_igniter_started_word": 16777216,
+        "ab_igniter_output_word": 0,
+        "ab_igniter_start_ticks": 47460,
+        "ab_igniter_stop_ticks": 57460,
+        "ab_abort_word": 0,
+        "ab_local_ticks": 69901,
+        "ab_igniter_enable_odr": 0,
+        "ab_driver_fault_idr": 15,
+        "can_fifo_overflow_fdcan1": 0,
+        "can_fifo_overflow_fdcan2": 0
+      },
+      "daq_final": {
+        "fdcan_rx": 15798,
+        "fdcan_tx_ok": 44220,
+        "panics": 0,
+        "daq_launch_deadline_lo": 1994214573,
+        "daq_launch_deadline_hi": 411,
+        "daq_launch_session_lo": 1994084644,
+        "daq_launch_session_hi": 411,
+        "daq_local_deadline_lo": 173319,
+        "daq_local_deadline_hi": 0,
+        "can_fifo_overflow_fdcan1": 0
+      },
+      "all_sampled_panics_and_can_overflows": 0,
+      "artifact_root": "FirmwareSimulator/build/ordinary-flight-427-final-host-20261025/positive-flight-1",
+      "artifact_sha256": {
+        "controller.py": "2c24c5910eceabe2e39682b48e33fda26a766f348d34eb02c699c57c321eb691",
+        "result.json": "fa586e753f8d368c94ea9cb4f6952e52182bd03a263dfe9d235a39ed3e43daaf",
+        "simulator.log": "038b82ddf8e485e347a385043022582dcc6b2e92d725aeea3f92c9d0e4678372"
+      },
+      "actual_fc_launch": {
+        "sample": 52,
+        "panics": 0,
+        "fdcan_rx": 1731,
+        "fdcan_tx_ok": 1238,
+        "fc_commands_received": 1,
+        "fc_commands_accepted": 1,
+        "fc_commands_processed": 1,
+        "fc_last_command_id": 1,
+        "fc_last_command_msg": 4294967295,
+        "fc_recovery_dequeued": 31,
+        "fc_config_flags": 3162741,
+        "fc_state": 3,
+        "fc_watchdog_resume_rejected": 0,
+        "fc_watchdog_resumed": 0,
+        "can_fifo_overflow_fdcan1": 0
+      },
+      "actual_rf_gps_fix": {
+        "virtual_ms": 38070,
+        "fix": {
+          "latitude": 31.757999420166016,
+          "longitude": -102.0459976196289,
+          "altitude_m": 890.0159912109375,
+          "altitude_reference": "mean_sea_level",
+          "accuracy_m": null,
+          "geoid_separation_m": null,
+          "age_ms": 31,
+          "stale": false,
+          "source": "RF",
+          "manual": false
+        }
+      },
+      "before_fire_receipts": {
+        "qualification": {
+          "version": 2,
+          "generation": 0,
+          "self_test": true,
+          "nitrogen_test": true,
+          "fill_target": true,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": true,
+          "fire_started": false
+        },
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 215
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "after_fire_receipts": {
+        "qualification": {
+          "version": 2,
+          "generation": 1,
+          "self_test": true,
+          "nitrogen_test": false,
+          "fill_target": false,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": false,
+          "fire_started": true
+        },
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 215
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "cold_flow_checklist_cleared": true
+    },
+    "negative": {
+      "result": "PASS",
+      "process_exit": 0,
+      "model_duration_ms": 70000,
+      "milestones": [
+        {
+          "virtual_ms": 0,
+          "phase": "idle",
+          "mission_stage": "idle",
+          "pressure_psi": null
+        },
+        {
+          "virtual_ms": 4230,
+          "phase": "cancel_setup",
+          "mission_stage": "idle",
+          "pressure_psi": null
+        },
+        {
+          "virtual_ms": 4290,
+          "phase": "cancelled",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 4300,
+          "phase": "baseline_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 4310,
+          "phase": "baseline",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 9310,
+          "phase": "self_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 9330,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 9350,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 11360,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 11400,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 11420,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13410,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13450,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 13470,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15480,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15500,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 15520,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17520,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17540,
+          "phase": "self_open",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 17560,
+          "phase": "self_hold",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19560,
+          "phase": "self_close",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19600,
+          "phase": "self_finish",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19620,
+          "phase": "idle",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19630,
+          "phase": "baseline_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 19690,
+          "phase": "baseline",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 24700,
+          "phase": "nitrogen_setup",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 24950,
+          "phase": "raising",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 26470,
+          "phase": "settling",
+          "mission_stage": "idle",
+          "pressure_psi": 50.273929595947266
+        },
+        {
+          "virtual_ms": 28470,
+          "phase": "holding",
+          "mission_stage": "idle",
+          "pressure_psi": 52.207542419433594
+        },
+        {
+          "virtual_ms": 33490,
+          "phase": "dumping",
+          "mission_stage": "idle",
+          "pressure_psi": 52.207542419433594
+        },
+        {
+          "virtual_ms": 34760,
+          "phase": "passed",
+          "mission_stage": "idle",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 34770,
+          "phase": "fill_setup",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 34830,
+          "phase": "filling",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37400,
+          "phase": "pause_setup",
+          "mission_stage": "fill",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37660,
+          "phase": "paused",
+          "mission_stage": "armed",
+          "pressure_psi": 0.0
+        },
+        {
+          "virtual_ms": 37660,
+          "phase": "real_mass_target_armed",
+          "mass_input_kg": 5.019999999999981
+        }
+      ],
+      "qd": {
+        "dispatched_model_ms": 38090,
+        "first_observed_ack_model_ms": 38260,
+        "ack_model_interval_ms": [
+          38260,
+          38260
+        ],
+        "settlement_contract_ms": 5000,
+        "status": "Settling { remaining_ms: 5000 }",
+        "queue_observed_model_ms": 38270,
+        "gps_loss_stimulus_model_ms": 38270
+      },
+      "fc_final": {
+        "panics": 0,
+        "fdcan_rx": 2157,
+        "fdcan_tx_ok": 1555,
+        "fc_commands_received": 0,
+        "fc_commands_accepted": 0,
+        "fc_commands_processed": 0,
+        "fc_last_command_id": 0,
+        "fc_last_command_msg": 4294967295,
+        "fc_recovery_dequeued": 42,
+        "fc_config_flags": 6291573,
+        "fc_state": 2,
+        "fc_watchdog_resume_rejected": 0,
+        "fc_watchdog_resumed": 0,
+        "can_fifo_overflow_fdcan1": 0
+      },
+      "valve_final": {
+        "fdcan_rx": 46405,
+        "fdcan_tx_ok": 12811,
+        "panics": 0,
+        "launch_start_count": 0,
+        "launch_service_count": 0,
+        "launch_elapsed_ticks": 0,
+        "launch_pilot_attempts": 0,
+        "launch_finish_count": 0,
+        "launch_abort_seen": 0,
+        "pilot_actual_state": 0,
+        "pilot_driver_result": 0,
+        "valve_abort": 0,
+        "valve_local_ticks": 69901,
+        "launch_command_utc_lo": 0,
+        "launch_command_utc_hi": 0,
+        "can_fifo_overflow_fdcan1": 0,
+        "can_fifo_overflow_fdcan2": 0
+      },
+      "actuator_final": {
+        "panics": 0,
+        "fdcan_rx": 57969,
+        "fdcan_tx_ok": 1247,
+        "ab_last_executed_command": 8,
+        "ab_sequence_active_word": 65792,
+        "ab_igniter_started_word": 16777216,
+        "ab_igniter_output_word": 0,
+        "ab_igniter_start_ticks": 0,
+        "ab_igniter_stop_ticks": 0,
+        "ab_abort_word": 0,
+        "ab_local_ticks": 69901,
+        "ab_igniter_enable_odr": 0,
+        "ab_driver_fault_idr": 15,
+        "can_fifo_overflow_fdcan1": 0,
+        "can_fifo_overflow_fdcan2": 0
+      },
+      "daq_final": {
+        "fdcan_rx": 15612,
+        "fdcan_tx_ok": 43502,
+        "panics": 0,
+        "daq_launch_deadline_lo": 0,
+        "daq_launch_deadline_hi": 0,
+        "daq_launch_session_lo": 0,
+        "daq_launch_session_hi": 0,
+        "daq_local_deadline_lo": 0,
+        "daq_local_deadline_hi": 0,
+        "can_fifo_overflow_fdcan1": 0
+      },
+      "all_sampled_panics_and_can_overflows": 0,
+      "artifact_root": "FirmwareSimulator/build/ordinary-flight-427-final-host-20261025/negative-gps-loss-1",
+      "artifact_sha256": {
+        "controller.py": "9a94051e6de307285668353670ffb5ef9a54ddb6e7472ea4c4e734f411d845d2",
+        "result.json": "63b754314f6aa06151b46417c9e88d7c92072f9dcba7a440a1eb2fb4d85535ca",
+        "simulator.log": "3b6c63b680a84fcb7cfaa2033561202b8bf2b0edf38d75268f62a20af1049291"
+      },
+      "actual_saved_cancellation_qualification": {
+        "qualification": {
+          "version": 2,
+          "generation": 0,
+          "self_test": true,
+          "nitrogen_test": true,
+          "fill_target": true,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": true,
+          "fire_started": false
+        },
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 218
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "actual_gs_received_gps_fix": {
+        "ack_for": null,
+        "ack_owner": null,
+        "at_us": 38085000,
+        "gps_payload": [
+          98,
+          16,
+          254,
+          65,
+          141,
+          23,
+          204,
+          194,
+          6,
+          129,
+          94,
+          68
+        ],
+        "managed_value": null,
+        "outer_uart_frame_accepted_us": 38085000,
+        "packet_id": 8355827955320036131,
+        "payload_len": 12,
+        "relay_kind": null,
+        "reliable": null,
+        "sender": "@addr:3997908571",
+        "source_address": 3997908571,
+        "targets": [],
+        "timestamp_ms": 1767225637948,
+        "timesync_announce": null,
+        "type": "GPS_DATA",
+        "type_id": 100,
+        "uart_offset": 51606,
+        "decoded_float32": [
+          31.757999420166016,
+          -102.0459976196289,
+          890.0159912109375
+        ]
+      },
+      "actual_gs_received_zero_satellite": {
+        "ack_for": null,
+        "ack_owner": null,
+        "at_us": 39049700,
+        "gps_payload": [
+          0
+        ],
+        "managed_value": null,
+        "outer_uart_frame_accepted_us": 39049700,
+        "packet_id": 17435359357472820096,
+        "payload_len": 1,
+        "relay_kind": null,
+        "reliable": null,
+        "sender": "@addr:3997908571",
+        "source_address": 3997908571,
+        "targets": [],
+        "timestamp_ms": 1767225638935,
+        "timesync_announce": null,
+        "type": "GPS_SATELLITE_NUMBER",
+        "type_id": 19786086,
+        "uart_offset": 52444
+      },
+      "trace_validation": {
+        "all_streams_codec_errors": 0,
+        "all_windows_finished": true,
+        "all_uncapped": true,
+        "max_observed_backstep_us": 14,
+        "explicit_allowed_backstep_us": 14,
+        "decoder_overlay": "GPS JSON output-only patch in isolated SDK clone; CRC/completion/cap/source/codec validation unchanged",
+        "overlay_sha256": "5506057423cb80674bab3c4600d612859225bffc4f55894e054e84beadca0352"
+      }
+    }
+  },
+  "limits": [
+    "No physical pneumatic/combustion/actuator-load or independent hardware-key validation. GPIO fault inputs are modeled deasserted; production-driver asserted-fault contract is separate.",
+    "DAQ memory session/deadline observed;70s ends before finalSDclose. Buffered SD data reconciliation belongs to separate600s source/SD campaign.",
+    "Old recent-GPS collector retained only first10000 raw NDJSON rows and could omit lateGPS behind high-rateDAQ; no absence inference from those empty arrays. Actual RF cache/firmware state and fully completed radio traces establish GPS behavior. Collector fixed afterward.",
+    "These functional traces do not qualify the newly discovered automatic-abort/Fire concurrency boundary. Their exact image/source remain immutable; release requires separate corrected-policy evidence."
+  ]
+}
