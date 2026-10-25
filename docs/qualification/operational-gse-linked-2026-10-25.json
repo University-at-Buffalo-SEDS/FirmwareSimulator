@@ -406,7 +406,7 @@
     "No combustion, real actuation or independent physical enable-key validation",
     "Paused/selftest guard and normal/HITL behavior retain focused regression evidence",
     "Qualification survives storage and is read from actual saved files; no live GS restart between test steps in this run",
-    "Driver fault input is modeled deasserted/high. Separate production-driver contracts cover rejection when fault is asserted; this run exercises the deasserted path only."
+    "Driver fault input is modeled deasserted/high; this run exercises that path only. An asserted-fault rejection contract requires separate production-driver evidence."
   ],
   "preserved_incomplete_attempts": [
     "operational-tare-mass-20261025/positive-fire-1: pre-fix TMinus did not advance",
