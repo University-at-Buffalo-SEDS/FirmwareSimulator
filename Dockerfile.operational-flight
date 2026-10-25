@@ -27,3 +27,8 @@ COPY source-provenance.json /opt/groundstation/source-provenance.json
 COPY --from=sim /firmware-sim /usr/local/bin/firmware-sim
 COPY sim/renode/peripherals/SedsStm32Adc.cs /opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs
 COPY sim/renode/peripherals/SedsSpiSensors.cs /opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs
+
+# Flight watchdog recovery uses the real H5 backup-domain RTC register model.
+COPY sim/renode/peripherals/SedsStm32System.cs /opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+COPY sim/renode/peripherals/SedsStm32H5Rtc.cs /opt/firmware-sim/renode/peripherals/SedsStm32H5Rtc.cs
+COPY sim/renode/platforms/stm32h523.repl /opt/firmware-sim/renode/platforms/stm32h523.repl

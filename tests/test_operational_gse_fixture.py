@@ -13,6 +13,9 @@ class Contracts(unittest.TestCase):
  def test_flight_builder_retains_ordinary_policy_and_requires_full_radio_cohort(self):
   recipe=(p.parents[1]/'Dockerfile.operational-flight').read_text()
   fixture.ordinary_recipe(recipe,flight=True)
+  for model in ['SedsStm32System.cs','SedsStm32H5Rtc.cs']:
+   self.assertIn('COPY sim/renode/peripherals/'+model+' /opt/firmware-sim/renode/peripherals/'+model,recipe)
+  self.assertIn('COPY sim/renode/platforms/stm32h523.repl /opt/firmware-sim/renode/platforms/stm32h523.repl',recipe)
   with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe,flight=False)
   for features in ['testing,firmware_sim','hitl_mode,firmware_sim','test_fire_mode,firmware_sim']:
    with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('--release --features firmware_sim','--release --features '+features),flight=True)

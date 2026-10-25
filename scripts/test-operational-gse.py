@@ -164,6 +164,7 @@ def prepare(args):
     (config/'topology.json').write_text(json.dumps(topology,indent=2))
     command=['docker','run','--rm','--name','seds-operational-gse-'+str(os.getpid()),'--network','host','--group-add',str(os.getgid()),'-e','TMPDIR=/diagnostics/temp','-e','FIRMWARE_SIM_DIAGNOSTICS_DIR=/diagnostics','-v',str(config)+':/simulation:ro','-v',str(diagnostics)+':/diagnostics']
     for name,repo in repos.items():command+=['-v',str((args.cohort/repo).resolve())+':/nodes/'+name+':ro']
+    if args.radio_trace:command[2:2]=['-e','FIRMWARE_SIM_RADIO_TRACE_DIR=/diagnostics/radio-trace','-e','FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS='+str(args.duration_ms-1000)]
     command+=[args.image,'bay','--topology','/simulation/topology.json']
     return out,diagnostics,key,command
 
@@ -219,6 +220,7 @@ def run(args):
                 if args.flight:capture_recent_gps(origin,token,out/(label+'-recent-gps.json'))
             if status['phase']!=phase:
                 phase=status['phase'];summary['milestones'].append({'virtual_ms':now,'phase':phase,'mission_stage':status['mission_stage'],'pressure_psi':status['pressure_psi']});progress()
+            if args.gps_loss_during_qd and stage=='complete':assert not status['qualification']['fire_started'],'Cancelled launch fired later'
             if status['qualification']['fault']or phase=='fault':raise AssertionError('Actual procedure fault: '+status['message'])
             if stage=='ready'and status['topology_stable']and status['valves']==[False,True,True,False,False]and phase in('idle','cancelled'):
                 assert request(origin,'/api/command','StartFill',token)[0]==403,'Fill admitted before tests'
@@ -266,6 +268,15 @@ def run(args):
                     qd_ack_at=now-(5000-int(re.search(r'remaining_ms: (\d+)',status['qd'])[1]))
                     assert request(origin,'/api/command','Launch',token)[0]==200
                     summary['qd']={'dispatched_model_ms':qd_started_at,'first_observed_ack_model_ms':now,'inferred_ack_model_ms':qd_ack_at,'status':status['qd']};progress();stage='qd-settling'
+                    if args.gps_loss_during_qd:atomic(diagnostics/'gps.fix','0');stage='qd-gps-loss'
+            elif stage=='qd-gps-loss':
+                assert not status['qualification']['fire_started'],'Fire committed after live GPS was deliberately lost'
+                if not status['launch_queued']:
+                    code,antenna=request(origin,'/api/antenna/status',token=token)
+                    fix=antenna.get('rocket')if code==200 else None
+                    assert fix is None or fix['source']!='RF' or fix['stale'],'Queue cancelled without observed RF lock loss'
+                    saved_evidence('gps-loss-cancelled')
+                    summary.update(phase='passed',virtual_ms=now,checks='actualrawNMEAfixloss→RFno-fix→queuedQDLaunchcancelled;noFire');progress();stage='complete'
             elif stage=='qd-settling':
                 if status['qualification']['fire_started']:
                     assert now-qd_ack_at>=5000,'Fire before five seconds from actual QD ACK'
@@ -304,4 +315,4 @@ def run(args):
         log.close()
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--cohort',type=Path,required=True);p.add_argument('--template',type=Path,required=True);p.add_argument('--image',required=True);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--duration-ms',type=int,default=90000);p.add_argument('--timeout',type=int,default=2400);p.add_argument('--prepare-only',action='store_true');p.add_argument('--positive-fill',action='store_true');p.add_argument('--fire',action='store_true');p.add_argument('--flight',action='store_true');a=p.parse_args();assert not a.fire or a.positive_fill;assert a.duration_ms>=60000 and a.duration_ms%1000==0;run(a)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--cohort',type=Path,required=True);p.add_argument('--template',type=Path,required=True);p.add_argument('--image',required=True);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--duration-ms',type=int,default=90000);p.add_argument('--timeout',type=int,default=2400);p.add_argument('--prepare-only',action='store_true');p.add_argument('--positive-fill',action='store_true');p.add_argument('--fire',action='store_true');p.add_argument('--flight',action='store_true');p.add_argument('--gps-loss-during-qd',action='store_true');p.add_argument('--radio-trace',action='store_true');a=p.parse_args();assert not a.fire or a.positive_fill;assert not a.gps_loss_during_qd or(a.flight and a.fire);assert a.duration_ms>=60000 and a.duration_ms%1000==0;run(a)
