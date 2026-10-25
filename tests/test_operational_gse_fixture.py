@@ -25,6 +25,7 @@ class Contracts(unittest.TestCase):
    fields['fc_config_flags']=0x200;fields['fc_state']=3;write()
    self.assertEqual(fixture.flight_launch_evidence(Path(root))['fc_state'],3)
    fields['fc_watchdog_resume_rejected']=1;write();self.assertIsNone(fixture.flight_launch_evidence(Path(root)))
+   fields['fc_watchdog_resume_rejected']=2;write();self.assertIsNone(fixture.flight_launch_evidence(Path(root)))
  def test_assumed_plant_uses_only_actual_valve_inputs(self):
   self.assertEqual(fixture.plant_pressure(0,200,[False,False,False,True,False]),7)
   self.assertEqual(fixture.plant_pressure(40,200,[False,True,False,True,False]),0)
