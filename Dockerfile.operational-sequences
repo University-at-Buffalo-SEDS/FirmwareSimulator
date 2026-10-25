@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+FROM rust:bookworm AS gs
+RUN apt-get update && apt-get install -y --no-install-recommends libudev-dev libopus-dev pkg-config cmake ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+COPY sdk /sdk
+COPY gs /opt/groundstation
+COPY verify-sdk.py /verify-sdk.py
+COPY sdk-source-manifest.json /sdk-source-manifest.json
+WORKDIR /opt/groundstation
+ENV CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 DEVICE_IDENTIFIER=GS CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse GS_FRONTEND_SOURCE_DIR=/opt/groundstation/ui CARGO_TARGET_DIR=/gs-target
+RUN cp backend/config/telemetry_config.json /sdk/telemetry_config.json
+RUN --mount=type=cache,id=cohort4-gs-registry,target=/usr/local/cargo/registry --mount=type=cache,id=cohort4-gs-git,target=/usr/local/cargo/git --mount=type=cache,id=cohort4-gs-target,target=/gs-target \
+    cargo update -p SEDSnet && python3 /verify-sdk.py && cargo test --locked --features test_fire_mode,firmware_sim -p groundstation_backend procedure_clock -- --test-threads=1 && cargo build --locked --release --features test_fire_mode,firmware_sim -p groundstation_backend && \
+    cp /gs-target/release/groundstation_backend /opt/groundstation/groundstation_backend && \
+    cargo tree --locked -p SEDSnet --depth 0 > /opt/groundstation/sdk-build-proof.txt
+FROM gs AS sim
+COPY sim /sim-src
+WORKDIR /sim-src
+ENV CARGO_TARGET_DIR=/sim-target
+RUN --mount=type=cache,id=cohort4-gs-registry,target=/usr/local/cargo/registry --mount=type=cache,id=operational-sim-target,target=/sim-target cargo build --locked --release && cp /sim-target/release/firmware-sim /firmware-sim
+FROM seds-firmware-simulator:relay-retention-radio-v4-20261025 AS candidate
+COPY --from=gs /opt/groundstation/groundstation_backend /usr/local/bin/groundstation_backend
+COPY --from=gs /opt/groundstation/sdk-build-proof.json /opt/groundstation/sdk-build-proof.json
+COPY --from=gs /opt/groundstation/sdk-build-proof.txt /opt/groundstation/sdk-build-proof.txt
+
+COPY source-provenance.json /opt/groundstation/source-provenance.json
+
+COPY --from=sim /firmware-sim /usr/local/bin/firmware-sim
+COPY sim/renode/peripherals/SedsStm32Adc.cs /opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs

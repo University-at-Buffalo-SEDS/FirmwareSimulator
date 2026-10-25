@@ -668,7 +668,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         let stimulus = if let Some(path) = &peripheral.stimulus_path {
             let fixture = std::path::Path::new(path);
             ensure!(
-                peripheral.model.as_deref() == Some("stm32_adc")
+                matches!(peripheral.model.as_deref(), Some("stm32_adc" | "mcp3564r"))
                     && (fixture.starts_with("/simulation") || fixture.starts_with("/diagnostics"))
                     && !fixture
                         .components()
@@ -738,7 +738,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
             }
             (ArchitectureKind::Stm32u5, "mcp3564r", "spi2") => {
                 overlay.push_str(&format!(
-                    "layoutDevice{index}: Sensors.SedsMcp3564r @ spi2\n    failureEvery: {}\n    disconnectAfter: {}\n    externalChipSelect: {}\n    preinit:\n        include @{}\n",
+                    "layoutDevice{index}: Sensors.SedsMcp3564r @ spi2\n    failureEvery: {}\n    disconnectAfter: {}\n    externalChipSelect: {}\n{stimulus}    preinit:\n        include @{}\n",
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX),
                     layout.board.connections.iter().any(|wire| wire.to == format!("layoutDevice{index}@0")),
@@ -1670,6 +1670,25 @@ mod tests {
             r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
         );
         assert!(render_peripheral_overlay(&board).is_err());
+    }
+
+    #[test]
+    fn external_spi_adc_passes_only_explicit_fixture_path() {
+        let mut board = layout(
+            "stm32u5",
+            r#"[{"type":"adc","name":"loadcell","model":"mcp3564r","bus":"spi2","bits":24}]"#,
+        );
+        assert!(
+            !render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath:")
+        );
+        board.peripherals[0].stimulus_path = Some("/diagnostics/sequence/loadcell.raw".into());
+        assert!(
+            render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath: \"/diagnostics/sequence/loadcell.raw\"")
+        );
     }
 
     #[test]
