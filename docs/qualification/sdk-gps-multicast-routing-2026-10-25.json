@@ -2,8 +2,8 @@
   "status": "ACTUAL_C_ABI_RED_GREEN_PASS_NEW_MATCHED_COHORT_QUALIFICATION_PENDING",
   "sdk_fix_commit": "3971aef",
   "version_at_source_fix": "4.2.6",
-  "release_note": "Published4.2.6 remains immutable; root coordinates a qualified4.2.7 follow-up. This agent has not published or pushed.",
-  "cause": "Default best-effort routing treated different endpoint roles as interchangeable physical paths. GPS_DATA requests GroundStation, SD-card and FlightController; adaptive selection chose CAN forFC/SD and omitted the radio GroundStation role despite returning success.",
+  "release_note": "Published 4.2.6 remains immutable; root coordinates a qualified 4.2.7 follow-up. This agent has not published or pushed.",
+  "cause": "Default best-effort routing treated different endpoint roles as interchangeable physical paths. GPS_DATA requests GroundStation, SD-card and FlightController; adaptive selection chose CAN for FC/SD and omitted the radio GroundStation role despite returning success.",
   "wire_evidence": {
     "directory": "FirmwareSimulator/build/ordinary-flight-host-20261025/gps-path-diagnostic-12s",
     "image": "sha256:2dbd5b9275695634d5580099a052e7bf0fc78bfcdd78bc0350a94accff30a36e",
@@ -65,8 +65,8 @@
       "1:1": 0,
       "1:0": 0
     },
-    "capture_limit": "All4 traces are uncapped but explicitly unfinished because simulation stops exactlyat12s traceboundary. Strict production diagnostic correctly rejects them; a source-locked private cfg(test) reader allowed onlytheobserved prefix and preserved unfinished flags. This is root-cause evidence, not complete finite qualification.",
-    "gnss_limit": "FinalRF has_fix probe0; two successful GPS publications do not establish sustained GNSS lock. New matched cohort must independently verify valid/no-fix/recovery behavior."
+    "capture_limit": "All 4 traces are uncapped but explicitly unfinished because simulation stops exactly at the 12s trace boundary. Strict production diagnostic correctly rejects them; a source-locked private cfg(test) reader allowed only the observed prefix and preserved unfinished flags. This is root-cause evidence, not complete finite qualification.",
+    "gnss_limit": "Final RF has_fix probe0; two successful GPS publications do not establish sustained GNSS lock. New matched cohort must independently verify valid/no-fix/recovery behavior."
   },
   "policy": {
     "scope": "Default best-effort multi-endpoint discovery only.",
@@ -102,12 +102,12 @@
       "expected": "Finished"
     },
     "covered_cases": [
-      "ActualGPS C ABI packet reaches independent CAN2roles and radioGS1role exactlyonce, identical packet ID and payload.",
-      "Identicalcoverage alternatives emit exactlyone adaptive copy per publication.",
-      "Partialoverlap reuses selected physical side and avoids an extra redundant side.",
-      "Eachrole selectsitsown shortestpath, excluding reflectedlongerGSroute.",
-      "Transientbusy holds original packet onlyforunaccepted side; acceptedside doesnotrepeat onretry.",
-      "ExplicitWeighted and reliablebestoverlap behavior unchanged."
+      "ActualGPS C ABI packet reaches independent CAN two roles and radio one GroundStation role exactly once, identical packet ID and payload.",
+      "Identical coverage alternatives emit exactlyone adaptive copy per publication.",
+      "Partial overlap reuses selected physical side and avoids an extra redundant side.",
+      "Each role selects its own shortest path, excluding reflected longer GroundStation route.",
+      "Transient busy holds original packet only for the unaccepted side; accepted side does not repeat on retry.",
+      "Explicit Weighted and reliable best-overlap behavior unchanged."
     ]
   }
 }
