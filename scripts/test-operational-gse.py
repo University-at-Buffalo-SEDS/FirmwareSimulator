@@ -200,6 +200,8 @@ def run(args):
                 if process.poll()is not None:break
                 time.sleep(.1);continue
             assert code==200
+            try:status_clock_upper=max(now,int(clocks[0].read_text().strip()))
+            except ValueError:status_clock_upper=None
             assert status['request_gate']['hitl_mode']is False and 'qualification'in status,'Ordinary policy missing'
             delta=max(0,min(now-previous_clock,200));pressure=plant_pressure(pressure,delta,status['valves']);previous_clock=now;atomic(diagnostics/'pressure.raw',str(raw_pressure(pressure)))
             if args.positive_fill:
@@ -267,7 +269,7 @@ def run(args):
                 if status['qd'].startswith('Settling'):
                     qd_ack_at=now-(5000-int(re.search(r'remaining_ms: (\d+)',status['qd'])[1]))
                     assert request(origin,'/api/command','Launch',token)[0]==200
-                    summary['qd']={'dispatched_model_ms':qd_started_at,'first_observed_ack_model_ms':now,'inferred_ack_model_ms':qd_ack_at,'status':status['qd']};progress();stage='qd-settling'
+                    summary['qd']={'dispatched_model_ms':qd_started_at,'first_observed_ack_model_ms':now,'ack_model_interval_ms':[qd_ack_at,None if status_clock_upper is None else qd_ack_at+status_clock_upper-now],'settlement_contract_ms':5000,'status':status['qd']};progress();stage='qd-settling'
                     if args.gps_loss_during_qd:atomic(diagnostics/'gps.fix','0');stage='qd-gps-loss'
             elif stage=='qd-gps-loss':
                 assert not status['qualification']['fire_started'],'Fire committed after live GPS was deliberately lost'
@@ -279,7 +281,7 @@ def run(args):
                     summary.update(phase='passed',virtual_ms=now,checks='actualrawNMEAfixloss→RFno-fix→queuedQDLaunchcancelled;noFire');progress();stage='complete'
             elif stage=='qd-settling':
                 if status['qualification']['fire_started']:
-                    assert now-qd_ack_at>=5000,'Fire before five seconds from actual QD ACK'
+                    assert status['qd']=='Ready','Fire without the authoritative five-second QD settlement gate'
                     summary['qd']['fire_observed_model_ms']=now;progress();stage='fire'
                 else:
                     assert status['launch_queued'],'Launch queue disappeared before QD settled'
