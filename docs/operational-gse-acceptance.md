@@ -41,3 +41,19 @@ Existing HITL behavior is unchanged.
 The controller saves its exact source alongside the result and fake settings.
 Interrupted or incomplete attempts remain failures, and neither helper tests nor
 an image build alone count as completed linked acceptance.
+
+The source-qualified 2026-10-25 positive run is recorded in
+[`qualification/operational-gse-linked-2026-10-25.json`](qualification/operational-gse-linked-2026-10-25.json).
+It runs ordinary policy, reaches Armed using the actual quantized mass cutoff,
+and observes the actual valve-board pilot pulse and actuator GPIO pulse before
+completing all 60 virtual seconds. The controller reads qualification and checklist
+receipts from their actual saved files before and after Fire. The model cannot
+validate physical actuation or an independent enable key.
+
+Two production regressions exposed by earlier incomplete runs are preserved in
+that report: the Paused engine incorrectly blocked pilot-driven T-plus after
+committed Fire, and the automatic cutoff used a different mass predicate from
+qualification. The fixes retain the existing fill tolerance, valve ACKs, fresh
+measurements and ordinary interlocks. A below-target plateau cannot qualify a
+fill. DAQ initially uses countdown T0 and then accepts the actual pilot-status
+T0 refinement (30ms in this run), preserving the same recording session.
