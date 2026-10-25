@@ -61,21 +61,122 @@ def analyze(report, start_ms, end_ms):
                 scope='Original trace byte order and timestamps retained. Packet identities deduplicated per source/type. Gaps measure wire arrivals, not private UI state. Leading/trailing intervals are censored observation bounds, not inferred missing packets. GPS_SATELLITE_NUMBER is satellite-count telemetry only, not coordinate or lock evidence.')
 
 
+def delivery_coverage(report, start_ms, end_ms):
+    """Match exact source packet identities to eligible primary DOWN_DATA arrivals."""
+    if not 0 <= start_ms < end_ms:
+        raise ValueError('invalid source coverage window')
+    streams = {(stream['station'],stream['direction']):stream['packets'] for stream in report['streams']}
+    source = unique([packet for packet in streams[0,0] if packet['type'] in TYPES
+                     and start_ms*1000 <= packet['at_us'] <= end_ms*1000])
+    arrivals = {(packet['source_address'],packet['type'],packet['packet_id']):packet
+                for packet in reversed(streams[1,1]) if packet.get('relay_kind') == 1}
+    missing = []
+    delivered = []
+    for packet in source:
+        key = packet['source_address'],packet['type'],packet['packet_id']
+        arrival = arrivals.get(key)
+        item = dict(source_address=key[0], type=key[1], packet_id=key[2],
+                    source_rf_tx_ms=packet['at_us']/1000)
+        if arrival is None:
+            missing.append(item)
+        else:
+            item.update(gs_down_data_ms=arrival['at_us']/1000,
+                        source_to_gs_ms=(arrival['at_us']-packet['at_us'])/1000)
+            delivered.append(item)
+    if not source:
+        raise ValueError('no source reports in coverage window')
+    return dict(result='PASS' if not missing else 'MISSING_SOURCE_REPORTS',
+                start_ms=start_ms,end_ms=end_ms,source_reports=len(source),
+                delivered_reports=len(delivered),missing=missing,
+                maximum_source_to_gs_ms=max((row['source_to_gs_ms'] for row in delivered),default=None),
+                delivered=delivered,
+                scope='Exact SDK source/type/packet-ID match to primary DOWN_DATA; no direct-arrival substitution, loss imputation or threshold relaxation.')
+
+
+
+def metadata_coverage(report, start_ms, end_ms):
+    """Match every canonical discovery occurrence through its correct relay direction.
+
+    Do not deduplicate repeated advertisements: each received canonical packet is
+    separate queued work. A later matching output can satisfy only one input.
+    SDT metadata is deliberately excluded because its chunk/template dependency
+    checks belong to the actual SDK decoder and ordered-stream fixture.
+    """
+    if not 0 <= start_ms < end_ms:
+        raise ValueError('invalid metadata coverage window')
+    streams = {(stream['station'],stream['direction']):stream for stream in report['streams']}
+    canonical = lambda stream: [stream['packets'][frame['packet_index']]
+                                for frame in stream['frames']
+                                if 'packet_index' in frame and frame.get('side_kind') is None]
+    outgoing = canonical(streams[2,0])
+    used = set()
+    rows = []
+    for packet in canonical(streams[2,1]):
+        if (packet['type'] != 'SedsnetDiscoveryAddress'
+                or not start_ms*1000 <= packet['at_us'] <= end_ms*1000
+                or packet.get('relay_kind') not in (None,2)):
+            continue
+        expected = 5 if packet.get('relay_kind') == 2 else 1
+        identity = (packet['source_address'], packet['type'], packet['packet_id'])
+        match = next(((index, candidate) for index,candidate in enumerate(outgoing)
+                      if index not in used and candidate['at_us'] >= packet['at_us']
+                      and candidate.get('relay_kind') == expected
+                      and (candidate['source_address'], candidate['type'], candidate['packet_id']) == identity), None)
+        row = dict(source_address=identity[0], packet_id=identity[2], input_us=packet['at_us'],
+                   expected_output_kind=expected, output_us=None, age_ms=None)
+        if match is not None:
+            index,candidate = match
+            used.add(index)
+            row.update(output_us=candidate['at_us'], age_ms=(candidate['at_us']-packet['at_us'])/1000)
+        rows.append(row)
+    if not rows:
+        raise ValueError('no canonical discovery inputs in coverage window')
+    missing = [row for row in rows if row['output_us'] is None]
+    return dict(result='PASS' if not missing else 'MISSING_CANONICAL_METADATA',
+                start_ms=start_ms,end_ms=end_ms, received_occurrences=len(rows),
+                delivered_occurrences=len(rows)-len(missing),missing=missing,rows=rows,
+                maximum_forwarding_age_ms=max((row['age_ms'] for row in rows if row['age_ms'] is not None),default=None),
+                scope='Canonical DiscoveryAddress occurrences at RRLS UART RX matched one-to-one by source/type/packet ID to the corresponding RRLS UART TX direction; no deduplication, SDT imputation or direct-arrival substitution.')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('decoded',type=Path)
     parser.add_argument('--start-ms',type=float,required=True)
     parser.add_argument('--end-ms',type=float,required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--require-source-reports',action='store_true',help='Require every observed selected source report in this window to arrive through DOWN_DATA')
+    parser.add_argument('--require-canonical-metadata',action='store_true',help='Require every received canonical DiscoveryAddress occurrence to be forwarded')
+    parser.add_argument('--max-source-latency-ms',type=float,help='Fail if any matched source report exceeds this measured wire-latency bound')
+    parser.add_argument('--max-canonical-latency-ms',type=float,help='Fail if any matched canonical discovery exceeds this forwarding bound')
     args=parser.parse_args()
+    if args.max_source_latency_ms is not None and (not args.require_source_reports or not 0 < args.max_source_latency_ms < float('inf')):
+        parser.error('positive --max-source-latency-ms requires --require-source-reports')
+    if args.max_canonical_latency_ms is not None and (not args.require_canonical_metadata or not 0 < args.max_canonical_latency_ms < float('inf')):
+        parser.error('positive --max-canonical-latency-ms requires --require-canonical-metadata')
     with args.decoded.open('rb') as source:
         data=source.read(64*1024*1024+1)
     if len(data)>64*1024*1024:
         parser.error('decoded evidence exceeds64MiB')
-    result=analyze(json.loads(data),args.start_ms,args.end_ms)
+    report=json.loads(data)
+    result=analyze(report,args.start_ms,args.end_ms)
+    if args.require_source_reports:
+        result['exact_source_delivery']=delivery_coverage(report,args.start_ms,args.end_ms)
+    if args.require_canonical_metadata:
+        result['exact_canonical_metadata']=metadata_coverage(report,args.start_ms,args.end_ms)
+    if args.max_source_latency_ms is not None:
+        result['source_latency_gate']=dict(bound_ms=args.max_source_latency_ms, passed=result['exact_source_delivery']['maximum_source_to_gs_ms'] is not None and result['exact_source_delivery']['maximum_source_to_gs_ms'] <= args.max_source_latency_ms)
+    if args.max_canonical_latency_ms is not None:
+        result['canonical_latency_gate']=dict(bound_ms=args.max_canonical_latency_ms, passed=result['exact_canonical_metadata']['maximum_forwarding_age_ms'] is not None and result['exact_canonical_metadata']['maximum_forwarding_age_ms'] <= args.max_canonical_latency_ms)
     args.output.write_text(json.dumps(result,indent=2)+'\n')
     for row in result['rows']:
         print(json.dumps(row,sort_keys=True))
+    if any(not result[key]['passed'] for key in ('source_latency_gate','canonical_latency_gate') if key in result):
+        parser.exit(1,'Observed relay forwarding exceeded the requested latency bound.\n')
+    if args.require_canonical_metadata and result['exact_canonical_metadata']['missing']:
+        parser.exit(1,'Observed canonical discovery packets are missing from the relay.\n')
+    if args.require_source_reports and result['exact_source_delivery']['missing']:
+        parser.exit(1,'Observed source reports are missing from the relay return path.\n')
 
 
 if __name__=='__main__':
