@@ -1,0 +1,113 @@
+{
+  "status": "ACTUAL_C_ABI_RED_GREEN_PASS_NEW_MATCHED_COHORT_QUALIFICATION_PENDING",
+  "sdk_fix_commit": "3971aef",
+  "version_at_source_fix": "4.2.6",
+  "release_note": "Published4.2.6 remains immutable; root coordinates a qualified4.2.7 follow-up. This agent has not published or pushed.",
+  "cause": "Default best-effort routing treated different endpoint roles as interchangeable physical paths. GPS_DATA requests GroundStation, SD-card and FlightController; adaptive selection chose CAN forFC/SD and omitted the radio GroundStation role despite returning success.",
+  "wire_evidence": {
+    "directory": "FirmwareSimulator/build/ordinary-flight-host-20261025/gps-path-diagnostic-12s",
+    "image": "sha256:2dbd5b9275695634d5580099a052e7bf0fc78bfcdd78bc0350a94accff30a36e",
+    "original_sdk_head": "9a8140a43f2f34f041ca3ad1f204e86bb1e69328",
+    "rf_counters": {
+      "radio_rx_frames": {
+        "sample": 11,
+        "value": 272
+      },
+      "radio_tx_frames": {
+        "sample": 11,
+        "value": 302
+      },
+      "rf_gps_has_fix_word": {
+        "sample": 11,
+        "value": 0
+      },
+      "rf_gps_publish_attempts": {
+        "sample": 11,
+        "value": 2
+      },
+      "rf_gps_publish_ok": {
+        "sample": 11,
+        "value": 2
+      },
+      "rf_gps_time_valid": {
+        "sample": 11,
+        "value": 1
+      }
+    },
+    "gps_data_rf_uart_tx": 0,
+    "gps_data_ground_uart_rx": 0,
+    "satellite_reports": [
+      {
+        "packet_id": 16387359865552696122,
+        "rf_tx_us": 8128568,
+        "gs_rx_us": 8170800
+      },
+      {
+        "packet_id": 354291483005039589,
+        "rf_tx_us": 9041000,
+        "gs_rx_us": 9089200
+      },
+      {
+        "packet_id": 13752772735271645588,
+        "rf_tx_us": 10064400,
+        "gs_rx_us": 10095900
+      },
+      {
+        "packet_id": 17941884414971166164,
+        "rf_tx_us": 11024100,
+        "gs_rx_us": 11056900
+      }
+    ],
+    "codec_errors": 0,
+    "trailing_bytes": {
+      "0:1": 0,
+      "0:0": 0,
+      "1:1": 0,
+      "1:0": 0
+    },
+    "capture_limit": "All4 traces are uncapped but explicitly unfinished because simulation stops exactlyat12s traceboundary. Strict production diagnostic correctly rejects them; a source-locked private cfg(test) reader allowed onlytheobserved prefix and preserved unfinished flags. This is root-cause evidence, not complete finite qualification.",
+    "gnss_limit": "FinalRF has_fix probe0; two successful GPS publications do not establish sustained GNSS lock. New matched cohort must independently verify valid/no-fix/recovery behavior."
+  },
+  "policy": {
+    "scope": "Default best-effort multi-endpoint discovery only.",
+    "selection": "For each requested role retain shortest candidates, reuse already chosen physical side if it covers that role, otherwise apply existing adaptive choice among redundant candidates. Deduplicate physical egress.",
+    "preserved": [
+      "Explicit generic/typed route policies and source route modes",
+      "Frozen target senders and reliable-control routing",
+      "Managed-variable ownership/replication",
+      "Reliable best-overlap routing and preferred timesync routing",
+      "Existing per-side transient retry ownership and packet identity"
+    ],
+    "memory": "No RouterInner or persistent state field added. Temporary candidate vectors are bounded by existing endpoint/side sets."
+  },
+  "tests": {
+    "actual_rf_schema_red": {
+      "log": ".workspace-progress/gps-multicast-cabi-red.log",
+      "sha256": "568c5e344d8d356d5e0e768ee0f804621e089a24225d3fe0f9ab8fd071d2d970",
+      "expected": "left: [1, 0]"
+    },
+    "actual_rf_schema_green": {
+      "log": ".workspace-progress/gps-multicast-cabi-green.log",
+      "sha256": "7e221aee08e908542481b6e696e86e968fa9113c876ea869569144d15b95eb52",
+      "expected": "GPS_MULTICAST_COUNTS can=1 radio=1"
+    },
+    "self_contained_ci": {
+      "log": ".workspace-progress/sdk-multicast-fanout-tests.log",
+      "sha256": "50683001690e7b586817c51bd8101e0af18cfa13727332bb541959e654e8f349",
+      "expected": "6 passed; 0 failed"
+    },
+    "strict_clippy": {
+      "log": ".workspace-progress/sdk-multicast-fanout-clippy.log",
+      "sha256": "150f3686a2c8b258d8c4343c06418e45ce68f9fb15fe21cf53327bafc06ef514",
+      "expected": "Finished"
+    },
+    "covered_cases": [
+      "ActualGPS C ABI packet reaches independent CAN2roles and radioGS1role exactlyonce, identical packet ID and payload.",
+      "Identicalcoverage alternatives emit exactlyone adaptive copy per publication.",
+      "Partialoverlap reuses selected physical side and avoids an extra redundant side.",
+      "Eachrole selectsitsown shortestpath, excluding reflectedlongerGSroute.",
+      "Transientbusy holds original packet onlyforunaccepted side; acceptedside doesnotrepeat onretry.",
+      "ExplicitWeighted and reliablebestoverlap behavior unchanged."
+    ]
+  }
+}
