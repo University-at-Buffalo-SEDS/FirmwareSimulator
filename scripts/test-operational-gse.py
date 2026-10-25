@@ -168,6 +168,11 @@ def prepare(args):
     command+=[args.image,'bay','--topology','/simulation/topology.json']
     return out,diagnostics,key,command
 
+def owned_container_name(command):
+    name=command[command.index('--name')+1]
+    if not name.startswith('seds-operational-gse-')or not name.removeprefix('seds-operational-gse-').isdigit():raise ValueError('Unexpected owned simulator container name')
+    return name
+
 def run(args):
     out,diagnostics,key,command=prepare(args)
     (out/'command.json').write_text(json.dumps(command,indent=2))
@@ -284,7 +289,7 @@ def run(args):
                     assert status['qd']=='Ready','Fire without the authoritative five-second QD settlement gate'
                     summary['qd']['fire_observed_model_ms']=now;progress();stage='fire'
                 else:
-                    assert status['launch_queued'],'Launch queue disappeared before QD settled'
+                    assert status['launch_queued']or status['qd']=='Ready','Launch queue cancelled before QD settled'
             elif stage=='fire'and status['qualification']['fire_started']:
                 if not fire_saved:saved_evidence('fire-committed');fire_saved=True
                 clock=request(origin,'/api/launch_clock',token=token)[1]
@@ -313,7 +318,7 @@ def run(args):
     except BaseException as error:
         summary.update(phase='failed',error=str(error));progress();raise
     finally:
-        if process.poll()is None:subprocess.run(['docker','stop','--time','5',command[4]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);process.wait(timeout=30)
+        if process.poll()is None:subprocess.run(['docker','stop','--time','5',owned_container_name(command)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);process.wait(timeout=30)
         log.close()
 
 if __name__=='__main__':

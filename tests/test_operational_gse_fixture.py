@@ -29,6 +29,11 @@ class Contracts(unittest.TestCase):
    self.assertEqual(fixture.flight_launch_evidence(Path(root))['fc_state'],3)
    fields['fc_watchdog_resume_rejected']=1;write();self.assertIsNone(fixture.flight_launch_evidence(Path(root)))
    fields['fc_watchdog_resume_rejected']=2;write();self.assertIsNone(fixture.flight_launch_evidence(Path(root)))
+ def test_cleanup_uses_named_owned_container_after_trace_flags_are_inserted(self):
+  command=['docker','run','-e','TRACE=1','--rm','--name','seds-operational-gse-123','--network','host']
+  self.assertEqual(fixture.owned_container_name(command),'seds-operational-gse-123')
+  command[6]='unrelated-service'
+  with self.assertRaises(ValueError):fixture.owned_container_name(command)
  def test_assumed_plant_uses_only_actual_valve_inputs(self):
   self.assertEqual(fixture.plant_pressure(0,200,[False,False,False,True,False]),7)
   self.assertEqual(fixture.plant_pressure(40,200,[False,True,False,True,False]),0)
