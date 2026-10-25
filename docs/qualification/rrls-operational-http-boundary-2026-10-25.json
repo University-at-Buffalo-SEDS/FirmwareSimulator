@@ -1,6 +1,6 @@
 {
   "status": "FOCUSED_NATIVE_PASS_FINAL_MODE_MATRICES_PENDING",
-  "groundstation_commit": "9033a05",
+  "groundstation_commit": "a7480e7",
   "prior_source_commit": "d97bdea",
   "scope": "Authorized live-GSE HTTP actions only. No SDK/radio/comms/worker/network hot-path changes, physical hardware, publication or existing credentials.",
   "reproduced_before_fix": {
@@ -30,15 +30,15 @@
   },
   "regressions": {
     "ordinary_rrls": {
-      "passed": 1,
+      "passed": 2,
       "handlers_asserted_http403": 4
     },
     "testfire_rrls": {
-      "passed": 1,
+      "passed": 2,
       "handlers_asserted_http403": 4
     },
     "testing_hitl_rrls": {
-      "passed": 1,
+      "passed": 2,
       "handlers_asserted_http403": 4
     },
     "primary_clear_existing_tests": {
@@ -57,23 +57,48 @@
   "logs": {
     "ordinary-rrls": {
       "path": ".workspace-progress/rrls-http-ordinary-rrls.log",
-      "sha256": "056558bada12e1b414b0086d9daa1f0880ddc5c277b06333b628a18a30005034"
+      "sha256": "42cb0c73db1c3f9323193d78def7ba7b6d4b30ec729a2f745316b003872a1d7e"
     },
     "testfire-rrls": {
       "path": ".workspace-progress/rrls-http-testfire-rrls.log",
-      "sha256": "8091c34988d2c6e784aa55de04c02379ff7faac20d5b7132012db278db10d0df"
+      "sha256": "128230107e64e39f5b3f6487dc246f71b1ea896727f441f452bde06d22dbef52"
     },
     "hitl-rrls": {
       "path": ".workspace-progress/rrls-http-hitl-rrls.log",
-      "sha256": "3c2212ce1619cb1c9566049e9eb1218807f8abce536daf1bf0fb86b24539e1f5"
+      "sha256": "d6351b45b8af2bc8a8939e8a7be454ee47a9847cbe2c894d6338244bde138e38"
     },
     "primary-clear": {
       "path": ".workspace-progress/rrls-http-primary-clear.log",
-      "sha256": "94060e2827fc7e9a3b24a2642b4872fb8d5fbc61ed667b0fe812dc772c402f33"
+      "sha256": "51894ff2145482f86a6dc07f646d24c1909023df5fec8722e9744cc0907bd6ea"
     },
     "pre_fix_red": {
       "path": ".workspace-progress/rrls-clear-http-red.log",
       "sha256": "fd0e70ef878c8dbdcd5b05e7d120542bacfd4b8b866099158337c5683952d160"
+    },
+    "bulk_pre_fix_red": {
+      "path": ".workspace-progress/rrls-bulk-confirmation-red.log",
+      "sha256": "8f517410fc2efab0c3edc408313d7930dafd9abe6f8212428d783763b1fe7e53"
     }
+  },
+  "source_commits": [
+    "9033a05",
+    "a7480e7"
+  ],
+  "bulk_confirmation_followup": {
+    "before_fix": "Actual authenticated RRLS Config save using the frontend complete six-field Settings body returned200 and set live dry confirmation true.",
+    "fix": "Bulk settings compare/assign under the same existing GSE lock; only false-to-true grants are forbidden403. Dedicated primary confirmation endpoint remains sole grant owner.",
+    "compatibility": [
+      "No new request DTO or frontend field change.",
+      "True-to-true preserves existing consent.",
+      "Explicit false revokes as before, including stale frontend snapshots.",
+      "Missing field keeps established Config serde-default false/revocation behavior.",
+      "Inert PT/configuration saves stay allowed on RRLS."
+    ],
+    "verified": [
+      "Denied grant writes no settings file.",
+      "Primary dedicated grant succeeds; RRLS dedicated grant denied.",
+      "A stale true snapshot cannot restore invalidated consent."
+    ],
+    "red_log": ".workspace-progress/rrls-bulk-confirmation-red.log"
   }
 }
