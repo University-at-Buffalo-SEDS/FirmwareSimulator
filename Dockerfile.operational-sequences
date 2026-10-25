@@ -26,3 +26,4 @@ COPY source-provenance.json /opt/groundstation/source-provenance.json
 
 COPY --from=sim /firmware-sim /usr/local/bin/firmware-sim
 COPY sim/renode/peripherals/SedsStm32Adc.cs /opt/firmware-sim/renode/peripherals/SedsStm32Adc.cs
+COPY sim/renode/peripherals/SedsSpiSensors.cs /opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs

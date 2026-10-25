@@ -6,6 +6,7 @@ spec=importlib.util.spec_from_file_location('fixture',p);fixture=importlib.util.
 class Contracts(unittest.TestCase):
  def test_builder_requires_ordinary_policy_features(self):
   recipe=(p.parents[1]/'Dockerfile.operational-sequences').read_text();fixture.ordinary_recipe(recipe)
+  self.assertIn('COPY sim/renode/peripherals/SedsSpiSensors.cs /opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs',recipe)
   for features in ['hitl_mode','test_fire_mode,firmware_sim,testing','test_fire_mode','test_fire_mode,firmware_sim,hitl_mode']:
    with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('--release --features test_fire_mode,firmware_sim','--release --features '+features))
  def test_assumed_plant_uses_only_actual_valve_inputs(self):
