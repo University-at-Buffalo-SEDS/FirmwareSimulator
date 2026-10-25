@@ -1,0 +1,79 @@
+{
+  "status": "FOCUSED_NATIVE_PASS_FINAL_MODE_MATRICES_PENDING",
+  "groundstation_commit": "9033a05",
+  "prior_source_commit": "d97bdea",
+  "scope": "Authorized live-GSE HTTP actions only. No SDK/radio/comms/worker/network hot-path changes, physical hardware, publication or existing credentials.",
+  "reproduced_before_fix": {
+    "rrls_role": true,
+    "ordinary_command_path_allows_abort": false,
+    "authenticated_synthetic_admin": "Actual authorization lookup through the normal auth session/user file APIs; no authentication cryptography claim.",
+    "clear_http_response": 200,
+    "local_state_after": "Idle",
+    "actual_router_callback_idle_payloads": [
+      [
+        1
+      ],
+      [
+        1
+      ]
+    ],
+    "setup_note": "The [15] callback in the RED log is the fixture initial Aborted update, not evidence of the offending HTTP Idle mutation."
+  },
+  "guard": {
+    "clear": "Shared primary-only helper rejects before any GSE state, persistence or managed-variable mutation.",
+    "other_live_actions": [
+      "self-test confirmation",
+      "qualification reset",
+      "nitrogen cold-flow override"
+    ],
+    "inert_settings": "Configuration, calibration and other shared settings editing are unchanged."
+  },
+  "regressions": {
+    "ordinary_rrls": {
+      "passed": 1,
+      "handlers_asserted_http403": 4
+    },
+    "testfire_rrls": {
+      "passed": 1,
+      "handlers_asserted_http403": 4
+    },
+    "testing_hitl_rrls": {
+      "passed": 1,
+      "handlers_asserted_http403": 4
+    },
+    "primary_clear_existing_tests": {
+      "passed": 2
+    },
+    "assertions": [
+      "No managed Idle callback",
+      "Local Aborted state unchanged",
+      "Persisted qualification bytes unchanged where applicable",
+      "Dry self-test confirmation unchanged",
+      "No managed-variable cache or checklist completion file mutation"
+    ],
+    "isolation": "Fresh child process with RRLS role and private synthetic account/session and state paths; parent role and static stores untouched."
+  },
+  "composition_limit": "Prior immutable d97 network/flight/test-fire results retain their exact source identities. The new HTTP-only guard is not represented as the same image hash; final mode matrices and composition verification belong to the parent qualification.",
+  "logs": {
+    "ordinary-rrls": {
+      "path": ".workspace-progress/rrls-http-ordinary-rrls.log",
+      "sha256": "056558bada12e1b414b0086d9daa1f0880ddc5c277b06333b628a18a30005034"
+    },
+    "testfire-rrls": {
+      "path": ".workspace-progress/rrls-http-testfire-rrls.log",
+      "sha256": "8091c34988d2c6e784aa55de04c02379ff7faac20d5b7132012db278db10d0df"
+    },
+    "hitl-rrls": {
+      "path": ".workspace-progress/rrls-http-hitl-rrls.log",
+      "sha256": "3c2212ce1619cb1c9566049e9eb1218807f8abce536daf1bf0fb86b24539e1f5"
+    },
+    "primary-clear": {
+      "path": ".workspace-progress/rrls-http-primary-clear.log",
+      "sha256": "94060e2827fc7e9a3b24a2642b4872fb8d5fbc61ed667b0fe812dc772c402f33"
+    },
+    "pre_fix_red": {
+      "path": ".workspace-progress/rrls-clear-http-red.log",
+      "sha256": "fd0e70ef878c8dbdcd5b05e7d120542bacfd4b8b866099158337c5683952d160"
+    }
+  }
+}
