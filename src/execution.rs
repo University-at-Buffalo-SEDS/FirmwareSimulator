@@ -668,13 +668,15 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         let stimulus = if let Some(path) = &peripheral.stimulus_path {
             let fixture = std::path::Path::new(path);
             ensure!(
-                matches!(peripheral.model.as_deref(), Some("stm32_adc" | "mcp3564r"))
-                    && (fixture.starts_with("/simulation") || fixture.starts_with("/diagnostics"))
+                matches!(
+                    peripheral.model.as_deref(),
+                    Some("stm32_adc" | "mcp3564r" | "neo_m9n")
+                ) && (fixture.starts_with("/simulation") || fixture.starts_with("/diagnostics"))
                     && !fixture
                         .components()
                         .any(|part| matches!(part, std::path::Component::ParentDir))
                     && path.len() <= 240,
-                "ADC stimulus must be a bounded /simulation or /diagnostics fixture path"
+                "Sensor stimulus must be a bounded /simulation or /diagnostics fixture path"
             );
             format!("    stimulusPath: {}\n", serde_json::to_string(path)?)
         } else {
@@ -701,7 +703,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     String::new()
                 };
                 overlay.push_str(&format!(
-                    "layoutDevice{index}: Sensors.SedsNeoM9N @ spi1\n{position}    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutDevice{index}: Sensors.SedsNeoM9N @ spi1\n{position}{stimulus}    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
                     peripheral.failure_every.unwrap_or(0),
                     peripheral.disconnect_after.unwrap_or(u64::MAX),
                     source_root.join("SedsSpiSensors.cs").display(),
@@ -1661,6 +1663,27 @@ mod tests {
         );
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(!overlay.contains("latitude:"));
+    }
+
+    #[test]
+    fn gps_fix_stimulus_is_opt_in_and_confined_to_fixture_mounts() {
+        let mut board = layout(
+            "stm32g4",
+            r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
+        );
+        assert!(
+            !render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath:")
+        );
+        board.peripherals[0].stimulus_path = Some("/diagnostics/gps.fix".into());
+        assert!(
+            render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath: \"/diagnostics/gps.fix\"")
+        );
+        board.peripherals[0].stimulus_path = Some("/etc/gps.fix".into());
+        assert!(render_peripheral_overlay(&board).is_err());
     }
 
     #[test]
