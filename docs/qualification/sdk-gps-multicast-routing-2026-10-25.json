@@ -1,5 +1,5 @@
 {
-  "status": "RUNTIME_C_ABI_GREEN_FULL_ENV_FIXTURE_FIXED_FULL_CAMPAIGN_RERUN_PENDING",
+  "status": "MULTICAST_AND_ALLOCATION_FOCUSED_CHECKS_PASS_FINAL_FULL_CAMPAIGNS_PENDING",
   "sdk_fix_commit": "3971aef",
   "version_at_source_fix": "4.2.6",
   "release_note": "Published 4.2.6 remains immutable; root coordinates a qualified 4.2.7 follow-up. This agent has not published or pushed.",
@@ -152,5 +152,62 @@
       }
     },
     "remaining": "Root owns complete default and compact/fair/crypto full reruns with all ignored qualification tests; these focused checks do not replace them."
+  },
+  "single_candidate_fastpath": {
+    "commit": "8a82f55",
+    "runtime_router_sha256": "2d7a2694830b5fecf6f8206e4d3444ec20a8a180099bf723d5c066689a93d281",
+    "cause": "The first role planner unnecessarily allocated per-role scratch for packets with only one eligible physical egress. Full default unit campaign passed721 tests but Stage6 correctly rejected5 allocations per two-endpoint packet against the unchanged3-allocation limit.",
+    "fix": "Enter role planning only with morethan one eligible candidate. A sole physical egress retains the original allocation-bounded transit path. Five-line runtime diff, no memory/latency threshold changes.",
+    "negative": {
+      "default_unit_suite_passed": 721,
+      "default_full_campaign": "FAILED_STAGE6_ALLOCATION_GUARD",
+      "two_endpoint_allocations": 5,
+      "two_endpoint_bytes": 229,
+      "compact_full_campaign": "INTERRUPTED_NOT_PASS",
+      "compact_tests_passed_before_stop": 746,
+      "compact_pressure_soak": "Root deliberately stopped old runtime at281s; SIGTERM is retained and is not a completed600s soak.",
+      "default_retained_log": {
+        "path": ".workspace-progress/sdk-427-full-rerun-default.log",
+        "sha256": "bba14f106929d24d9224da0ef4105623a3e02ab793e726b5ae352b55b7b6d071"
+      },
+      "compact_fair_crypto_retained_log": {
+        "path": ".workspace-progress/sdk-427-full-rerun-compact-fair-crypto.log",
+        "sha256": "08ef0175c4fe22713b832938381421af2775b6179d36aac351d17e2c2f21387e"
+      }
+    },
+    "focused": {
+      "memory_minimal_no_schema": {
+        "log": ".workspace-progress/sdk-role-fastpath-memory-tests.log",
+        "sha256": "0c4dc09ae1d0047a7aa4007e7ebe4c53033d24758d7a6bc67f6266f675bcd02a",
+        "expected": "4 passed; 0 failed"
+      },
+      "memory_minimal_seeded": {
+        "log": ".workspace-progress/sdk-role-fastpath-memory-seeded.log",
+        "sha256": "650c7d751f2e41c9c7cb21cfa3177001f317fdf43c98ce1188d5050a5bfe2f2b",
+        "expected": "4 passed; 0 failed"
+      },
+      "cabi_minimal": {
+        "log": ".workspace-progress/sdk-role-fastpath-cabi-minimal-tests.log",
+        "sha256": "c15090a2a493bb114dfe0e406a1219460fd4ab4ed689fd0adea680f6f3c45aeb",
+        "expected": "6 passed; 0 failed"
+      },
+      "cabi_seeded_default": {
+        "log": ".workspace-progress/sdk-role-fastpath-cabi-default.log",
+        "sha256": "459a128622360ca96fc0614b638f112cd0d41c46e93364cfab57c70fd2353077",
+        "expected": "6 passed; 0 failed"
+      },
+      "strict_compact_all_targets_clippy": {
+        "log": ".workspace-progress/sdk-role-fastpath-clippy.log",
+        "sha256": "c5e7e179525d1c7671828edef37f3bec74da19d1bf4cba7321fa2f78655fff27",
+        "expected": "Finished"
+      }
+    },
+    "measured_steady_transit": {
+      "allocations_per_packet": 3,
+      "two_endpoint_bytes": 133,
+      "three_endpoint_bytes": 136,
+      "maximum_allocation_bytes": 64,
+      "scope": "Measured in both minimal-feature no-schema and actual full-seed environments. CPU nanoseconds remain raw log measurements, not a comparative performance guarantee under parallel load."
+    }
   }
 }
