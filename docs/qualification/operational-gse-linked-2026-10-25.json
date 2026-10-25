@@ -357,7 +357,8 @@
     "initial_close_utc_ms": 1767225765680,
     "initial_close_local_ms": 165662,
     "pilot_status_t0_refinement_ms": 30,
-    "session_and_deadline_consistent": true
+    "session_and_deadline_consistent": true,
+    "sd_boundary": "Actual session/deadline globals and buffered SD image exist; 60s model horizon precedes the165.694s local close deadline. No SDfinal-close or record-decoder count claim is made by this scenario."
   },
   "saved_receipts": {
     "before_fire": {
@@ -404,7 +405,8 @@
     "Test-fire only; flight GPS/FC/QD policy remains separately tested, not linked in this scenario",
     "No combustion, real actuation or independent physical enable-key validation",
     "Paused/selftest guard and normal/HITL behavior retain focused regression evidence",
-    "Qualification survives storage and is read from actual saved files; no live GS restart between test steps in this run"
+    "Qualification survives storage and is read from actual saved files; no live GS restart between test steps in this run",
+    "Driver fault input is modeled deasserted/high. Separate production-driver contracts cover rejection when fault is asserted; this run exercises the deasserted path only."
   ],
   "preserved_incomplete_attempts": [
     "operational-tare-mass-20261025/positive-fire-1: pre-fix TMinus did not advance",
@@ -428,5 +430,26 @@
     "mass-target-armed-checklists.json": "b2c6dab6b88721445f3676dcdf0518e8985a006450a4a8e6a550040310a88a6f",
     "fire-committed-checklists.json": "41ff86c3de3c296917612ebae5f1f953f13f90b24fad113da309b29a80556589",
     "pilot-tplus-checklists.json": "41ff86c3de3c296917612ebae5f1f953f13f90b24fad113da309b29a80556589"
-  }
+  },
+  "negative_api_gates": [
+    {
+      "stage": "idle before self-test",
+      "command": "StartFill",
+      "expected_http": 403,
+      "observed": "asserted by actual controller"
+    },
+    {
+      "stage": "idle before self-test",
+      "command": "NitrogenTest",
+      "expected_http": 403,
+      "observed": "asserted by actual controller"
+    },
+    {
+      "stage": "filling before actual target receipt",
+      "command": "Launch",
+      "expected_http": 403,
+      "observed": "asserted by actual controller"
+    }
+  ],
+  "source_manifest_verified_after_run": true
 }
