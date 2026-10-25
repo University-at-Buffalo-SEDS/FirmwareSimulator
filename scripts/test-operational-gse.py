@@ -73,16 +73,20 @@ def append_probe_symbols(layout,board,definitions):
 
 def capture_recent_gps(origin,token,path):
     req=urllib.request.Request(origin+'/api/recent',headers={'Accept':'application/x-ndjson','Authorization':'Bearer '+token})
-    rows=[];total=0
+    rows=[];total=0;scanned=0;complete=False
     with urllib.request.urlopen(req,timeout=5)as response:
-        for _ in range(10000):
+        for _ in range(1000000):
             line=response.readline(16385)
-            if not line:break
-            total+=len(line)
-            if len(line)>16384 or total>4*1024*1024:raise ValueError('Recent diagnostic exceeded bound')
+            if not line:complete=True;break
+            total+=len(line);scanned+=1
+            if len(line)>16384 or total>64*1024*1024:raise ValueError('Recent diagnostic input exceeded bound')
             row=json.loads(line)
-            if row.get('sender_id')in('RF','FC')and 'GPS'in row.get('data_type',''):rows.append(row)
+            if row.get('sender_id')in('RF','FC')and 'GPS'in row.get('data_type',''):
+                rows.append(row)
+                if len(rows)>8192:raise ValueError('GPS diagnostic output exceeded bound')
+    if not complete:raise ValueError('Recent diagnostic did not reach end of snapshot')
     path.write_text(json.dumps(rows,indent=2)+'\n')
+    path.with_suffix('.capture.json').write_text(json.dumps({'complete':complete,'scanned_rows':scanned,'scanned_bytes':total,'retained_gps_rows':len(rows)},indent=2)+'\n')
 
 def flight_probe_rows(diagnostics):
     """Read bounded, actual FC probe words without manufacturing readiness."""

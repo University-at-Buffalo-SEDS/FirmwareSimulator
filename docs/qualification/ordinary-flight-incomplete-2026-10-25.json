@@ -273,12 +273,13 @@
     },
     "captured_recent_gps_rows": 0,
     "antenna_snapshot_count": 13,
-    "radio_trace": "Original12s capture unfinished at model shutdown; diagnostic prefix decoding only, not strict completed-capture qualification."
+    "radio_trace": "Original12s capture unfinished at model shutdown; diagnostic prefix decoding only, not strict completed-capture qualification.",
+    "recent_capture_scope": "Old diagnostic scanned only first10000 NDJSON rows; high-rate DAQ prefix can omit later GPS. Rowcount0 is not proof of full-history absence; use actual antenna/launch cache and CAPI/trace evidence."
   },
   "confirmed_gaps": [
     "FC watchdog resume rejection stays1 because H5 RTC/register model lacked required startup behavior; flag is a safety guard, never waived.",
     "Ordinary durable Armed must reach FC preparation through its managed-state callback; earlier weak hook did not forward the update.",
-    "RF actually admitted two GPS publications while GroundStation had no RF GPS rows or launch lock; SDK multicast dispatch is being corrected separately."
+    "RF admitted two GPS publications while the actual GroundStation antenna/launch-fix cache remained empty; SDK multicast local dispatch was corrected separately. The old bounded recent-row prefix does not establish whole-history absence."
   ],
   "preservation": "Original outcome, controller source copy, image and raw traces retained unchanged. No failed attempt is relabeled as passed.",
   "artifact_sha256": {

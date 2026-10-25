@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 import unittest
 import tempfile
+import io,json
+from unittest.mock import patch
 p=Path(__file__).resolve().parents[1]/'scripts/test-operational-gse.py'
 spec=importlib.util.spec_from_file_location('fixture',p);fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
 class Contracts(unittest.TestCase):
@@ -34,6 +36,14 @@ class Contracts(unittest.TestCase):
   self.assertEqual(fixture.owned_container_name(command),'seds-operational-gse-123')
   command[6]='unrelated-service'
   with self.assertRaises(ValueError):fixture.owned_container_name(command)
+ def test_recent_gps_scan_retains_late_rows_after_high_rate_daq_prefix(self):
+  prefix=(json.dumps({'sender_id':'DAQ','data_type':'KG50','values':[1]})+'\n').encode()*10001
+  gps={'sender_id':'RF','data_type':'GPS_SATELLITE_NUMBER','values':[0]}
+  with tempfile.TemporaryDirectory()as directory:
+   p=Path(directory)/'gps.json'
+   with patch.object(fixture.urllib.request,'urlopen',return_value=io.BytesIO(prefix+(json.dumps(gps)+'\n').encode())):
+    fixture.capture_recent_gps('http://127.0.0.1:1','fixture-only',p)
+   self.assertEqual(json.loads(p.read_text()),[gps]);self.assertTrue(json.loads(p.with_suffix('.capture.json').read_text())['complete'])
  def test_assumed_plant_uses_only_actual_valve_inputs(self):
   self.assertEqual(fixture.plant_pressure(0,200,[False,False,False,True,False]),7)
   self.assertEqual(fixture.plant_pressure(40,200,[False,True,False,True,False]),0)
