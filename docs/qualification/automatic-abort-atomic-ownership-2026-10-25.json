@@ -1,6 +1,6 @@
 {
   "status": "NATIVE_REGRESSIONS_PASS_MATCHED_IMAGE_QUALIFICATION_PENDING",
-  "groundstation_commit": "dc5e45e44ba62bc2aa813a1dcedd2bbc0d81c5a1",
+  "groundstation_commit": "d97bdea",
   "sdk_commit": "2b1983e6c31c9caffaa129ba8bc9f3b899f4fbd2",
   "scope": "Native correctness follow-up; no hardware, package publication or physical modem drain guarantee. Prior immutable simulator/network results retain their original source identities.",
   "prior_evidence": {
@@ -75,6 +75,22 @@
     "sdk_full_results": {
       "log": ".workspace-progress/sdk-full-accepted-tx-results.json",
       "sha256": "b8dad3df6c912872ac9cec26b276d64f916c3e8c3982e2e1a26e3cc7d607d9c7"
+    },
+    "matrix_ordinary-clear": {
+      "log": ".workspace-progress/abort-matrix-followup-ordinary-clear.log",
+      "sha256": "c0ebc6b2f6a03362391dde3cac56f391a2f146697a694b8c11efa865fc853d8a"
+    },
+    "matrix_hitl-worker": {
+      "log": ".workspace-progress/abort-matrix-followup-hitl-worker.log",
+      "sha256": "d628c934d8c8882d6198a5846f7dd3fc515a9c738bfc7b316539bec11f630333"
+    },
+    "matrix_testfire-shared": {
+      "log": ".workspace-progress/abort-matrix-followup-testfire-shared.log",
+      "sha256": "cabca1b97a79f63302d19035279a37676b1f4b421266678ac70558ceffaef0a0"
+    },
+    "matrix_testfire-worker": {
+      "log": ".workspace-progress/abort-matrix-followup-testfire-worker.log",
+      "sha256": "bf8b754c00fae38f7ed4f619da0d7ae6722e71d3f19967a00a6426c989e8d34f"
     }
   },
   "limits": [
@@ -85,7 +101,8 @@
   "source_commits": [
     "73015b3",
     "dc5e45e",
-    "359c9b2"
+    "359c9b2",
+    "d97bdea"
   ],
   "sdk_full_campaigns": {
     "source_commit": "2b1983e6c31c9caffaa129ba8bc9f3b899f4fbd2",
@@ -102,5 +119,25 @@
       "elapsed_seconds": 780.4,
       "codec_pressure_seconds": 600
     }
+  },
+  "mode_matrix_followup": {
+    "prior_source": "dc5e45e",
+    "prior_results_retained": [
+      "owned-tx-network-fixed-host-20261025:527 passed,2 failed,2 ignored",
+      "owned-tx-flight-fixed-host-20261025:548 passed,1 failed,3 ignored",
+      "owned-tx-testfire-fixed-host-20261025:compile failed on absent safety_task test references"
+    ],
+    "fixes": [
+      "Preserve existing active/running409 validation before requiring the router; retain recheck after pending ownership inspection.",
+      "In testing builds, run actual central-worker dispatch proof in a fresh subprocess with GS_SIM_MODE=0 before the simulator OnceLock initializes. No timeout extension or callback waiver.",
+      "Direct safety producer is intentionally absent from test-fire. Shared claim/TX/Clear cases use their applicable policy fixture there; the separate actual central-worker callback proof still executes."
+    ],
+    "targeted_passes": {
+      "ordinary_clear_rejection": 1,
+      "testing_hitl_actual_worker": 1,
+      "testfire_shared_policy": 8,
+      "testfire_actual_worker": 1
+    },
+    "full_new_matrices": "Pending root rerun on new additive snapshots; prior failures are not relabeled."
   }
 }
