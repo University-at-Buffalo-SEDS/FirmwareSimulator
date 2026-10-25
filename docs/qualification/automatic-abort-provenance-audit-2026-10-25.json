@@ -1,0 +1,30 @@
+{
+  "status": "THEORETICAL_INTERLEAVING_NOT_REPRODUCED",
+  "scope": "Read-only follow-up to flight-launch procedure audit. No runtime fix, hardware operation, failure reproduction or safety guarantee is implied.",
+  "implemented_boundary": "GroundStation automatic_abort_allowed rejects durable Fire and Launch-or-later flight states. Existing tests cover producer decisions after committed Fire, restarted local Idle, and post-Launch suppression of valve correction.",
+  "observed_code": [
+    {
+      "file": "GroundStation26/backend/src/auto_zero.rs",
+      "behavior": "On failed automatic zero, checks automatic_abort_allowed and then asynchronously sends the same TelemetryCommand::Abort used for manual abort."
+    },
+    {
+      "file": "GroundStation26/backend/src/safety_task.rs",
+      "behavior": "Checks automatic_abort_allowed and then directly logs/flushed an abort packet through Router."
+    },
+    {
+      "file": "GroundStation26/backend/src/telemetry_task.rs",
+      "behavior": "The Abort consumer does not retain origin/generation; it logs the received command as manual Abort."
+    }
+  ],
+  "candidate_interleaving": [
+    "Automatic producer checks the pre-Fire stage and decides to abort.",
+    "Launch commits durable Fire before the producer's enqueue/dispatch or while a previously enqueued automatic abort waits.",
+    "The automatic abort can reach the ordinary Abort consumer or router after commit without provenance distinguishing it from a manual operator request."
+  ],
+  "evidence_limit": "This is source-level reasoning about possible concurrency. No test has forced this interleaving and no captured radio/firmware failure has been attributed to it. Do not report it as reproduced or fixed.",
+  "targeted_follow_up": [
+    "Add a deterministic barrier around the automatic producer's decision/enqueue and commit Fire between them; separately test an already queued automatic abort.",
+    "Exercise the actual safety and automatic-zero producers after commit, with no new abort or valve correction; preserve manual Abort as a separate authorized operator action.",
+    "If reproduced, coordinate an internal origin/generation plus a shared commit/dispatch fence instead of blanket-disabling manual Abort or weakening board watchdog/recovery behavior."
+  ]
+}
