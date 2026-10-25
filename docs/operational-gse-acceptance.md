@@ -57,3 +57,29 @@ qualification. The fixes retain the existing fill tolerance, valve ACKs, fresh
 measurements and ordinary interlocks. A below-target plateau cannot qualify a
 fill. DAQ initially uses countdown T0 and then accepts the actual pilot-status
 T0 refinement (30ms in this run), preserving the same recording session.
+
+## Ordinary flight variant
+
+`Dockerfile.operational-flight` enables only `firmware_sim`; ordinary operational
+policy stays active. Run the controller with `--flight --positive-fill --fire`
+against a separately frozen seven-board cohort. The fixture initially supplies
+raw no-fix NMEA, verifies that QD is blocked after filling, then enables a real
+NMEA fix and waits for RF GPS telemetry. QD must receive its actual actuator
+confirmation before the five-second model-time settlement can release queued
+Launch. `--radio-trace` ends capture one second before execution ends, allowing
+strict trace reconciliation.
+
+The flight proof requires real FC received/accepted/processed counters, the actual
+LaunchRequested configuration bit, a flight-mode FSM state and an unset watchdog
+resume-rejection safety flag. A nonzero boot rejection is a safety failure; it is
+never accepted as a harmless counter baseline. The H5 RTC/register models must
+support the firmware's actual recovery-clock initialization. Canonical Armed
+must reach FC's managed-state preparation hook before Launch; qualification
+flags or transport ACKs alone cannot establish readiness.
+
+A separate fresh run with `--gps-loss-during-qd` switches raw NMEA back to no-fix
+after queuing Launch during QD settlement. It must observe lost RF lock and queue
+cancellation without Fire. This negative run does not retry the one-way QD
+operation or stand in for a fresh positive flight run. Every run uses disposable
+accounts, calibration, receipt files, pressure/mass fixtures and simulated GPIO.
+No physical valve, deployment or ignition test is performed.
