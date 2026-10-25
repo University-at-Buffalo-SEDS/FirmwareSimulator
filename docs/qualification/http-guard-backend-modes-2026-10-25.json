@@ -1,5 +1,5 @@
 {
-  "status": "ALL_FOUR_BACKEND_MATRICES_RELEASES_AND_STATIC_IMAGE_PROOFS_PASS_TESTFIRE_LINKED_CASE_RUNNING",
+  "status": "ALL_FOUR_BACKEND_MATRICES_RELEASES_STATIC_IMAGE_PROOFS_AND_LINKED_TESTFIRE_PASS",
   "scope": "Committed GS a7480e7 +SDK2b1983e +frontend01a92c9. No publication or physical hardware. Explicit ignored backend helpers are not represented as executed.",
   "modes": {
     "production": {
@@ -128,7 +128,7 @@
     }
   },
   "composition": {
-    "status": "SOURCE_COMPOSITION_VERIFIED_FINAL_MODE_MATRICES_RUNNING",
+    "status": "SOURCE_COMPOSITION_VERIFIED",
     "baseline_gs": "d97bdeaea5748f3827059067cccd8a6283328a57",
     "candidate_gs": "a7480e7498bd9d517f408f9b3f094ac8ec3f2070",
     "baseline_image": "sha256:2ec618eb65ca77c16574c4b62cd7c9547161b10bc7c6aa075a5c4f0b60a29629",
@@ -187,11 +187,137 @@
     "scope": "Existing d97 immutable network600s evidence remains exact d97. New HTTP-only guards are composed through explicit unchanged byte-path proof and fresh backend matrices, not an assertion that images/hashes are identical. New testfire operational case remains pending its exclusive slot."
   },
   "linked_testfire": {
+    "status": "PASS_FULL_NATIVE_70000_MS_CONTROLLER_EXIT0",
     "image_id": "sha256:23a28aedc2df659007e24c99fe284b32bfb99044326c0538b5c62ffe939ec251",
-    "scope": "Separate4MCU70s synthetic-plant operational run; no fake ACKs or qualification writes",
-    "status": "running",
-    "evidence": "build/httpguard-testfire-qualified-host-20261025/positive-fire-1",
-    "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626"
+    "groundstation_commit": "a7480e7",
+    "sdk_commit": "2b1983e",
+    "frontend_commit": "01a92c9",
+    "native_counts": {
+      "mcu_nodes": 4,
+      "host_nodes": 1,
+      "links": 2,
+      "virtual_ms": 70000
+    },
+    "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626",
+    "firmware_artifacts_unchanged": true,
+    "gate": {
+      "fire_pilot_tplus_at_model_ms": 45680,
+      "mass_target": {
+        "virtual_ms": 35650,
+        "phase": "real_mass_target_armed",
+        "mass_input_kg": 5.0399999999999805
+      },
+      "valve_launch_start_count": 1,
+      "valve_pilot_attempts": 1,
+      "valve_launch_finish_count": 1,
+      "valve_launch_abort_seen": 0,
+      "pilot_actual_open_samples": [
+        45,
+        46
+      ],
+      "igniter_actual_gpio_PB7_on_samples_after_fire": [
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48
+      ],
+      "igniter_gpio_final_off": true,
+      "igniter_pulse_delta_threadx_ticks": 10002,
+      "cold_flow_completion_cleared_after_fire": true
+    },
+    "captured_health": {
+      "gateway": {
+        "panics": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan1": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan2": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        }
+      },
+      "actuator": {
+        "panics": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan1": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan2": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        }
+      },
+      "valve": {
+        "panics": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan1": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan2": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        }
+      },
+      "daq": {
+        "panics": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        },
+        "can_fifo_overflow_fdcan1": {
+          "samples": 70,
+          "maximum": 0,
+          "last": 0
+        }
+      }
+    },
+    "transport_scope": "Legacy logical link name fill_pico/printed Pico-Fi pair description remains in the template. The actual host transport is pico_fi_discovery_to_uart: native host TCP server127.0.0.1:0 with unique loopback UDP discovery bridge to gateway USART2. No second host Pico or I2C transport is instantiated.",
+    "plant_assumptions": {
+      "nitrogen_psi_per_second": 35,
+      "relief_psi_per_second": 200,
+      "closed_leak_psi_per_second": 0,
+      "mass_target_intentionally_unmet": false,
+      "nitrous_fill_kg_per_second": 2
+    },
+    "limits": [
+      "Synthetic pressure/loadcell response and disposable test account; no physical pneumatic/ignition hardware.",
+      "No fake ACK or qualification writes; controller requests actual APIs and stimulates ADC model inputs.",
+      "Byte-sized symbol word probes can include neighboring bytes; ignition proof uses realGPIO PB7 register, not guessed bit0 of packed bool words.",
+      "These source/image IDs remain exact2b; later ABI-assertion/release-script fixes require separate identities and composition evidence."
+    ],
+    "artifact_hashes": {
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/positive-fire-1/result.json": "efa3efde9652b71de6edf61255ceae93d082e1565c41a0a787b3a5aaf38cc8f6",
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/positive-fire-1/simulator.log": "13f815f4cc12d855386068f77e2ad1e3ba5a51745723ee48445f2f62b903cc8d",
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/positive-fire-1/diagnostics/bay-live-39yCZT/memory-probes.txt": "51d760bc072b1a2aa59af4b5bdd3f5c607a72e742b6974c4ff3a971822dd8211",
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/positive-fire-1/pilot-tplus-qualification.json": "2e444e9ee5e7dc757c27f8a9ca0afb2057b06e05ef3f1f9322c62307856d7ceb",
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/positive-fire-1/pilot-tplus-checklists.json": "063cad449af92ae646ae9f29df000845c7b65a3dec12546437ec94cd95677c23",
+      "FirmwareSimulator/build/httpguard-testfire-qualified-host-20261025/operational-controller-exit.json": "ace25a7f4d45bf712085dd9ffb5b5ed9411d423501720afdbf328bb7425520b7"
+    }
   },
   "limits": [
     "Existing2b/d97 network600s cohorts keep exact original image and source identity. The HTTP-only patch is composed by explicit unchanged7network-file/70SDK-runtime proof plus new backend matrices, not relabeled as the same image.",
