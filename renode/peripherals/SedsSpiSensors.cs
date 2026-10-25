@@ -203,7 +203,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
     public sealed class SedsNeoM9N : ISPIPeripheral
     {
         public SedsNeoM9N(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue,
-            double latitude = 43.0, double longitude = -78.78, double altitudeM = 300.0)
+            double latitude = 43.0, double longitude = -78.78, double altitudeM = 300.0, string stimulusPath = "")
         {
             if(Double.IsNaN(latitude) || Double.IsInfinity(latitude) || Math.Abs(latitude) > 90.0
                 || Double.IsNaN(longitude) || Double.IsInfinity(longitude) || Math.Abs(longitude) > 180.0
@@ -211,6 +211,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
             {
                 throw new ArgumentOutOfRangeException("GPS position must be finite and within geographic bounds");
             }
+            this.stimulusPath = stimulusPath ?? "";
+            validFix = this.stimulusPath.Length == 0;
             // Format once; 1Hz emission retains bounded storage and work.
             coordinates = FormatCoordinate(latitude, true) + "," + FormatCoordinate(longitude, false);
             altitude = altitudeM.ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture);
@@ -220,6 +222,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 "gpsFix", limit: 1000, enabled: true, eventEnabled: true);
             updateTimer.LimitReached += () => {
                 elapsedSeconds++;
+                PollFixStimulus();
                 // One pending fix bounds storage when the host stops reading.
                 if(output.Count == 0) FillNmea();
             };
@@ -247,7 +250,33 @@ namespace Antmicro.Renode.Peripherals.Sensors
             position = 0;
             transactions = 0;
             faulted = false;
+            PollFixStimulus();
             FillNmea();
+        }
+
+        public ulong StimulusRejected { get; private set; }
+        private void PollFixStimulus()
+        {
+            if(stimulusPath.Length == 0) return;
+            try
+            {
+                var text = new char[17];
+                int count;
+                using(var stream = new System.IO.StreamReader(stimulusPath))
+                    count = stream.ReadBlock(text, 0, text.Length);
+                if(count > 16) throw new FormatException("oversized GPS fix fixture");
+                var value = new string(text, 0, count).Trim();
+                if(value != "0" && value != "1") throw new FormatException("invalid GPS fix fixture");
+                validFix = value == "1";
+            }
+            catch(System.IO.IOException) { RejectStimulus(); }
+            catch(UnauthorizedAccessException) { RejectStimulus(); }
+            catch(FormatException) { RejectStimulus(); }
+        }
+
+        private void RejectStimulus()
+        {
+            if(StimulusRejected != ulong.MaxValue) StimulusRejected++;
         }
 
         private void FillNmea()
@@ -256,9 +285,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 .AddSeconds(elapsedSeconds);
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             var time = utc.ToString("HHmmss", culture) + ".00";
-            EnqueueNmea("GNGGA," + time + "," + coordinates + ",1,12,0.8," + altitude + ",M,-34.0,M,,");
-            EnqueueNmea("GNRMC," + time + ",A," + coordinates + ",0.0,0.0,"
-                + utc.ToString("ddMMyy", culture) + ",,,A");
+            EnqueueNmea("GNGGA," + time + "," + coordinates + (validFix ? ",1,12,0.8," : ",0,00,99.9,") + altitude + ",M,-34.0,M,,");
+            EnqueueNmea("GNRMC," + time + (validFix ? ",A," : ",V,") + coordinates + ",0.0,0.0,"
+                + utc.ToString("ddMMyy", culture) + (validFix ? ",,,A" : ",,,N"));
         }
 
         private static string FormatCoordinate(double value, bool latitude)
@@ -282,6 +311,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
             foreach(var character in sentence) output.Enqueue((byte)character);
         }
 
+        private readonly string stimulusPath;
+        private bool validFix;
         private readonly string coordinates;
         private readonly string altitude;
 

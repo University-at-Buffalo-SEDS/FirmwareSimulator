@@ -1,11 +1,12 @@
 """Execute the actual SPI GPS model; verify framing, checksums and UTC pacing."""
 from pathlib import Path
 import shutil
+import os
 import subprocess
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
-@unittest.skipUnless(shutil.which('mcs') and shutil.which('mono'),'Mono compiler/runtime required')
+@unittest.skipUnless((shutil.which('mcs') and shutil.which('mono')) or os.environ.get('CSHARP_TEST_DOTNET_IMAGE'),'Mono or explicitly selected local .NET image required')
 class GpsNmeaModelTests(unittest.TestCase):
     def test_valid_bounded_one_hz_stream_and_reset_time(self):
         source=(ROOT/'renode/peripherals/SedsSpiSensors.cs').read_text()
@@ -39,7 +40,7 @@ class Program {
   for(var i=0;i<1024;i++){var b=gps.Transmit(0xff);if(b==0xff){gps.FinishTransmission();return text.ToString();}text.Append((char)b);}
   throw new Exception("GPS output grew without bound");
  }
- static void Check(string text,string time,string date,string coordinates="4300.0000,N,07846.8000,W",string altitude="300.0") {
+ static void Check(string text,string time,string date,string coordinates="4300.0000,N,07846.8000,W",string altitude="300.0",bool fix=true) {
   var lines=text.Split(new[]{"\r\n"},StringSplitOptions.RemoveEmptyEntries);
   Require(lines.Length==2,"exactly one bounded GGA/RMC fix");
   foreach(var line in lines){
@@ -48,9 +49,9 @@ class Program {
    Require(line.Substring(star+1)==crc.ToString("X2"),"NMEA checksum");
    Require(line.Contains(","+time+","),"virtual UTC advances independently of SPI traffic");
   }
-  Require(lines[1].Contains(","+date+",,,A*"),"RMC date and active fix");
-  Require(lines[0].Contains(","+coordinates+",1,12,0.8,"+altitude+",M,"),"GGA position and altitude");
-  Require(lines[1].Contains(",A,"+coordinates+",0.0,0.0,"),"RMC position agrees with GGA");
+  Require(lines[1].Contains(","+date+(fix?",,,A*":",,,N*")),"RMC date and fix mode");
+  Require(lines[0].Contains(","+coordinates+(fix?",1,12,0.8,":",0,00,99.9,")+altitude+",M,"),"GGA position, quality, satellites and altitude");
+  Require(lines[1].Contains((fix?",A,":",V,")+coordinates+",0.0,0.0,"),"RMC fix status and position agree with GGA");
  }
  static void Main(){
   var gps=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine());var clock=LimitTimer.Last;
@@ -79,11 +80,43 @@ class Program {
   foreach(var invalid in new[]{Double.NaN,Double.PositiveInfinity,Double.NegativeInfinity}) {
    bool rejected=false;try {new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),altitudeM:invalid);}catch(ArgumentOutOfRangeException){rejected=true;}Require(rejected,"invalid altitude rejected");
   }
-  Console.WriteLine("PASS: real GPS model, valid NMEA, bounded1Hz, UTC rollover, reset continuity and SPI failure");
+  var file=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"gps-fix-stimulus.txt");
+  System.IO.File.WriteAllText(file,"0\n");
+  var controlled=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),stimulusPath:file);var fixtureClock=LimitTimer.Last;
+  Check(Read(controlled),"000000.00","010126",fix:false);
+  System.IO.File.WriteAllText(file,"1");Require(Read(controlled)=="","no SPI byte polls fixture or invents a new fix");
+  fixtureClock.Fire();Check(Read(controlled),"000001.00","010126");
+  System.IO.File.WriteAllText(file,"0");fixtureClock.Fire();
+  // Preserve a complete pending batch when the next input changes; never splice NMEA.
+  System.IO.File.WriteAllText(file,"1");fixtureClock.Fire();Check(Read(controlled),"000002.00","010126",fix:false);
+  fixtureClock.Fire();Check(Read(controlled),"000004.00","010126");
+  var second=4;
+  foreach(var malformed in new[]{"", "true", "-1", "0,1", new string('1',17)}) {
+    System.IO.File.WriteAllText(file,malformed);var before=controlled.StimulusRejected;
+    Require(Read(controlled)==""&&controlled.StimulusRejected==before,"reads do not poll the file");
+    fixtureClock.Fire();second++;
+    Check(Read(controlled),new DateTime(2026,1,1).AddSeconds(second).ToString("HHmmss",System.Globalization.CultureInfo.InvariantCulture)+".00","010126");
+    Require(controlled.StimulusRejected==before+1,"one rejected bounded read per second, retaining last good fix");
+  }
+  System.IO.File.Delete(file);var missing=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),stimulusPath:file);var missingClock=LimitTimer.Last;
+  Require(missing.StimulusRejected==1,"missing initial fixture rejected");Check(Read(missing),"000000.00","010126",fix:false);
+  System.IO.File.WriteAllText(file,"1");missingClock.Fire();Check(Read(missing),"000001.00","010126");
+  missing.Reset();Check(Read(missing),"000001.00","010126");
+  System.IO.File.Delete(file);missingClock.Fire();Check(Read(missing),"000002.00","010126");Require(missing.StimulusRejected==2,"missing later input retains last good");
+  var ordinary=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine());
+  var nofile=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),stimulusPath:"");
+  Require(Read(ordinary)==Read(nofile),"empty fixture path preserves exact default NMEA bytes");
+  Console.WriteLine("PASS: real GPS model, bounded1Hz/checksums/UTC, raw nofix-to-fix input and last-good rejection");
  }
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'gps.cs';path.write_text(code);exe=Path(tmp)/'gps.exe'
-            subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True)
-            subprocess.run(['mono',str(exe)],check=True)
+            image=os.environ.get('CSHARP_TEST_DOTNET_IMAGE')
+            if image:
+                (Path(tmp)/'contract.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup><ItemGroup><Compile Include="gps.cs"/></ItemGroup></Project>')
+                result=subprocess.run(['docker','run','--rm','--network=none','--user',str(os.getuid())+':'+str(os.getgid()),'--env','HOME=/tmp','--env','DOTNET_CLI_HOME=/tmp','--mount','type=bind,source='+tmp+',target=/fixture','--workdir','/fixture','--entrypoint','dotnet',image,'run','--project','contract.csproj'],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            else:
+                subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True)
+                subprocess.run(['mono',str(exe)],check=True)
