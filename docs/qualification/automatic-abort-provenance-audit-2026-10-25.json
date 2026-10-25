@@ -1,30 +1,84 @@
 {
-  "status": "THEORETICAL_INTERLEAVING_NOT_REPRODUCED",
-  "scope": "Read-only follow-up to flight-launch procedure audit. No runtime fix, hardware operation, failure reproduction or safety guarantee is implied.",
+  "status": "QUEUED_AUTOMATIC_ZERO_INTENT_RECHECK_FIXED_DIRECT_SAFETY_INTERLEAVING_UNPROVEN",
+  "groundstation_commit": "1b789eb2fe0e43bea070ddf056c40e3243490cbc",
+  "original_audit_commit": "f985d326c2c9eb5b70c593a2b4e6ca7e63a2dbdc",
+  "scope": "Source and native regression follow-up only. No hardware operation or forced concurrent direct-router failure reproduction. This does not claim an atomic fence around every producer or an already enqueued Router abort.",
   "implemented_boundary": "GroundStation automatic_abort_allowed rejects durable Fire and Launch-or-later flight states. Existing tests cover producer decisions after committed Fire, restarted local Idle, and post-Launch suppression of valve correction.",
-  "observed_code": [
-    {
-      "file": "GroundStation26/backend/src/auto_zero.rs",
-      "behavior": "On failed automatic zero, checks automatic_abort_allowed and then asynchronously sends the same TelemetryCommand::Abort used for manual abort."
+  "prior_audit": {
+    "status": "THEORETICAL_INTERLEAVING_NOT_REPRODUCED",
+    "scope": "Read-only follow-up to flight-launch procedure audit. No runtime fix, hardware operation, failure reproduction or safety guarantee is implied.",
+    "implemented_boundary": "GroundStation automatic_abort_allowed rejects durable Fire and Launch-or-later flight states. Existing tests cover producer decisions after committed Fire, restarted local Idle, and post-Launch suppression of valve correction.",
+    "observed_code": [
+      {
+        "file": "GroundStation26/backend/src/auto_zero.rs",
+        "behavior": "On failed automatic zero, checks automatic_abort_allowed and then asynchronously sends the same TelemetryCommand::Abort used for manual abort."
+      },
+      {
+        "file": "GroundStation26/backend/src/safety_task.rs",
+        "behavior": "Checks automatic_abort_allowed and then directly logs/flushed an abort packet through Router."
+      },
+      {
+        "file": "GroundStation26/backend/src/telemetry_task.rs",
+        "behavior": "The Abort consumer does not retain origin/generation; it logs the received command as manual Abort."
+      }
+    ],
+    "candidate_interleaving": [
+      "Automatic producer checks the pre-Fire stage and decides to abort.",
+      "Launch commits durable Fire before the producer's enqueue/dispatch or while a previously enqueued automatic abort waits.",
+      "The automatic abort can reach the ordinary Abort consumer or router after commit without provenance distinguishing it from a manual operator request."
+    ],
+    "evidence_limit": "This is source-level reasoning about possible concurrency. No test has forced this interleaving and no captured radio/firmware failure has been attributed to it. Do not report it as reproduced or fixed.",
+    "targeted_follow_up": [
+      "Add a deterministic barrier around the automatic producer's decision/enqueue and commit Fire between them; separately test an already queued automatic abort.",
+      "Exercise the actual safety and automatic-zero producers after commit, with no new abort or valve correction; preserve manual Abort as a separate authorized operator action.",
+      "If reproduced, coordinate an internal origin/generation plus a shared commit/dispatch fence instead of blanket-disabling manual Abort or weakening board watchdog/recovery behavior."
+    ]
+  },
+  "queued_automatic_zero_fix": {
+    "producer": "auto_zero failure queues TelemetryCommand::AutomaticAbort, preserving automatic origin until consumption.",
+    "consumer": "command_at_dispatch rechecks automatic_abort_allowed before normal dispatch; stale automatic intent is discarded after Launch/Fire, while valid prelaunch automatic intent maps to Abort.",
+    "manual": "Ordinary operator TelemetryCommand::Abort passes through unchanged; automatic errors retain automatic origin in their dispatch reason/message.",
+    "external_api": "Internal AutomaticAbort is serde-skipped and cannot be submitted as a client command.",
+    "hitl": "Existing HITL automatic-abort behavior is preserved by automatic_abort_allowed; test branches explicitly require automatic intent to remain dispatchable in HITL Launch.",
+    "regression": "telemetry_task::tests::queued_automatic_abort_rechecks_launch_boundary_without_blocking_manual_abort",
+    "assertions": [
+      "Prelaunch automatic intent maps to Abort.",
+      "At Launch, non-HITL automatic intent is discarded; HITL still maps to Abort.",
+      "Manual Abort remains dispatchable at Launch.",
+      "JSON deserialization rejects client AutomaticAbort.",
+      "Automatic-zero timeout regression now expects AutomaticAbort intent, not a falsely labeled manual command."
+    ]
+  },
+  "native_campaigns": {
+    "ordinary": {
+      "log": ".workspace-progress/gs-flight-followup-ordinary-tests.log",
+      "sha256": "3c2c513b5595255ccb8b44d909d0b10cbaebcf37b6ea6871b6d1b16e9c0ba5e1",
+      "passed": 535,
+      "failed": 0,
+      "ignored": 3,
+      "scope": "Root full backend native campaign; preserved explicit ignored qualification helpers. No ignored test was represented as executed."
     },
-    {
-      "file": "GroundStation26/backend/src/safety_task.rs",
-      "behavior": "Checks automatic_abort_allowed and then directly logs/flushed an abort packet through Router."
+    "testfire": {
+      "log": ".workspace-progress/gs-flight-followup-testfire-tests.log",
+      "sha256": "2ff959ec8fa14b5f02261458c0aebb85c13608544717dd36033a3f17e89bc27e",
+      "passed": 536,
+      "failed": 0,
+      "ignored": 3,
+      "scope": "Root full backend native campaign; preserved explicit ignored qualification helpers. No ignored test was represented as executed."
     },
-    {
-      "file": "GroundStation26/backend/src/telemetry_task.rs",
-      "behavior": "The Abort consumer does not retain origin/generation; it logs the received command as manual Abort."
+    "hitl": {
+      "status": "RUNNING_AT_DOCUMENTATION_TIME",
+      "scope": "No unverified pass claim; root records final campaign separately."
     }
-  ],
-  "candidate_interleaving": [
-    "Automatic producer checks the pre-Fire stage and decides to abort.",
-    "Launch commits durable Fire before the producer's enqueue/dispatch or while a previously enqueued automatic abort waits.",
-    "The automatic abort can reach the ordinary Abort consumer or router after commit without provenance distinguishing it from a manual operator request."
-  ],
-  "evidence_limit": "This is source-level reasoning about possible concurrency. No test has forced this interleaving and no captured radio/firmware failure has been attributed to it. Do not report it as reproduced or fixed.",
-  "targeted_follow_up": [
-    "Add a deterministic barrier around the automatic producer's decision/enqueue and commit Fire between them; separately test an already queued automatic abort.",
-    "Exercise the actual safety and automatic-zero producers after commit, with no new abort or valve correction; preserve manual Abort as a separate authorized operator action.",
-    "If reproduced, coordinate an internal origin/generation plus a shared commit/dispatch fence instead of blanket-disabling manual Abort or weakening board watchdog/recovery behavior."
-  ]
+  },
+  "remaining_unverified": {
+    "file": "GroundStation26/backend/src/safety_task.rs",
+    "behavior": "Checks automatic_abort_allowed then logs and flushes Router abort directly.",
+    "risk": "A hypothetical stage change between guard and direct Router dispatch is not proven atomically excluded; an abort already admitted to the Router is also outside the internal command-consumer recheck.",
+    "evidence": "No deterministic interleaving test or captured radio/firmware failure establishes this path. Do not label it reproduced or fully fixed by the queued-intent change.",
+    "targeted_follow_up": [
+      "Force a barrier between direct safety guard and Router dispatch, commit Fire, then inspect actual admission/transmission.",
+      "Separately inspect an already admitted Router abort at Fire commit; preserve explicit manual Abort and board watchdog/recovery."
+    ]
+  }
 }
