@@ -1,0 +1,220 @@
+{
+  "updated_utc": "2026-10-25T09:10:01.454465+00:00",
+  "release_ready": false,
+  "scope": "Linked seven-MCU firmware and real hosted SDK, finite raw-byte shared-air capacity approximation; not proprietary RFD MAC or physical RF proof.",
+  "candidate": {
+    "phase": "startup_gates",
+    "sdk_commit": "6980f9b6f9594f785c157938a6aefd5647bbdb5f",
+    "gs_base": "b7ffe712566d82a6a67399a2c06733d09c2583a0",
+    "started": 1792916441.877584,
+    "scope": "OnlyRFdriverandGSegresscapacitychange;LoRaschedulerOFF;otherMCUs/SDKunchanged;simulatorfinite-radio331e5851;physical-direct-liveness-for-lean-v4",
+    "rf_overlay": {
+      "Core/Src/radio.c": "abb34214431495435176855e1f59288b83676ca466b124aa3b84f7073feb6c15",
+      "tests/test_rfd_no_lora_scheduler.py": "fb78814934793d231e1e7ba4710c9b544d1a05adea27aef782ea5f38dc0f6aa9"
+    },
+    "rf_sdk": "/home/rylan/seds-gateway-fidelity-20261020/firmware-cohort426-unordered1/sdk/RFBoard26",
+    "rf_artifacts": {
+      "build/Release/RFBoard26Bootloader.elf": "ef414665f5eccd9e2e77918d1086b44d65e87e371f67c5117c000a43349bf3a8",
+      "build/Release/RFBoard26Bootloader.bin": "68aede24a0e438338d43bf9c2847c52bf03a7eb29661d5256742993e97172df5",
+      "build/Release/RFBoard26.elf": "31326156ce50541d2984f736bcfa6edce6d304bd6f291c3178ae2fa12de5fc5e",
+      "build/Release/RFBoard26.bin": "2a32eab9349d8aaf9e339969ea88e5435f4687be0f260d5fcb02e70869c40bc7",
+      "build/Release/RFBoard26.launchcore.img": "bd0f783eda719043446638b5d26073f559313ae6158883e5003a1673081bed92",
+      "build/Release/RFBoard26.factory.bin": "9fe201c5577571e240e153c794a32be5e514be9c6917eec47265edd2ee5e87d1"
+    },
+    "gs_network_overlay": {
+      "backend/src/comms.rs": "5590e90d55509e214cbaeacd24870761fe49bfbfb64e43cb5ff125b0aacbe006",
+      "backend/src/comms/rfd_capacity.rs": "c5eaea8e1bca8d757653166872a73686320fc5274c8a98651cdfb3f620952f12",
+      "backend/src/rrls_radio.rs": "92fbe2ff687fd54056329de2d448844ecb6d6d5cf59196c3fe3376017794c467",
+      "backend/src/telemetry_task/radio_io.rs": "de83a08dc67b4d90585aee3e71c89800965912d4cedaccd4f956ffd621268012",
+      "backend/src/comms/reference_decoder.rs": "2de787f4f37f35ad8fd0cba2e51b01dc7df6b1646755031d78e5fdd5ede2257c",
+      "backend/src/rrls.rs": "a54d33302c3be3dd3ef322d56ccd7867bd09321ad73389d8730ceec2054ebdff",
+      "backend/src/rrls/shared_air.rs": "08f0c1d53809d29daef5d6c8c35b3584b85cfc3d6d0519390c45e684914b44a7",
+      "backend/src/rrls/air_campaign.rs": "43c721739ef318da830ca64af940d2a729581c7afeca9bacbfa8125f4aaa464e"
+    },
+    "image": "seds-firmware-simulator:capacity-identity-v4-20261025",
+    "workspace": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/network-capacity-identity-20261025/workspace",
+    "finished": 1792916640.8524463,
+    "rf_snapshot_metadata": "Frozen git-archive+hashedoverlay; empty.gitcompatibilitymarker for inheritedskip-buildrunner, not a mutablecheckout",
+    "previous_image": "seds-firmware-simulator:capacity-v4-20261025",
+    "image_id": "sha256:f5228820986128f3613aa6209f995b03ce3e20797693fe2a4d1b9c6c34104a25"
+  },
+  "startup": {
+    "two_radio": {
+      "passed": true,
+      "round_trip_ms": [
+        110,
+        210,
+        150
+      ],
+      "deadline_ms": 500,
+      "final_medium": {
+        "air_bits": 491288,
+        "nodes": [
+          {
+            "index": 0,
+            "counters": [
+              0,
+              0,
+              246,
+              224,
+              0,
+              0,
+              0,
+              21414,
+              26917
+            ]
+          },
+          {
+            "index": 1,
+            "counters": [
+              0,
+              0,
+              230,
+              246,
+              0,
+              0,
+              0,
+              26917,
+              21414
+            ]
+          }
+        ]
+      },
+      "host_log_sha256": "808f8552765ccf016397d399c02601d0a690d2bbf830e64fe1560e82ba948587",
+      "refused_tx_bytes": 0,
+      "dropped_rx_bytes": 0
+    },
+    "three_radio": {
+      "passed": true,
+      "round_trip_ms": [
+        210,
+        200,
+        200
+      ],
+      "deadline_ms": 500,
+      "final_medium": {
+        "air_bits": 486872,
+        "nodes": [
+          {
+            "index": 0,
+            "counters": [
+              0,
+              0,
+              283,
+              204,
+              0,
+              0,
+              0,
+              23166,
+              25613
+            ]
+          },
+          {
+            "index": 1,
+            "counters": [
+              59,
+              6,
+              204,
+              196,
+              0,
+              0,
+              0,
+              25613,
+              23160
+            ]
+          },
+          {
+            "index": 2,
+            "counters": [
+              0,
+              6,
+              0,
+              204,
+              0,
+              0,
+              0,
+              0,
+              48773
+            ]
+          }
+        ]
+      },
+      "host_log_sha256": "1c0ce663c9ace986f4dbf0115b8f248e1d70fd13b90b7cdfc0a828322567c04b",
+      "refused_tx_bytes": 0,
+      "dropped_rx_bytes": 0
+    }
+  },
+  "pending": [
+    "Fix and qualify RRLS fallback egress arbitration",
+    "Align simulator heartbeat cadence to shared virtual clock, preserving production rate",
+    "Repeat necessary gates and600s finite2/3radio soaks on final source-locked candidate"
+  ],
+  "source_120s": {
+    "passed": true,
+    "duration_ms": 120000,
+    "scope": "network preservation and freshness; not ADC rate or physical SD qualification",
+    "minimum_delivery_percent": [
+      100.0,
+      99.9566
+    ],
+    "maximum_gaps_ms": [
+      30,
+      30,
+      1030,
+      1140,
+      50
+    ],
+    "pressure_sd_250hz_and_media_flush_gates_passed": true,
+    "fc_sd_progress_and_media_flush_gates_passed": true,
+    "nominal_adc_rate_qualified": false
+  },
+  "restart_120s": {
+    "passed": true,
+    "restarted": "groundstation_after_sample_8",
+    "managed_variable_round_trip_ms": [
+      220,
+      230,
+      210,
+      210,
+      280,
+      180
+    ],
+    "host_log_sha256": "86eef7f9762b5d029c1d20497d6d677cf53df4a30ae955a83123a0994641482b"
+  },
+  "startup_repeats": {
+    "phase": "passed",
+    "runs": [
+      {
+        "name": "2-node-repeat-2",
+        "exit_code": 0,
+        "finished": 1792919658.2525752
+      },
+      {
+        "name": "3-node-repeat-2",
+        "exit_code": 0,
+        "finished": 1792919909.1934018
+      },
+      {
+        "name": "2-node-repeat-3",
+        "exit_code": 0,
+        "finished": 1792920161.1570215
+      },
+      {
+        "name": "3-node-repeat-3",
+        "exit_code": 0,
+        "finished": 1792920429.8295329
+      },
+      {
+        "name": "2-node-repeat-4",
+        "exit_code": 0,
+        "finished": 1792920681.1496603
+      },
+      {
+        "name": "3-node-repeat-4",
+        "exit_code": 0,
+        "finished": 1792920913.0701752
+      }
+    ]
+  },
+  "remaining_defect": "Actual modeled direct-link outage exposes primary RRLS HEALTH/READY arbitration starvation before UART; candidate is not release-qualified."
+}

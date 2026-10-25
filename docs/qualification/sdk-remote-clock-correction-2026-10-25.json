@@ -1,0 +1,114 @@
+{
+  "status": "source_regressions_passed_integrated_qualification_pending",
+  "scope": "SEDSnet remote-source UTC projection and absolute phase steering; no API or struct-size changes",
+  "causes": [
+    "refresh_timesync_state and poll_timesync reused remote sample UTC without elapsed monotonic age",
+    "steer_unix_ms added residual correction to absolute phase error, amplifying repeated observations"
+  ],
+  "red_observations": {
+    "repeated_absolute_target": "repeated reading 12850 versus single-reading 12900",
+    "advancing_absolute_target": "14850 versus intended 14900 after 5000 ms",
+    "remote_projection": "epoch+19 instead of epoch+20 after 20 ms"
+  },
+  "production_changes": [
+    "Remote selected UTC = sample UTC + saturating elapsed monotonic milliseconds in both refresh and poll",
+    "Steering anchors to current clock and replaces pending correction with target-current; existing maximum slew/monotonic constraints unchanged"
+  ],
+  "green_tests": {
+    "new_lib_regressions_default": 3,
+    "new_lib_regressions_std_embedded": 3,
+    "timesync_lib_default": 24,
+    "timesync_system_default": 16,
+    "timesync_system_std_embedded": 16,
+    "timesync_system_compact": 16,
+    "strict_clippy_lib_tests": "passed",
+    "embedded_rlib": "cargo rustc --offline --no-default-features --features embedded --lib --crate-type rlib: passed"
+  },
+  "sources_sha256": {
+    "SEDSnet/src/router.rs": "5403896bf4852db6abd8c8e4beec672a97475de0806c3febffd155c4770f29a6",
+    "SEDSnet/src/timesync.rs": "71214a1f9ef6e4b07848c92b5a956b8eb20f55c3bebd3eb489eb2e9b35be17ab",
+    "SEDSnet/tests/rust-system-test/timesync_system_test.rs": "1d48d7b3eb99df57afe1169b17280aa9a8e8c23a305dc09473be14f2eeb4a328"
+  },
+  "limitations": [
+    "Earlier integrated finite-radio controls are not a qualification of corrected clock behavior",
+    "One-way initial time announcements still contain physical delivery uncertainty; response exchange refines the estimate",
+    "Direct no-std lib unit-test mode has unrelated std-dependent test modules; embedded production rlib and host std+embedded tests validated instead",
+    "Bare cargo check of no-std staticlib requires board-provided allocator/panic implementation; rlib compile is the SDK-only check"
+  ],
+  "board_consumer_authority_correction": {
+    "cause": "All seven board consumer branches configured priority 0 while C API enables consumer promotion. Holdover consumers could outrank the intended RF/GroundStation authorities after source loss.",
+    "policy": "Consumer fallback priority 100; RF source priority 1 and GroundStation priority 50 take over when they return. Explicitly configured board source priorities unchanged.",
+    "files_sha256": {
+      "FlightComputer26/Core/Src/telemetry.c": "2f11ef8998cb5eab3a3b5230fa52de7906cd573f5c51b47fa3e60691bd9276ac",
+      "RFBoard26/Core/Src/telemetry.c": "198d2b951d17fee76058d74447bf727e42fd09c98336cbfdba340a46759a4c80",
+      "PowerBoard26/Core/Src/telemetry.c": "497798952607f9854533fd4e3dd153539d092366506ff9b17ffeb91177823d90",
+      "ActuatorBoard26/Core/Src/telemetry.c": "f41dc9cb4748fa9027164b00729deade982fb9da24d0467f7e5328d13e2d6242",
+      "ValveBoard26/Core/Src/telemetry.c": "22b9fedc8e255aafe07f6fedf7a25c20597e565f67e12cc76e3b673677354578",
+      "DAQ-Board/Core/Src/telemetry.c": "81d1f8f406d0a8800b2e87960f8f47bb948a25af7282be9cd09f6f1ef6ea1d89",
+      "gateway-board26/Core/Src/telemetry.c": "c01bc6838e4cc943b3047ae42a73d319b17fd8c3660c78f761f38eaf277c195a"
+    },
+    "regression": "Each board compiles actual is_source/priority helpers at consumer -1 and source 0/1/50/123. External FirmwareSimulator/tests/time-source-election uses actual SDK TimeSyncTracker to prove RF\u2192holdover100\u2192GS50\u2192RF1 recovery.",
+    "status": "35 compiled board cases and actual-SDK election recovery pass; integrated matched cohort pending"
+  },
+  "board_python_suites": {
+    "sanitizer_note": "ASAN_OPTIONS=detect_leaks=0 required because execution wrapper uses ptrace, which LeakSanitizer does not support. Address/undefined behavior checks remain enabled by existing tests.",
+    "results": {
+      "FlightComputer26": {
+        "summary": [
+          "190",
+          "3.679"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-FlightComputer26.log"
+      },
+      "RFBoard26": {
+        "summary": [
+          "170",
+          "9.612"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-RFBoard26.log"
+      },
+      "PowerBoard26": {
+        "summary": [
+          "134",
+          "2.610"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-PowerBoard26.log"
+      },
+      "ActuatorBoard26": {
+        "summary": [
+          "121",
+          "2.418"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-ActuatorBoard26.log"
+      },
+      "ValveBoard26": {
+        "summary": [
+          "146",
+          "3.673"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-ValveBoard26.log"
+      },
+      "DAQ-Board": {
+        "summary": [
+          "199",
+          "6.034"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-DAQ-Board.log"
+      },
+      "gateway-board26": {
+        "summary": [
+          "147",
+          "3.579"
+        ],
+        "passed": true,
+        "log": ".workspace-progress/timesync-priority-gateway-board26.log"
+      }
+    }
+  }
+}

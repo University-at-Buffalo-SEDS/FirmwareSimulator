@@ -1,0 +1,239 @@
+{
+  "date_utc": "2026-10-25T07:41:03.131011+00:00",
+  "scope": "Finite radio capacity and real Renode peripheral contracts; linked RF MCU application qualification remains separate",
+  "renode_runtime": "1.16.1+20260828git00139efee",
+  "renode_image": "seds-firmware-simulator:unordered-v4-20261025",
+  "dotnet_image": "seds-simulator-peripheral-tests:workspace-20261025",
+  "source_sha256": {
+    "renode/peripherals/SedsRadioMedium.cs": "331e5851b11dc9b0c6b4a661d3c782216b1c8cf9a6a8fa80f47ae7c31f094ef5",
+    "tests/radio-medium/RadioMedium.csproj": "d6a8a31a5e1c73aadc3368dec0510abdfa1221372dad3c4c08d46f6784849c0c",
+    "tests/radio-medium/Program.cs": "d5d994650416f8961323096d1559e9c48e044e3ae26782096d448692d8e19bfe",
+    "tests/radio-medium/smoke.resc": "bb78586ffcf825842780bce672c4f1b7a07a95a002a4fb1814412a7d9bdeda49",
+    "tests/radio-medium/README.md": "afc63335c3b7da4e7b3fb246006484442858536942912c205bd438c466d73bbf",
+    "tests/radio-medium/cross-machine.resc": "b53e39b0431605c20928dd7f5401785f16627d668e6c123b081a9964f44bbe68",
+    "scripts/inspect-radio-trace.py": "7d06ea36e648ce47d57dfc567aa9203b62ae6bb29fa64ceb068b665bb2294185",
+    "tests/test_radio_trace.py": "5a37148fb580d6756e60d16a4c2cf1e0fe1713358b7d8506efc2d0e4f5a7a76f"
+  },
+  "dotnet_contracts": {
+    "passed": true,
+    "required_markers": [
+      "RADIO_HOST_GUEST_DIRECTION_FAIRNESS_LINKS_PASS",
+      "RADIO_TX_FINITE_OWNERSHIP_PASS",
+      "RADIO_RX_FINITE_OVERFLOW_PASS",
+      "RADIO_PROFILE_VALIDATION_PASS",
+      "RADIO_SATURATED_AIRTIME_AND_FAIRNESS_PASS",
+      "RADIO_TRACE_WINDOW_CAP_AND_IO_FAILURE_PASS"
+    ]
+  },
+  "real_renode_smoke": {
+    "passed": true,
+    "fixture": "tests/radio-medium/smoke.resc",
+    "required_markers": [
+      "RADIO_RENODE_NO_ECHO_PASS",
+      "RADIO_RENODE_GUEST_TO_HOSTS_PASS",
+      "RADIO_RENODE_RAW_BURST_INTERLEAVING_PASS"
+    ],
+    "guest": "STM32G491 SedsStm32Uart,CPU halted; eight-byte hardware FIFO sampled, independent hostproxies verify complete streams",
+    "host_ports": "Two independently PTY-connected host proxies, inert MMIO anchors0x7fff0000/0x7fff0100",
+    "snapshot": {
+      "air_bits": 144,
+      "nodes": [
+        {
+          "index": 0,
+          "counters": [
+            0,
+            0,
+            8,
+            4,
+            0,
+            0,
+            0,
+            9,
+            9
+          ]
+        },
+        {
+          "index": 1,
+          "counters": [
+            0,
+            0,
+            8,
+            4,
+            0,
+            0,
+            0,
+            8,
+            10
+          ]
+        },
+        {
+          "index": 2,
+          "counters": [
+            0,
+            0,
+            1,
+            4,
+            0,
+            0,
+            0,
+            1,
+            17
+          ]
+        }
+      ]
+    },
+    "command_from_firmware_simulator_root": [
+      "docker",
+      "run",
+      "--rm",
+      "--user",
+      "1000:1000",
+      "-e",
+      "HOME=/tmp",
+      "-e",
+      "XDG_CONFIG_HOME=/tmp/.config",
+      "-v",
+      "<absolute-workspace>/FirmwareSimulator:/src:ro",
+      "--entrypoint",
+      "/opt/renode/renode",
+      "seds-firmware-simulator:unordered-v4-20261025",
+      "--disable-xwt",
+      "--console",
+      "--execute",
+      "include @/src/tests/radio-medium/smoke.resc"
+    ],
+    "exit_code_not_sufficient": "Require all three markers and absence of Renode compilation/monitor/Python assertion errors"
+  },
+  "api_compatibility_fixes": [
+    "Hub implements IPeripheral in addition to IExternal/IConnectable because installed LimitTimer owner requires IPeripheral",
+    "Named machine/peripheral attachment wrappers avoid Monitor concrete-object binding limitations",
+    "Host proxy registered on inert MMIO anchor so terminal backend can resolve machine/time domain",
+    "GetEffectiveVirtualTimeStamp extension requires Antmicro.Renode.Utilities and supports both monitor and timed UART input"
+  ],
+  "limits": [
+    "Deterministic fair turn/burst contention is a scenario approximation, not proprietary RFD MAC",
+    "No vendor packetization,FEC,propagation,RTS/CTS or hardware RF validation",
+    "Raw byte bursts may split/interleave application frames; no protocol-aware atomic delivery",
+    "No physical RF low-latency resolution claimed from these contracts"
+  ],
+  "release_ready": false,
+  "cross_machine_owner_reset": {
+    "passed": true,
+    "fixture": "tests/radio-medium/cross-machine.resc",
+    "global_quantum_seconds": 0.0001,
+    "global_serial_execution": false,
+    "machines": "Two real STM32G491 UARTs on distinct machines plus host port on the owner machine",
+    "required_markers": [
+      "RADIO_RENODE_CROSS_MACHINE_PASS",
+      "RADIO_RENODE_OWNER_UART_RESET_OBSERVED",
+      "RADIO_RENODE_OWNER_RESET_QUEUE_PASS",
+      "RADIO_RENODE_OWNER_RESET_PROGRESS_PASS"
+    ],
+    "reset_proof": "Owner UART CR1 reads0 after machine Reset, then is reconfigured. Reset occurs during active16-byte host burst; pending radio data survives, peer/owner FIFO samples remainordered, and a new peer byte99 reaches both ownerUART andhost after reset.",
+    "snapshot": {
+      "air_bits": 152,
+      "nodes": [
+        {
+          "index": 0,
+          "counters": [
+            0,
+            0,
+            1,
+            4,
+            0,
+            0,
+            0,
+            1,
+            18
+          ]
+        },
+        {
+          "index": 1,
+          "counters": [
+            0,
+            0,
+            1,
+            4,
+            0,
+            0,
+            0,
+            2,
+            17
+          ]
+        },
+        {
+          "index": 2,
+          "counters": [
+            0,
+            0,
+            16,
+            1,
+            0,
+            0,
+            0,
+            16,
+            3
+          ]
+        }
+      ]
+    },
+    "benign_warning": "No optional machine reset macro exists in the fixture; explicit CR1 read proves that peripheral reset itself executed.",
+    "command": "Replace smoke.resc with cross-machine.resc in the real Renode smoke command"
+  },
+  "raw_trace": {
+    "opt_in": "FIRMWARE_SIM_RADIO_TRACE_DIR",
+    "until_ms_env": "FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS",
+    "default_until_ms": 8000,
+    "max_per_stream_bytes": 4194304,
+    "offered_TX_before_FIFO_and_actual_RX_after_time_domain_scheduling": true,
+    "scope_and_caps": "32byteSEDSRBT1header,9byterecords,timestampu64LE+byte,mandatory finished/capped sidecar; strictreader refuses incomplete/capped bydefault",
+    "actual_Renode_traced_smoke": "passed same3markers,air144bits,sameallstationcounters as untraced",
+    "strict_stream_reconciliations": [
+      {
+        "station": 0,
+        "rx_records": 9,
+        "tx_records": 9
+      },
+      {
+        "station": 1,
+        "rx_records": 10,
+        "tx_records": 8
+      },
+      {
+        "station": 2,
+        "rx_records": 17,
+        "tx_records": 1
+      }
+    ],
+    "trace_status": "all6completed,nonecapped",
+    "python_reader_tests": 5,
+    "io_failure_and_4MiBcap_and_window_test": "Sixth .NET contract group passed with470000offeredbytes; FIFO accepted8/rejected469992 unchanged; tracecapexplicit",
+    "round_correlation_tests": 4,
+    "clock_backstep": "Explicit opt-in maximum100us, raw order/timestamps preserved, count and maximum always reported; SDK maintenance replay clock alone uses running maximum",
+    "relay_envelope_validation": "Six fixtures compiled from actualGSproductionencode/decode/crc; test-only decoder CRC checks RRv1 kinds1/2/5; physicalRF arrivals of kind2 are host-only and reported separately from eligible kind5"
+  },
+  "detach_reattach_maintenance": {
+    "scope": "Source-mounted contract and real Renode fixtures only. Frozen linked capacity-identity image retains earlier331e model; this follow-up is not silently substituted into those runs.",
+    "source_sha256": {
+      "renode/peripherals/SedsRadioMedium.cs": "bc208969e5a469c9dd4d662aa66e99248105f81d2dfd21740a987bf5170af5bd",
+      "tests/radio-medium/Program.cs": "6b9165f0b60b28259590ec37b4f0b1f0ebe608ad16e4e7fa643028ef964b18e4",
+      "tests/radio-medium/detach-reattach.resc": "0b1462fdffa6af66eaf3d5abdf4755027957860dd05952fd149968d1474e17e2"
+    },
+    "contract_groups_passed": 8,
+    "baseline_negative_control": "Exact frozen331e source fails new delayed delivery assertion.",
+    "real_renode_markers": "Existing smoke and cross-machine/reset passed; new detach-reattach fixture3markers passed.",
+    "covered": [
+      "Captured input callback cannot enqueue into another attachment.",
+      "Delayed target callback validates receiver attachment identity before trace/counter/delivery.",
+      "In-flight burst captures receiver identity; reattachment cannot inherit bytes.",
+      "Same UART, new UART and reused index are exercised."
+    ],
+    "logs": [
+      ".workspace-progress/radio-detach-contract.log",
+      ".workspace-progress/radio-detach-baseline-contract.log",
+      ".workspace-progress/radio-detach-renode-smoke.log",
+      ".workspace-progress/radio-detach-renode-cross-machine.log",
+      ".workspace-progress/radio-detach-renode-reattach.log"
+    ]
+  }
+}

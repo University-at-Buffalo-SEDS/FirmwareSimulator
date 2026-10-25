@@ -1,0 +1,172 @@
+{
+  "result": "ALL_SEVEN_SDK_ABSENT_FACTORY_BUILDS_PASS",
+  "scope": "Actual configure+compile+factorylink only; no simulation/hardware execution. Explicit negative SDK overrides; telemetryONcohort unchanged. Compiler warnings are zero; expected CMake unused SDK override notices demonstrate the dependency branch is not consumed.",
+  "elapsed_seconds": 30.29,
+  "frozen_source_files_verified": 13544,
+  "boards": {
+    "FlightComputer26": {
+      "source_commit": "9da731385e683f5a06589768e5028146b66d2dfa",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FLASH",
+        "used_bytes": 87264,
+        "capacity_bytes": 474624,
+        "percent_displayed": 18.39,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 118144,
+        "capacity_bytes": 208896,
+        "percent_displayed": 56.56,
+        "used_exact": true
+      },
+      "factory_sha256": "6872a6af0381d2c0c85f0992f439b4d337ab04216989b15415327583795f8bad",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "RFBoard26": {
+      "source_commit": "7f4c686fdc5fae68ae23203ccdccd3ab5933739b",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FLASH",
+        "used_bytes": 23840,
+        "capacity_bytes": 474624,
+        "percent_displayed": 5.02,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 85784,
+        "capacity_bytes": 114688,
+        "percent_displayed": 74.8,
+        "used_exact": true
+      },
+      "factory_sha256": "c9703a59e13f21d2387c3077157fc472fb3d66d974d9d39b35016e7c39931df5",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "PowerBoard26": {
+      "source_commit": "85ba5bc3685e34ffb632256885c386731077b4c9",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FLASH",
+        "used_bytes": 20520,
+        "capacity_bytes": 474624,
+        "percent_displayed": 4.32,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 70368,
+        "capacity_bytes": 114688,
+        "percent_displayed": 61.36,
+        "used_exact": true
+      },
+      "factory_sha256": "4b0557e6f7b9419f95354af462fd9c01de6683be33b73343c929cdea8bddba2d",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "ActuatorBoard26": {
+      "source_commit": "4fe838f822d30e03768fa3fa7f640b50c4b7cc95",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FIRMWARE_FLASH",
+        "used_bytes": 39928,
+        "capacity_bytes": 474624,
+        "percent_displayed": 8.41,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "FIRMWARE_RAM",
+        "used_bytes": 95776,
+        "capacity_bytes": 114688,
+        "percent_displayed": 83.51,
+        "used_exact": true
+      },
+      "factory_sha256": "49b7f22ebe13a892e5f3004b0d4131878a8a0965284ededb7335019fffff830a",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "ValveBoard26": {
+      "source_commit": "6ee054af230c668c3cf89082c66d7b9eb63187f0",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FLASH",
+        "used_bytes": 42092,
+        "capacity_bytes": 474624,
+        "percent_displayed": 8.87,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 71576,
+        "capacity_bytes": 114688,
+        "percent_displayed": 62.41,
+        "used_exact": true
+      },
+      "factory_sha256": "281bf2017e52dd6812e1390433528fd30bec969e3e0aa5d2c9b47046843bc196",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "DAQ-Board": {
+      "source_commit": "6afc09d369cab0359de1d25e37102b28b8084597",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "ROM",
+        "used_bytes": 92744,
+        "capacity_bytes": 1900032,
+        "percent_displayed": 4.88,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 729512,
+        "capacity_bytes": 786432,
+        "percent_displayed": 92.76,
+        "used_exact": true
+      },
+      "factory_sha256": "cd55f4af0aed4c1f7e5d615c57ba3bbddfddfa8a9f562765b47769e3e42f0fb1",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    },
+    "gateway-board26": {
+      "source_commit": "252fca11563025246812a0a03b7b455858c1bc6c",
+      "enable_telemetry": false,
+      "sdk_path_absent": true,
+      "rust_invocations": 0,
+      "application_flash": {
+        "region": "FLASH",
+        "used_bytes": 23556,
+        "capacity_bytes": 491008,
+        "percent_displayed": 4.8,
+        "used_exact": true
+      },
+      "application_ram": {
+        "region": "RAM",
+        "used_bytes": 71096,
+        "capacity_bytes": 114688,
+        "percent_displayed": 61.99,
+        "used_exact": true
+      },
+      "factory_sha256": "98d33a1d9095c3710a28fc75469370b2b548baabf3d72e3a32f4ad24156430ac",
+      "compiler_warnings": [],
+      "configuration_warning_expected": "Intentionally unused SDK flags may be reported by CMake because the SDK branch is absent"
+    }
+  },
+  "date": "2026-10-25",
+  "release_ready": false,
+  "remaining": "Telemetry-enabled matched radio/time/source/SD soak remains separate; no hardware execution claimed."
+}
