@@ -8,9 +8,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
     // completes conversions immediately with deterministic channel samples.
     public sealed class SedsStm32Adc : IDoubleWordPeripheral, IKnownSize
     {
-        public SedsStm32Adc(uint bits = 12, uint channels = 1, string samples = "", uint noiseLsb = 0, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue)
+        public SedsStm32Adc(uint bits = 12, uint channels = 1, string samples = "", uint noiseLsb = 0, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, string stimulusPath = "")
         {
             this.bits = bits;
+            this.stimulusPath = stimulusPath;
             this.noiseLsb = noiseLsb;
             channelSamples = new uint[channels];
             var configured = samples.Split(new[] { ',' }, System.StringSplitOptions.RemoveEmptyEntries);
@@ -27,6 +28,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(offset == 0x40)
             {
                 status &= ~(1u << 2); // EOC is cleared by reading DR.
+                PollStimulus();
                 var selected = SelectedChannel;
                 var baseSample = channelSamples[selected];
                 if(noiseLsb == 0) return baseSample;
@@ -37,6 +39,45 @@ namespace Antmicro.Renode.Peripherals.Sensors
             }
             uint value;
             return registers.TryGetValue(offset, out value) ? value : 0;
+        }
+
+        // Explicit external sensor input; never changes conversion timing or
+        // DMA/IRQ behavior. Bounds apply before changing any channel sample.
+        public void SetChannelSample(uint channel, uint value)
+        {
+            if(channel >= channelSamples.Length || value >= (1ul << (int)bits))
+                throw new System.ArgumentOutOfRangeException("sample");
+            channelSamples[channel] = value;
+        }
+        public ulong StimulusRejected { get; private set; }
+        private void PollStimulus()
+        {
+            // No-file deployments do no additional filesystem operations.
+            if(stimulusPath.Length == 0 || stimulusReads++ % 10 != 0) return;
+            try
+            {
+                // Ten pressure DR reads =20ms at the unchanged500Hz ADC rate.
+                // Bound the complete fixture read and validate atomically.
+                var text = new char[1025];
+                int count;
+                using(var stream = new System.IO.StreamReader(stimulusPath))
+                    count = stream.ReadBlock(text, 0, text.Length);
+                if(count > 1024) throw new System.FormatException("oversized sensor fixture");
+                var parts = new string(text, 0, count).Trim().Split(',');
+                if(parts.Length != channelSamples.Length) throw new System.FormatException("channel count");
+                var next = new uint[parts.Length];
+                for(var i = 0; i < next.Length; i++)
+                    if(!uint.TryParse(parts[i], out next[i]) || next[i] >= (1ul << (int)bits))
+                        throw new System.FormatException("invalid sensor sample");
+                for(var i = 0; i < next.Length; i++) SetChannelSample((uint)i, next[i]);
+            }
+            catch(System.IO.IOException) { RejectStimulus(); }
+            catch(System.UnauthorizedAccessException) { RejectStimulus(); }
+            catch(System.FormatException) { RejectStimulus(); }
+        }
+        private void RejectStimulus()
+        {
+            if(StimulusRejected != ulong.MaxValue) StimulusRejected++;
         }
 
         public void WriteDoubleWord(long offset, uint value)
@@ -101,6 +142,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private uint status;
         private uint random;
         private ulong conversions;
+        private readonly string stimulusPath;
+        private ulong stimulusReads;
         private readonly uint bits;
         private readonly uint[] channelSamples;
         private readonly uint noiseLsb;

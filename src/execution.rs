@@ -1,5 +1,5 @@
 use crate::{core::ArchitectureKind, layout::BoardLayout};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use std::{
     env, fs,
@@ -504,7 +504,9 @@ fn find_renode() -> Result<PathBuf> {
             return Ok(candidate);
         }
     }
-    bail!("Renode is required for instruction-level execution; set RENODE or use the simulator Docker image")
+    bail!(
+        "Renode is required for instruction-level execution; set RENODE or use the simulator Docker image"
+    )
 }
 fn platform_path(layout: &BoardLayout, firmware_root: &Path) -> Result<PathBuf> {
     let descriptor = layout.resolve_mcu_descriptor()?;
@@ -619,7 +621,15 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
         "flashBacking: Memory.MappedMemory @ sysbus 0x{:08x}\n    size: 0x{:x}\nphysicalFlash: MTD.SedsStm32FlashController @ sysbus 0x{:08x}\n    flash: flashBacking\n    mcu: \"{}\"\n    eraseSize: {}\n    writeAlignment: {}\n    flashBase: 0x{:08x}\n    preinit:\n        include @{}\n",
         layout.memory.flash_base,
         layout.memory.flash_size,
-        if layout.resolve_mcu_descriptor()?.flash_profile.starts_with("stm32h7") { 0x52002000u64 } else { 0x40022000 },
+        if layout
+            .resolve_mcu_descriptor()?
+            .flash_profile
+            .starts_with("stm32h7")
+        {
+            0x52002000u64
+        } else {
+            0x40022000
+        },
         layout.resolve_mcu_descriptor()?.flash_profile,
         layout.memory.erase_size,
         layout.memory.write_alignment,
@@ -655,6 +665,22 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
     let mut g4_adc12_common_added = false;
     let mut g4_adc345_common_added = false;
     for (index, peripheral) in layout.peripherals.iter().enumerate() {
+        let stimulus = if let Some(path) = &peripheral.stimulus_path {
+            let fixture = std::path::Path::new(path);
+            ensure!(
+                peripheral.model.as_deref() == Some("stm32_adc")
+                    && (fixture.starts_with("/simulation") || fixture.starts_with("/diagnostics"))
+                    && !fixture
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+                    && path.len() <= 240,
+                "ADC stimulus must be a bounded /simulation or /diagnostics fixture path"
+            );
+            format!("    stimulusPath: {}\n", serde_json::to_string(path)?)
+        } else {
+            String::new()
+        };
+
         let (model, bus) = match (peripheral.model.as_deref(), peripheral.bus.as_deref()) {
             (None, None) => continue,
             (Some(model), Some(bus)) => (model, bus),
@@ -727,7 +753,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     _ => unreachable!(),
                 };
                 overlay.push_str(&format!(
-                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n{stimulus}    preinit:\n        include @{}\n",
                     peripheral.bits.unwrap_or(12), peripheral.channels.unwrap_or(1),
                     peripheral.channel_samples.iter().map(u32::to_string).collect::<Vec<_>>().join(","), peripheral.noise_lsb.unwrap_or(0),
                     peripheral.failure_every.unwrap_or(0), peripheral.disconnect_after.unwrap_or(u64::MAX),
@@ -750,7 +776,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
             }
             (ArchitectureKind::Stm32h5, "stm32_adc", "adc1") => {
                 overlay.push_str(&format!(
-                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x42228000\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x42228000\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n{stimulus}    preinit:\n        include @{}\n",
                     peripheral.bits.unwrap_or(12), peripheral.channels.unwrap_or(1),
                     peripheral.channel_samples.iter().map(u32::to_string).collect::<Vec<_>>().join(","), peripheral.noise_lsb.unwrap_or(0),
                     peripheral.failure_every.unwrap_or(0), peripheral.disconnect_after.unwrap_or(u64::MAX),
@@ -764,7 +790,7 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
                     0x4602_1000_u64
                 };
                 overlay.push_str(&format!(
-                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n    preinit:\n        include @{}\n",
+                    "layoutAdc{index}: Sensors.SedsStm32Adc @ sysbus 0x{address:08x}\n    bits: {}\n    channels: {}\n    samples: \"{}\"\n    noiseLsb: {}\n    failureEvery: {}\n    disconnectAfter: {}\n{stimulus}    preinit:\n        include @{}\n",
                     peripheral.bits.unwrap_or(12), peripheral.channels.unwrap_or(1),
                     peripheral.channel_samples.iter().map(u32::to_string).collect::<Vec<_>>().join(","), peripheral.noise_lsb.unwrap_or(0),
                     peripheral.failure_every.unwrap_or(0), peripheral.disconnect_after.unwrap_or(u64::MAX),
@@ -876,7 +902,11 @@ fn render_script(
                 probe.name, sample, probe.symbol
             ));
             } else {
-                let read = format!("print('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {}))", serde_json::to_string(&probe.symbol).expect("serialize probe symbol"), probe.byte_offset);
+                let read = format!(
+                    "print('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {}))",
+                    serde_json::to_string(&probe.symbol).expect("serialize probe symbol"),
+                    probe.byte_offset
+                );
                 profile_script.push_str(&format!(
                     "echo \"SEDS_PROBE {} {}\"\npython {}\n",
                     probe.name,
@@ -983,7 +1013,46 @@ fn render_script(
         layout.memory.flash_base,
         layout.memory.flash_base
     );
-    format!("mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n", name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), firmware_image.display(), layout.memory.flash_base, firmware_reset_macro, firmware_msp, firmware_pc, firmware_vtor, symbol, firmware_fault_hook, tick_hook, tracing, profile_script, name, platform.display(), peripheral_overlay.display(), strict_mmio, security, board_initialization, elf.display(), bootloader_elf.display(), factory.display(), layout.memory.flash_base, factory_reset_macro, factory_msp, factory_pc, factory_symbol, factory_fault_hook, tick_hook, outcome_hooks, factory_seconds, ota_script)
+    format!(
+        "mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n",
+        name,
+        platform.display(),
+        peripheral_overlay.display(),
+        strict_mmio,
+        security,
+        board_initialization,
+        elf.display(),
+        firmware_image.display(),
+        layout.memory.flash_base,
+        firmware_reset_macro,
+        firmware_msp,
+        firmware_pc,
+        firmware_vtor,
+        symbol,
+        firmware_fault_hook,
+        tick_hook,
+        tracing,
+        profile_script,
+        name,
+        platform.display(),
+        peripheral_overlay.display(),
+        strict_mmio,
+        security,
+        board_initialization,
+        elf.display(),
+        bootloader_elf.display(),
+        factory.display(),
+        layout.memory.flash_base,
+        factory_reset_macro,
+        factory_msp,
+        factory_pc,
+        factory_symbol,
+        factory_fault_hook,
+        tick_hook,
+        outcome_hooks,
+        factory_seconds,
+        ota_script
+    )
 }
 
 pub(crate) fn render_board_initialization_script(layout: &BoardLayout) -> String {
@@ -1304,9 +1373,12 @@ pub(crate) fn validate_counter_progress(
         );
         for (interval, pair) in samples.windows(2).enumerate() {
             let gain = pair[1].wrapping_sub(pair[0]);
-            ensure!(gain >= minimum && gain <= i32::MAX as u32,
+            ensure!(
+                gain >= minimum && gain <= i32::MAX as u32,
                 "probe {name} stalled or reset at interval {interval}: {} -> {} (required gain {minimum})",
-                pair[0], pair[1]);
+                pair[0],
+                pair[1]
+            );
         }
     }
     Ok(())
@@ -1416,10 +1488,10 @@ fn tail(value: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        marker_csv, marker_u64, materialize_platform, observed_marker_after, parse_memory_profile,
-        render_board_initialization_script, render_ota_script, render_peripheral_overlay,
-        render_script, render_security_script, sustained_end_drop, ExecutionArtifacts,
-        ExecutionScenario,
+        ExecutionArtifacts, ExecutionScenario, marker_csv, marker_u64, materialize_platform,
+        observed_marker_after, parse_memory_profile, render_board_initialization_script,
+        render_ota_script, render_peripheral_overlay, render_script, render_security_script,
+        sustained_end_drop,
     };
     use crate::{
         core::ArchitectureKind,
@@ -1490,8 +1562,10 @@ mod tests {
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("flashBacking: Memory.MappedMemory @ sysbus 0x08000000"));
         assert!(overlay.contains("physicalFlash: MTD.SedsStm32FlashController"));
-        assert!(include_str!("../renode/peripherals/SedsStm32Flash.cs")
-            .contains("mcu == \"stm32g4\" && flash.Size / eraseSize > 128"));
+        assert!(
+            include_str!("../renode/peripherals/SedsStm32Flash.cs")
+                .contains("mcu == \"stm32g4\" && flash.Size / eraseSize > 128")
+        );
         assert!(overlay.contains("physicalRam0: Memory.MappedMemory @ sysbus 0x20000000"));
         assert!(overlay.contains("size: 0x1c000"));
         assert!(overlay.contains("SedsNeoM9N @ spi1"));
@@ -1549,8 +1623,10 @@ mod tests {
         assert!(overlay.contains("SedsMcp3564r @ spi2"));
         assert!(overlay.contains("externalChipSelect: true"));
         assert!(overlay.contains("28 -> layoutDevice0@0"));
-        assert!(include_str!("../renode/peripherals/SedsSpiSensors.cs")
-            .contains("public sealed class SedsMcp3564r"));
+        assert!(
+            include_str!("../renode/peripherals/SedsSpiSensors.cs")
+                .contains("public sealed class SedsMcp3564r")
+        );
         assert!(
             include_str!("../renode/peripherals/SedsStm32Adc.cs").contains("value &= ~(1u << 2)")
         );
@@ -1593,6 +1669,37 @@ mod tests {
             "stm32h5",
             r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
         );
+        assert!(render_peripheral_overlay(&board).is_err());
+    }
+
+    #[test]
+    fn adc_stimulus_is_opt_in_and_confined_to_simulator_fixture_mounts() {
+        let mut board = layout(
+            "stm32g4",
+            r#"[{"type":"adc","name":"pressure","model":"stm32_adc","bus":"adc3","bits":12,"channels":1,"channel_samples":[0]}]"#,
+        );
+        assert!(
+            !render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath:")
+        );
+        board.peripherals[0].stimulus_path = Some("/diagnostics/sequence/pressure.raw".into());
+        assert!(
+            render_peripheral_overlay(&board)
+                .unwrap()
+                .contains("stimulusPath: \"/diagnostics/sequence/pressure.raw\"")
+        );
+        for path in [
+            "/etc/private",
+            "relative.raw",
+            "/diagnostics/../private",
+            "/diagnostics-too/fixture",
+        ] {
+            board.peripherals[0].stimulus_path = Some(path.into());
+            assert!(render_peripheral_overlay(&board).is_err(), "{path}");
+        }
+        board.peripherals[0].stimulus_path = Some("/simulation/pressure.raw".into());
+        board.peripherals[0].model = Some("ltc2990".into());
         assert!(render_peripheral_overlay(&board).is_err());
     }
 
@@ -1693,8 +1800,10 @@ mod tests {
         assert!(firmware.contains("cpu SetRegister 13 0x2001bff0"));
         assert!(firmware.contains("cpu PC 0x08004001"));
         assert!(firmware.contains("cpu VectorTableOffset 0x08004200"));
-        assert!(firmware
-            .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true"));
+        assert!(
+            firmware
+                .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true")
+        );
         assert!(firmware.contains("cpu LogFunctionNames true true"));
         assert!(script.contains("cpu GetRegister 14\nmach clear\nmach create \"test_factory\""));
         let factory = script.split("_factory\"").nth(1).unwrap();

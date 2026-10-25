@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Geographic fix emitted by an instruction-coupled GPS model.
@@ -47,6 +47,9 @@ pub struct PeripheralSpec {
     pub max_psi: Option<f64>,
     #[serde(default)]
     pub channel_samples: Vec<u32>,
+    /// Explicit bounded external ADC fixture; omitted for ordinary static inputs.
+    #[serde(default)]
+    pub stimulus_path: Option<String>,
     #[serde(default)]
     pub noise_lsb: Option<u32>,
     #[serde(default)]

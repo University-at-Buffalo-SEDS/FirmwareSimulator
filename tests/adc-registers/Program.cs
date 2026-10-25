@@ -16,6 +16,20 @@ class Program {
   Assert(adc.ReadDoubleWord(0x40)==1234,"configured sample changed");
   Assert((adc.ReadDoubleWord(0)&4)==0,"DR read did not clear EOC");
   adc.Reset();Assert(adc.ReadDoubleWord(8)==0,"reset did not clear RS latch");
+  adc.SetChannelSample(0,4095);Assert(adc.ReadDoubleWord(0x40)==4095,"dynamic maximum sample");
+  bool invalid=false;try{adc.SetChannelSample(0,4096);}catch(ArgumentOutOfRangeException){invalid=true;}Assert(invalid&&adc.ReadDoubleWord(0x40)==4095,"range failure changed sample");
+  invalid=false;try{adc.SetChannelSample(1,1);}catch(ArgumentOutOfRangeException){invalid=true;}Assert(invalid,"unknown channel accepted");
+  var path=System.IO.Path.GetTempFileName();
+  try{
+   System.IO.File.WriteAllText(path,"1000,2000");var fixture=new SedsStm32Adc(bits:12,channels:2,samples:"1,2",stimulusPath:path);
+   Assert(fixture.ReadDoubleWord(0x40)==1000,"first fixture sample");
+   foreach(var bad in new[]{"partial","4096,1","1","1,2,3",new string('9',1025)}){
+    System.IO.File.WriteAllText(path,bad);for(int i=0;i<10;i++)fixture.ReadDoubleWord(0x40);Assert(fixture.ReadDoubleWord(0x40)==1000,"invalid fixture changed last-good sample");
+   }
+   Assert(fixture.StimulusRejected>=5&&fixture.StimulusRejected<=6,"bounded rejected counter");
+   System.IO.File.WriteAllText(path,"2048,4095");for(int i=0;i<10;i++)fixture.ReadDoubleWord(0x40);Assert(fixture.ReadDoubleWord(0x40)==2048,"recovered fixture");
+   System.IO.File.Delete(path);for(int i=0;i<10;i++)fixture.ReadDoubleWord(0x40);Assert(fixture.ReadDoubleWord(0x40)==2048,"missing fixture changed last-good sample");
+  }finally{System.IO.File.Delete(path);}
   Console.WriteLine("ADC_READ_SET_HAL_COMMANDS_PASS");
  }
 }

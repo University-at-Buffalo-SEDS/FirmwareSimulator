@@ -1,4 +1,4 @@
-use firmware_sim::peripherals::{exercise_all, PeripheralSpec};
+use firmware_sim::peripherals::{PeripheralSpec, exercise_all};
 
 #[test]
 fn devices_survive_fault_and_disconnect_behaviors() {
@@ -13,6 +13,7 @@ fn devices_survive_fault_and_disconnect_behaviors() {
         channels: None,
         max_psi: None,
         channel_samples: Vec::new(),
+        stimulus_path: None,
         noise_lsb: None,
         capacity_bytes: None,
         filesystem: None,
@@ -69,6 +70,7 @@ fn report_identifies_instruction_coupled_devices() {
         channels: None,
         max_psi: None,
         channel_samples: Vec::new(),
+        stimulus_path: None,
         noise_lsb: None,
         capacity_bytes: None,
         filesystem: None,
@@ -93,6 +95,7 @@ fn supports_24_bit_spi_sigma_delta_adc() {
         channels: Some(1),
         max_psi: None,
         channel_samples: vec![1_048_576],
+        stimulus_path: None,
         noise_lsb: Some(2),
         capacity_bytes: None,
         filesystem: None,
