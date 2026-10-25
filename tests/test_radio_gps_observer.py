@@ -14,6 +14,8 @@ class ActualGpsProofTests(unittest.TestCase):
         rows=[{'virtual_ms':10000,'primary':fix},{'virtual_ms':20000,'primary':fix}]
         MODULE.verify_rows(rows,20000,['primary'],expected)
         with self.assertRaises(RuntimeError):MODULE.verify_rows([rows[0]],20000,['primary'],expected)
+        skipped=[rows[0],dict(rows[1],virtual_ms=30000)]
+        with self.assertRaises(RuntimeError):MODULE.verify_rows(skipped,30000,['primary'],expected)
         repeated=[rows[0],{'virtual_ms':20000,'primary':dict(fix,age_ms=10750)}]
         with self.assertRaises(RuntimeError):MODULE.verify_rows(repeated,20000,['primary'],expected)
     def test_primary_only_is_not_duplicated_as_rrls_proof(self):

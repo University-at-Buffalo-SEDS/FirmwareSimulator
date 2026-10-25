@@ -42,7 +42,8 @@ def fixture_position(path):
     return dict(latitude=float(values.get('latitude',43.)),longitude=float(values.get('longitude',-78.78)),altitude=float(values.get('altitude_m',300.)))
 
 def verify_rows(rows,until_ms,stations,expected):
-    if len(rows)<until_ms//10000-1:raise RuntimeError('Missing GPS observation intervals')
+    if len(rows)!=until_ms//10000:raise RuntimeError('Missing or duplicate GPS observation intervals')
+    if any(not (10000*(index+1)<=row.get('virtual_ms',-1)<10000*(index+1)+1000)for index,row in enumerate(rows)):raise RuntimeError('GPS observation interval skipped or exceeded1s sampling tolerance')
     for name in stations:
         if any(not valid_fix(row.get(name),**expected)for row in rows):raise RuntimeError(name+' RF GPS position/freshness failed; see bounded evidence')
         source_ticks=[row['virtual_ms']-row[name]['age_ms']for row in rows]
