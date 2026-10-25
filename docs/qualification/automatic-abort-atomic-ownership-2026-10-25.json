@@ -63,17 +63,44 @@
     "actual_software_channel": {
       "log": ".workspace-progress/automatic-abort-software-channel-test.log",
       "sha256": "03df04748a5dd715541439d10276b818392ad1c8bbb3370d3a3439714672f0e0"
+    },
+    "sdk_full_default": {
+      "log": ".workspace-progress/sdk-full-accepted-tx-default.log",
+      "sha256": "84e95fe2ecf07ea4a109a9819aefe65da8aeec450117418e720fb7ba86ba646f"
+    },
+    "sdk_full_compact": {
+      "log": ".workspace-progress/sdk-full-accepted-tx-compact-fair-crypto.log",
+      "sha256": "f2662bafedf78f257d250af39cbe8f2b77291a239be1600d6c605c27344dfad0"
+    },
+    "sdk_full_results": {
+      "log": ".workspace-progress/sdk-full-accepted-tx-results.json",
+      "sha256": "b8dad3df6c912872ac9cec26b276d64f916c3e8c3982e2e1a26e3cc7d607d9c7"
     }
   },
   "limits": [
     "This does not assert that an external modem FIFO, over-air transmission or remote board has physically drained when GS software ownership ends. No-peer broadcast has no remote ACK proof.",
     "Unclassified packed work and any active host queued-TX callback conservatively delay Clear; retry can be necessary under network activity.",
-    "Linked end-to-end flight/network runs for the new exact source commits remain pending; earlier cohorts are not relabeled.",
-    "Full SDK default campaign passed; compact/fair/crypto full campaign is still running at this checkpoint."
+    "Linked end-to-end flight/network runs for the new exact source commits remain pending; earlier cohorts are not relabeled."
   ],
   "source_commits": [
     "73015b3",
     "dc5e45e",
     "359c9b2"
-  ]
+  ],
+  "sdk_full_campaigns": {
+    "source_commit": "2b1983e6c31c9caffaa129ba8bc9f3b899f4fbd2",
+    "source_files_guarded": 72,
+    "durations_shortened": false,
+    "default": {
+      "nextest_passed": 727,
+      "all_build_py_stages_passed": 10,
+      "elapsed_seconds": 298.34
+    },
+    "compact_fair_compression_crypto": {
+      "nextest_passed": 753,
+      "all_build_py_stages_passed": 10,
+      "elapsed_seconds": 780.4,
+      "codec_pressure_seconds": 600
+    }
+  }
 }
