@@ -3,3 +3,6 @@ target
 build
 tests/uart-concurrency/bin
 tests/uart-concurrency/obj
+
+tests/**/bin
+tests/**/obj

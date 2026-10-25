@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 /tests/uart-concurrency/bin/
 /tests/uart-concurrency/obj/
+
+/tests/radio-medium/bin/
+/tests/radio-medium/obj/

@@ -20,6 +20,9 @@ use std::{
 };
 #[path = "picofi_tcp_bridge.rs"]
 mod picofi_tcp_bridge;
+#[path = "radio_link.rs"]
+mod radio_link;
+use radio_link::RadioProfile;
 
 pub(crate) fn keep_console_stdin_open(child: &mut Child) -> Result<ChildStdin> {
     child
@@ -147,7 +150,19 @@ pub struct BayTopology {
     /// Detach/attach a firmware CAN endpoint; sample zero is before boot.
     #[serde(default)]
     pub can_link_events: Vec<CanLinkEvent>,
+    /// Directed radio outages; sample zero is applied before boot.
+    #[serde(default)]
+    pub radio_link_events: Vec<RadioLinkEvent>,
 }
+#[derive(Debug, Deserialize)]
+pub struct RadioLinkEvent {
+    pub link: String,
+    pub sender: String,
+    pub receiver: String,
+    pub after_sample: usize,
+    pub connected: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CanLinkEvent {
     pub node: String,
@@ -155,6 +170,120 @@ pub struct CanLinkEvent {
     pub link: String,
     pub after_sample: usize,
     pub connected: bool,
+}
+
+fn validate_radio_links(topology: &BayTopology) -> Result<()> {
+    ensure!(
+        topology
+            .links
+            .iter()
+            .filter(|link| link.radio.is_some())
+            .count()
+            <= 16,
+        "at most16 finite radio links are supported"
+    );
+    let mut external_names: BTreeSet<_> =
+        topology.links.iter().map(|link| safe(&link.name)).collect();
+    if topology.links.iter().any(|link| link.radio.is_some()) {
+        ensure!(
+            external_names.len() == topology.links.len(),
+            "radio profile requires unique link external names"
+        );
+        for link in topology.links.iter().filter(|link| link.radio.is_some()) {
+            for ep in link
+                .endpoints
+                .iter()
+                .filter(|ep| topology.host_nodes.iter().any(|host| host.name == ep.node))
+            {
+                ensure!(
+                    external_names.insert(format!("{}_pty", radio_host_name(&link.name, &ep.node))),
+                    "radio host terminal name collides with another link"
+                );
+            }
+        }
+    }
+    for link in &topology.links {
+        if let Some(profile) = &link.radio {
+            ensure!(
+                !link.name.is_empty() && link.name.len() <= 80 && safe(&link.name) == link.name,
+                "radio link name must be1..80 letters, digits, underscores or hyphens"
+            );
+            ensure!(
+                link.endpoints.iter().all(|ep| !ep.node.is_empty()
+                    && ep.node.len() <= 80
+                    && safe(&ep.node) == ep.node),
+                "radio station names must be1..80 letters, digits, underscores or hyphens"
+            );
+            ensure!(
+                matches!(link.kind, LinkKind::Radio),
+                "radio profile requires radio link kind"
+            );
+            profile.validate(link.endpoints.len())?;
+            let names: BTreeSet<_> = link.endpoints.iter().map(|ep| &ep.node).collect();
+            ensure!(
+                names.len() == link.endpoints.len(),
+                "radio link needs one endpoint per station"
+            );
+            ensure!(
+                link.endpoints
+                    .iter()
+                    .any(|ep| topology.nodes.iter().any(|node| node.name == ep.node)),
+                "radio clock requires at least one firmware node"
+            );
+        }
+    }
+    for event in &topology.radio_link_events {
+        let link = topology
+            .links
+            .iter()
+            .find(|link| link.name == event.link && link.radio.is_some())
+            .context("radio outage references unknown bounded radio link")?;
+        ensure!(
+            event.sender != event.receiver
+                && [event.sender.as_str(), event.receiver.as_str()]
+                    .iter()
+                    .all(|name| link.endpoints.iter().any(|ep| ep.node == *name)),
+            "radio outage needs two linked station names"
+        );
+        ensure!(
+            event.after_sample < topology.sample_count,
+            "radio outage outside sample range"
+        );
+    }
+    Ok(())
+}
+fn render_radio_link_event(topology: &BayTopology, event: &RadioLinkEvent) -> String {
+    let link = topology
+        .links
+        .iter()
+        .find(|link| link.name == event.link)
+        .unwrap();
+    let sender = link
+        .endpoints
+        .iter()
+        .position(|ep| ep.node == event.sender)
+        .unwrap();
+    let receiver = link
+        .endpoints
+        .iter()
+        .position(|ep| ep.node == event.receiver)
+        .unwrap();
+    format!(
+        "{} SetLink {} {} {}\necho \"SEDS_BAY_RADIO_LINK {} {} {} {} {}\"\n",
+        safe(&link.name),
+        sender,
+        receiver,
+        event.connected,
+        safe(&link.name),
+        safe(&event.sender),
+        safe(&event.receiver),
+        event.after_sample,
+        event.connected
+    )
+}
+fn radio_host_name(link: &str, host: &str) -> String {
+    // Length-prefix the link so underscores cannot alias another link/host pair.
+    format!("radio_{}_{}_{}", link.len(), safe(link), safe(host))
 }
 
 fn render_can_link_event(event: &CanLinkEvent) -> String {
@@ -246,6 +375,9 @@ pub struct Link {
     /// For example: RF radio, ground-station router, and the Pico-Fi tunnel.
     #[serde(default)]
     pub transport_path: Vec<String>,
+    /// Explicit finite shared-medium profile. Absent means the legacy UART hub.
+    #[serde(default)]
+    pub radio: Option<RadioProfile>,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -360,7 +492,7 @@ fn spawn_host_node(
     base: &Path,
     scratch: &Path,
     sample_path: &Path,
-    host_serial_paths: &BTreeMap<String, PathBuf>,
+    host_serial_paths: &BTreeMap<(String, String), PathBuf>,
     append_logs: bool,
 ) -> Result<HostRuntime> {
     let mut command = Command::new(&host.binary);
@@ -369,7 +501,10 @@ fn spawn_host_node(
         command.current_dir(cwd);
     }
     for serial in &host.serial_links {
-        command.env(&serial.env, &host_serial_paths[&serial.link]);
+        command.env(
+            &serial.env,
+            &host_serial_paths[&(host.name.clone(), serial.link.clone())],
+        );
     }
     let variable_cache = host
         .network_variable_cache
@@ -411,6 +546,8 @@ pub struct LinkReport {
     pub kind: String,
     pub transport_path: Vec<String>,
     pub endpoints: Vec<EndpointReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radio_profile: Option<RadioProfile>,
 }
 #[derive(Debug, Serialize)]
 pub struct EndpointReport {
@@ -1183,6 +1320,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             "CAN link event references an unlinked endpoint"
         );
     }
+    validate_radio_links(&topology)?;
     let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
     let scratch = tempfile::tempdir()?;
     // Probe records must not share a stream with asynchronous device logs.
@@ -1203,6 +1341,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let mut pico_bridges = Vec::new();
     let mut pico_tcp_bridges = Vec::new();
     let mut pico_discovery_bridges = Vec::new();
+    let mut radio_model_included = false;
     for link in &topology.links {
         ensure!(
             link.endpoints.len() >= 2,
@@ -1231,6 +1370,46 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     .any(|host| host.name == endpoint.node)
             })
             .collect();
+        if let Some(profile) = &link.radio {
+            let source_root = PathBuf::from(
+                env::var_os("FIRMWARE_SIM_ROOT").unwrap_or_else(|| base.as_os_str().to_os_string()),
+            );
+            if !radio_model_included {
+                script += &format!(
+                    "include @{}\n",
+                    source_root
+                        .join("renode/peripherals/SedsRadioMedium.cs")
+                        .display()
+                );
+                radio_model_included = true;
+            }
+            script += &profile.create_command(&safe(&link.name));
+            for endpoint in host_endpoints {
+                let host = topology
+                    .host_nodes
+                    .iter()
+                    .find(|host| host.name == endpoint.node)
+                    .unwrap();
+                let serial = host
+                    .serial_links
+                    .iter()
+                    .find(|serial| serial.link == link.name)
+                    .context("radio host endpoint needs a serial link")?;
+                ensure!(
+                    serial.transport == HostLinkTransport::UartPty,
+                    "radio host must use UART PTY"
+                );
+                let terminal = radio_host_name(&link.name, &endpoint.node);
+                let path = scratch.path().join(format!("{terminal}.pty"));
+                script += &format!(
+                    "emulation CreateUartPtyTerminal \"{terminal}_pty\" \"{}\"\n",
+                    path.display()
+                );
+                renode_pty_paths.push(path.clone());
+                host_serial_paths.insert((endpoint.node.clone(), link.name.clone()), path);
+            }
+            continue;
+        }
         ensure!(
             host_endpoints.len() <= 1,
             "link {} has more than one host endpoint",
@@ -1268,7 +1447,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 let reservation = std::net::UdpSocket::bind("127.0.0.1:0")?;
                 let port = reservation.local_addr()?.port();
                 drop(reservation);
-                host_serial_paths.insert(link.name.clone(), PathBuf::from(port.to_string()));
+                host_serial_paths.insert(
+                    (host_endpoint.node.clone(), link.name.clone()),
+                    PathBuf::from(port.to_string()),
+                );
                 pico_discovery_bridges.push((link.name.clone(), path, port));
             } else if transport == HostLinkTransport::PicoFiTcpToUart {
                 ensure!(
@@ -1277,7 +1459,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 );
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
                 host_serial_paths.insert(
-                    link.name.clone(),
+                    (host_endpoint.node.clone(), link.name.clone()),
                     PathBuf::from(listener.local_addr()?.to_string()),
                 );
                 pico_tcp_bridges.push((link.name.clone(), path, listener));
@@ -1290,11 +1472,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                 let socket = scratch
                     .path()
                     .join(format!("{}.i2c.sock", safe(&link.name)));
-                host_serial_paths.insert(link.name.clone(), socket.clone());
+                host_serial_paths.insert(
+                    (host_endpoint.node.clone(), link.name.clone()),
+                    socket.clone(),
+                );
                 ensure!(link.baud_rate > 0, "Pico UART baud must be positive");
                 pico_bridges.push((link.name.clone(), path, socket, link.baud_rate));
             } else {
-                host_serial_paths.insert(link.name.clone(), path);
+                host_serial_paths.insert((host_endpoint.node.clone(), link.name.clone()), path);
             }
             continue;
         }
@@ -1313,7 +1498,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     for host in &topology.host_nodes {
         for serial in &host.serial_links {
             ensure!(
-                host_serial_paths.contains_key(&serial.link),
+                host_serial_paths.contains_key(&(host.name.clone(), serial.link.clone())),
                 "host node {} references unknown serial link {}",
                 host.name,
                 serial.link
@@ -1372,6 +1557,26 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     .display()
                 );
             }
+            if node_layouts.is_empty() {
+                let mut radio_host_index = 0u64;
+                for link in topology.links.iter().filter(|link| link.radio.is_some()) {
+                    for endpoint in link
+                        .endpoints
+                        .iter()
+                        .filter(|ep| topology.host_nodes.iter().any(|host| host.name == ep.node))
+                    {
+                        // Inert emulator-only anchors register host proxies in
+                        // the machine tree; no guest firmware reads this range.
+                        overlay += &format!(
+                            "\n{}: UART.SedsRadioHostPort @ sysbus 0x{:08x}\n    baudRate: {}\n",
+                            radio_host_name(&link.name, &endpoint.node),
+                            0x7fff0000u64 + radio_host_index * 0x100,
+                            link.radio.as_ref().unwrap().uart_baud
+                        );
+                        radio_host_index += 1;
+                    }
+                }
+            }
             overlay
         })?;
         let configured_platform =
@@ -1408,12 +1613,42 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             layout.execution.boot_success_symbol,
             serde_json::to_string(&boot_python)?
         );
+        if node_layouts.is_empty() {
+            for link in topology.links.iter().filter(|link| link.radio.is_some()) {
+                for (index, endpoint) in
+                    link.endpoints.iter().enumerate().filter(|(_, ep)| {
+                        topology.host_nodes.iter().any(|host| host.name == ep.node)
+                    })
+                {
+                    let port = radio_host_name(&link.name, &endpoint.node);
+                    script += &format!(
+                        "connector Connect sysbus.{port} {port}_pty\n{} AttachHostByName {index} \"{}\" \"sysbus.{port}\"\n",
+                        safe(&link.name), safe(&node.name)
+                    );
+                }
+            }
+        }
         for link in &topology.links {
             for endpoint in link
                 .endpoints
                 .iter()
                 .filter(|endpoint| endpoint.node == node.name)
             {
+                if link.radio.is_some() {
+                    let index = link
+                        .endpoints
+                        .iter()
+                        .position(|ep| ep.node == endpoint.node)
+                        .unwrap();
+                    script += &format!(
+                        "{} AttachUartByName {} \"{}\" \"sysbus.{}\"\n",
+                        safe(&link.name),
+                        index,
+                        safe(&node.name),
+                        safe(&endpoint.peripheral)
+                    );
+                    continue;
+                }
                 if matches!(link.kind, LinkKind::Can)
                     && fs::read_to_string(&configured_platform)?.contains("SedsFixedFdcan")
                 {
@@ -1435,6 +1670,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             node.name.clone(),
             (firmware_msp, firmware_pc, firmware_vtor, elf),
         );
+    }
+    for event in topology
+        .radio_link_events
+        .iter()
+        .filter(|event| event.after_sample == 0)
+    {
+        script += &render_radio_link_event(&topology, event);
     }
     for event in topology
         .can_link_events
@@ -1498,6 +1740,21 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     &probe.symbol,
                 )?;
             }
+        }
+        for link in topology.links.iter().filter(|link| link.radio.is_some()) {
+            script += &format!(
+                "echo \"SEDS_RADIO_SNAPSHOT {} {}\"\n{} Snapshot\n",
+                safe(&link.name),
+                sample,
+                safe(&link.name)
+            );
+        }
+        for event in topology
+            .radio_link_events
+            .iter()
+            .filter(|event| event.after_sample == sample + 1)
+        {
+            script += &render_radio_link_event(&topology, event);
         }
         for event in topology
             .can_ack_events
@@ -1819,7 +2076,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         for host in &topology.host_nodes {
             for serial in &host.serial_links {
-                let path = &host_serial_paths[&serial.link];
+                let path = &host_serial_paths[&(host.name.clone(), serial.link.clone())];
                 if renode_pty_paths.contains(path) {
                     // Retain a non-reading descriptor before the host claims
                     // exclusivity. Never apply terminal ioctls to I2C sockets.
@@ -2299,6 +2556,7 @@ fn qualify_observations(
         }
         link_reports.push(LinkReport {
             name: link.name.clone(),
+            radio_profile: link.radio.clone(),
             kind: format!("{:?}", link.kind),
             transport_path: link.transport_path.clone(),
             endpoints: endpoint_reports,
@@ -2705,9 +2963,15 @@ fn validate_probe_indices(indexed: &[(usize, u32)], sample_count: usize) -> Resu
 /// RTOS context switch and can grow huge synthetic call stacks; flat binary PCs
 /// have a fixed cost per guest instruction and are aggregated offline.
 fn select_profile_interval(sample_count: usize, requested: Option<usize>) -> Result<usize> {
-    ensure!(sample_count != 0, "profiling requires a nonzero sample count");
+    ensure!(
+        sample_count != 0,
+        "profiling requires a nonzero sample count"
+    );
     let interval = requested.unwrap_or(usize::from(sample_count > 1));
-    ensure!(interval < sample_count, "trace_sample must be less than sample_count");
+    ensure!(
+        interval < sample_count,
+        "trace_sample must be less than sample_count"
+    );
     Ok(interval)
 }
 
@@ -4009,5 +4273,71 @@ mod checkpoint_diagnostic_tests {
         assert!(!script.contains("SEDS_NODE"));
         assert!(!script.contains("Write"));
         assert!(!script.contains("Reset"));
+    }
+}
+
+#[cfg(test)]
+mod radio_profile_tests {
+    use super::*;
+    fn topology() -> BayTopology {
+        serde_json::from_value(serde_json::json!({"name":"radio-bay","sample_count":4,
+            "nodes":[{"name":"rf","layout":"rf.json","firmware_root":"rf"}],
+            "host_nodes":[{"name":"groundstation","binary":"gs","serial_links":[{"link":"air","env":"GS_AV_BAY_SERIAL_PORT"}]},
+                {"name":"rrls","binary":"gs","serial_links":[{"link":"air","env":"GS_AV_BAY_SERIAL_PORT"}]}],
+            "links":[{"name":"air","kind":"radio","endpoints":[{"node":"rf","peripheral":"usart1"},
+                {"node":"groundstation","peripheral":"serial"},{"node":"rrls","peripheral":"serial"}],
+                "radio":{"air_bits_per_second":64000,"uart_baud":115200,"tx_fifo_bytes":4096,"rx_fifo_bytes":4096,
+                    "max_burst_bytes":256,"packet_idle_us":2000,"overhead_bits":160,"turn_us":2000}}],
+            "radio_link_events":[{"link":"air","sender":"groundstation","receiver":"rf","after_sample":2,"connected":false}]})).unwrap()
+    }
+    #[test]
+    fn directed_radio_outages_keep_stable_station_ids() {
+        let mut t = topology();
+        validate_radio_links(&t).unwrap();
+        assert_eq!(
+            render_radio_link_event(&t, &t.radio_link_events[0]),
+            "air SetLink 1 0 false\necho \"SEDS_BAY_RADIO_LINK air groundstation rf 2 false\"\n"
+        );
+        t.radio_link_events[0].after_sample = 0;
+        validate_radio_links(&t).unwrap();
+        t.radio_link_events[0].after_sample = 4;
+        assert!(validate_radio_links(&t).is_err());
+        t.radio_link_events[0].after_sample = 1;
+        t.radio_link_events[0].receiver = "missing".into();
+        assert!(validate_radio_links(&t).is_err());
+    }
+    #[test]
+    fn reject_profile_on_can_and_duplicate_station_or_ambiguous_names() {
+        let mut t = topology();
+        t.links[0].kind = LinkKind::Can;
+        assert!(validate_radio_links(&t).is_err());
+        let mut t = topology();
+        t.links[0].endpoints[2].node = "groundstation".into();
+        assert!(validate_radio_links(&t).is_err());
+        let mut t = topology();
+        t.links[0].name = "ambiguous.name".into();
+        assert!(validate_radio_links(&t).is_err());
+    }
+    #[test]
+    fn station_uart_paths_do_not_alias_on_the_same_air_link() {
+        let paths = BTreeMap::from([
+            (
+                ("groundstation".to_string(), "air".to_string()),
+                PathBuf::from("gs.pty"),
+            ),
+            (
+                ("rrls".to_string(), "air".to_string()),
+                PathBuf::from("rrls.pty"),
+            ),
+        ]);
+        assert_ne!(
+            paths[&("groundstation".into(), "air".into())],
+            paths[&("rrls".into(), "air".into())]
+        );
+        assert_ne!(
+            radio_host_name("air", "groundstation"),
+            radio_host_name("air", "rrls")
+        );
+        assert_ne!(radio_host_name("a_b", "c"), radio_host_name("a", "b_c"));
     }
 }

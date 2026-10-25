@@ -1,0 +1,30 @@
+include @/src/renode/peripherals/SedsRadioMedium.cs
+mach create "radio-contract"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+cpu IsHalted true
+machine LoadPlatformDescriptionFromString "gs: UART.SedsRadioHostPort @ sysbus 0x7fff0000"
+machine LoadPlatformDescriptionFromString "rrls: UART.SedsRadioHostPort @ sysbus 0x7fff0100"
+emulation CreateSedsRadioMedium "air" 64000 115200 4096 4096 4 200 0 0
+air AttachHostByName 0 "radio-contract" "sysbus.gs"
+air AttachHostByName 1 "radio-contract" "sysbus.rrls"
+air AttachUartByName 2 "radio-contract" "sysbus.usart2"
+emulation CreateUartPtyTerminal "gs-pty" "/tmp/radio-contract-gs.pty"
+emulation CreateUartPtyTerminal "rrls-pty" "/tmp/radio-contract-rrls.pty"
+connector Connect sysbus.gs gs-pty
+connector Connect sysbus.rrls rrls-pty
+sysbus WriteDoubleWord 0x4000440c 1476
+sysbus WriteDoubleWord 0x40004400 0x2000000d
+python "received=[]; sent=[]; monitor.Machine['sysbus.rrls'].CharReceived += lambda v: received.append(int(v)); monitor.Machine['sysbus.gs'].CharReceived += lambda v: sent.append(int(v))"
+sysbus.gs WriteChar 42
+emulation RunFor "0.01s"
+python "assert received == [42], str(received); assert sent == [], str(sent); assert monitor.Machine['sysbus.usart2'].ReadDoubleWord(0x24) == 42; print('RADIO_RENODE_NO_ECHO_PASS')"
+sysbus WriteDoubleWord 0x40004428 43
+emulation RunFor "0.01s"
+python "assert received == [42,43], str(received); assert sent == [43], str(sent); print('RADIO_RENODE_GUEST_TO_HOSTS_PASS')"
+python "[monitor.Machine['sysbus.gs'].WriteChar(v) for v in range(8)]; [monitor.Machine['sysbus.rrls'].WriteChar(v) for v in range(20,28)]"
+emulation RunFor "0.02s"
+# CPU is halted, so the physical UART retains only its eight-byte FIFO.
+# The host proxies below independently verify all remaining raw bytes.
+python "values=[int(monitor.Machine['sysbus.usart2'].ReadDoubleWord(0x24)) for _ in range(8)]; assert values == [0,1,2,3,20,21,22,23], str(values); assert sent == [43]+range(20,28), str(sent); assert received == [42,43]+range(8), str(received); print('RADIO_RENODE_RAW_BURST_INTERLEAVING_PASS')"
+air Snapshot
+quit

@@ -1,0 +1,39 @@
+include @/src/renode/peripherals/SedsRadioMedium.cs
+emulation SetGlobalQuantum "0.0001s"
+emulation SetGlobalSerialExecution False
+mach create "radio-owner"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+cpu IsHalted true
+machine LoadPlatformDescriptionFromString "host: UART.SedsRadioHostPort @ sysbus 0x7fff0000"
+sysbus WriteDoubleWord 0x4000440c 1476
+sysbus WriteDoubleWord 0x40004400 0x2000000d
+python "owner_uart=monitor.Machine['sysbus.usart2']; host=monitor.Machine['sysbus.host']; host_rx=[]; host.CharReceived += lambda v: host_rx.append(int(v))"
+mach create "radio-peer"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+cpu IsHalted true
+sysbus WriteDoubleWord 0x4000440c 1476
+sysbus WriteDoubleWord 0x40004400 0x2000000d
+python "peer_uart=monitor.Machine['sysbus.usart2']"
+emulation CreateSedsRadioMedium "air" 64000 115200 4096 4096 4 200 0 0
+air AttachUartByName 0 "radio-owner" "sysbus.usart2"
+air AttachUartByName 1 "radio-peer" "sysbus.usart2"
+air AttachHostByName 2 "radio-owner" "sysbus.host"
+python "owner_uart.WriteDoubleWord(0x28,42); peer_uart.WriteDoubleWord(0x28,43)"
+emulation RunFor "0.02s"
+python "assert int(peer_uart.ReadDoubleWord(0x24)) == 42; assert int(owner_uart.ReadDoubleWord(0x24)) == 43; assert host_rx == [42,43], str(host_rx); print('RADIO_RENODE_CROSS_MACHINE_PASS')"
+# Reset the machine owning the medium timer during an active host burst.
+python "[host.WriteChar(v) for v in range(16)]"
+emulation RunFor "0.0005s"
+mach set "radio-owner"
+machine Reset
+python "assert int(owner_uart.ReadDoubleWord(0)) == 0; print('RADIO_RENODE_OWNER_UART_RESET_OBSERVED')"
+cpu IsHalted true
+sysbus WriteDoubleWord 0x4000440c 1476
+sysbus WriteDoubleWord 0x40004400 0x2000000d
+emulation RunFor "0.02s"
+python "values=[int(peer_uart.ReadDoubleWord(0x24)) for _ in range(8)]; assert values == range(8), str(values); owner_values=[int(owner_uart.ReadDoubleWord(0x24)) for _ in range(8)]; assert owner_values == range(8), str(owner_values); print('RADIO_RENODE_OWNER_RESET_QUEUE_PASS')"
+python "peer_uart.WriteDoubleWord(0x28,99)"
+emulation RunFor "0.01s"
+python "assert host_rx == [42,43,99], str(host_rx); assert int(owner_uart.ReadDoubleWord(0x24)) == 99; print('RADIO_RENODE_OWNER_RESET_PROGRESS_PASS')"
+air Snapshot
+quit

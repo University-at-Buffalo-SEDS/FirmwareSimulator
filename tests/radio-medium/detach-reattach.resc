@@ -1,0 +1,27 @@
+include @/src/renode/peripherals/SedsRadioMedium.cs
+mach create "radio-detach-contract"
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32g491.repl
+cpu IsHalted true
+machine LoadPlatformDescriptionFromString "sender: UART.SedsRadioHostPort @ sysbus 0x7fff0000"
+machine LoadPlatformDescriptionFromString "receiver: UART.SedsRadioHostPort @ sysbus 0x7fff0100"
+emulation CreateSedsRadioMedium "air" 64000 115200 4096 4096 1 1 0 0
+air AttachHostByName 0 "radio-detach-contract" "sysbus.sender"
+air AttachHostByName 1 "radio-detach-contract" "sysbus.receiver"
+python "received=[]; monitor.Machine['sysbus.receiver'].CharReceived += lambda v: received.append(int(v))"
+sysbus.sender WriteChar 120
+emulation RunFor "0.0001s"
+air DetachFrom sysbus.receiver
+air AttachHostByName 1 "radio-detach-contract" "sysbus.receiver"
+emulation RunFor "0.001s"
+python "assert received == [], str(received); print('RADIO_RENODE_INFLIGHT_RECEIVER_REATTACH_PASS')"
+sysbus.sender WriteChar 121
+emulation RunFor "0.0001s"
+air DetachFrom sysbus.sender
+air AttachHostByName 0 "radio-detach-contract" "sysbus.sender"
+emulation RunFor "0.001s"
+python "assert received == [], str(received); print('RADIO_RENODE_INFLIGHT_SENDER_REATTACH_PASS')"
+sysbus.sender WriteChar 122
+emulation RunFor "0.001s"
+python "assert received == [122], str(received); print('RADIO_RENODE_FRESH_REATTACH_DELIVERY_PASS')"
+air Snapshot
+quit

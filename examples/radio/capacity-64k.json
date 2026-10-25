@@ -1,0 +1,10 @@
+{
+  "air_bits_per_second": 64000,
+  "uart_baud": 115200,
+  "tx_fifo_bytes": 4096,
+  "rx_fifo_bytes": 4096,
+  "max_burst_bytes": 256,
+  "packet_idle_us": 2000,
+  "overhead_bits": 160,
+  "turn_us": 2000
+}

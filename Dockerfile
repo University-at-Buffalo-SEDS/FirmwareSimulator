@@ -47,6 +47,11 @@ COPY renode/peripherals/SedsStm32Adc.cs renode/peripherals/SedsStm32Adc.cs
 COPY tests/adc-registers tests/adc-registers
 RUN dotnet run --project tests/adc-registers/AdcRegisters.csproj -c Release
 
+COPY renode/peripherals/SedsRadioMedium.cs renode/peripherals/SedsRadioMedium.cs
+COPY tests/radio-medium tests/radio-medium
+RUN dotnet publish tests/radio-medium/RadioMedium.csproj -c Release -o /radio-check
+RUN dotnet /radio-check/RadioMedium.dll
+
 FROM rust:1.98-bookworm AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
@@ -91,6 +96,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/firmware-sim /usr/local/bin/firmware-sim
 COPY --from=uart-tests /uart-check /opt/firmware-sim/uart-check
+COPY --from=uart-tests /radio-check /opt/firmware-sim/radio-check
 COPY --from=groundstation /groundstation/target/release/groundstation_backend /usr/local/bin/groundstation_backend
 COPY --from=groundstation /groundstation/sedsnet-source-proof.txt /opt/firmware-sim/groundstation-sedsnet-source.txt
 COPY --from=groundstation /groundstation/backend/layout /opt/groundstation/backend/layout

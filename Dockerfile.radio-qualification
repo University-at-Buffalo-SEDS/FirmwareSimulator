@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+# Manual qualification derivative: retain the source-locked GS/SDK/MCUs from
+# BASE_IMAGE and replace only the simulator engine/peripheral model.
+ARG BASE_IMAGE=seds-firmware-simulator:unordered-v4-20261025
+FROM rust:1.98-bookworm AS engine
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+COPY core core
+COPY mcu mcu
+COPY peripherals peripherals
+COPY tests tests
+COPY examples examples
+COPY renode renode
+RUN --mount=type=cache,id=seds-radio-engine-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=seds-radio-engine-target,target=/radio-target \
+    CARGO_TARGET_DIR=/radio-target CARGO_BUILD_JOBS=8 cargo test --locked && \
+    CARGO_TARGET_DIR=/radio-target CARGO_BUILD_JOBS=8 cargo build --release --locked && \
+    cp /radio-target/release/firmware-sim /firmware-sim
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS radio-tests
+WORKDIR /src
+COPY renode/peripherals/SedsRadioMedium.cs renode/peripherals/SedsRadioMedium.cs
+COPY tests/radio-medium tests/radio-medium
+RUN dotnet publish tests/radio-medium/RadioMedium.csproj -c Release -o /radio-check && \
+    dotnet /radio-check/RadioMedium.dll
+FROM ${BASE_IMAGE}
+COPY --from=engine /firmware-sim /usr/local/bin/firmware-sim
+COPY --from=radio-tests /radio-check /opt/firmware-sim/radio-check
+COPY renode /opt/firmware-sim/renode
+COPY scripts /opt/firmware-sim/scripts

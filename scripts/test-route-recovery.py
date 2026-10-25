@@ -439,7 +439,28 @@ def main():
         help="Require current250Hz valve-to-DAQ SD capture, transport, storage and loss counters in the hardware-fill profile")
     parser.add_argument("--pressure-sd-diagnostics",action="store_true",
         help="Capture pressure ADC/TIM/DMA registers in any profile; does not qualify250Hz logging")
+    parser.add_argument("--radio-profile", type=Path,
+        help="explicit finite shared-medium JSON profile; preserves all existing acceptance gates")
+    parser.add_argument("--radio-rrls", action="store_true",
+        help="add a second host on the same finite radio medium; requires --radio-profile")
+    parser.add_argument("--radio-trace-until-ms", type=int,
+        help="retain bounded passive UART traces through this virtual time; requires profile/evidence-dir")
+    parser.add_argument("--host-heartbeat-period-ms", type=int,
+        help="explicit hosted heartbeat period for finite-radio traffic qualification;100..60000ms")
     args = parser.parse_args()
+    if args.radio_rrls and not args.radio_profile:
+        parser.error("--radio-rrls requires --radio-profile")
+    if args.host_heartbeat_period_ms is not None and (
+        not args.radio_profile or not 100 <= args.host_heartbeat_period_ms <= 60_000
+    ):
+        parser.error("--host-heartbeat-period-ms requires --radio-profile and100..60000ms")
+    if args.radio_trace_until_ms is not None and (not args.radio_profile or args.evidence_dir is None or not 1<=args.radio_trace_until_ms<=3_600_000):
+        parser.error("--radio-trace-until-ms requires --radio-profile, --evidence-dir and1..3600000ms")
+    radio_profile = None
+    if args.radio_profile:
+        from radio_profile import validate_profile
+        radio_profile = validate_profile(json.loads(args.radio_profile.read_text()))
+
     if args.pressure_sd_logging and not args.hardware_fill_profile:
         parser.error("--pressure-sd-logging requires --hardware-fill-profile")
     if args.fill_duration_ms<70000 or args.fill_duration_ms%10000:
@@ -514,6 +535,12 @@ def main():
         if args.pressure_sd_logging:
             configure_pressure_sd_assertions(topology)
             configure_storage_assertions(topology,require_flush=True)
+        if radio_profile is not None:
+            from radio_profile import configure_radio_profile
+            configure_radio_profile(directory, topology, radio_profile, args.radio_rrls)
+        if args.host_heartbeat_period_ms is not None:
+            from radio_profile import configure_host_heartbeat
+            configure_host_heartbeat(topology, args.host_heartbeat_period_ms)
         topology_path.write_text(json.dumps(topology, indent=2))
         if args.disconnect_node:
             configure_fault(directory, args.disconnect_node)
@@ -533,10 +560,15 @@ def main():
             topology_path.write_text(json.dumps(recording_topology, indent=2))
         if args.fault_elf:
             run_kind += "-negative-control"
+        if radio_profile is not None:
+            run_kind += "-finite-radio" + ("-rrls" if args.radio_rrls else "")
         evidence = root / f"route-recovery-{run_kind}.json"
         evidence.write_text((directory / "topology.json").read_text())
         if args.evidence_dir:
             configure_evidence_capture(command, args.evidence_dir)
+        if args.radio_trace_until_ms is not None:
+            command[2:2] = ["-e", "FIRMWARE_SIM_RADIO_TRACE_DIR=/diagnostics/radio-trace", "-e",
+                "FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS=" + str(args.radio_trace_until_ms)]
         command[2:2] = ["--name", container]
         started = time.monotonic()
         process = subprocess.Popen(command)

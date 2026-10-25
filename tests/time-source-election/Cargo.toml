@@ -1,0 +1,10 @@
+[package]
+name = "firmware-time-source-election-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+sedsnet = { package = "SEDSnet", path = "../../../SEDSnet", default-features = false, features = ["std", "timesync", "discovery"] }
