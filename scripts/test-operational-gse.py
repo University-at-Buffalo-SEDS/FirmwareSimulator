@@ -58,6 +58,19 @@ def login(origin,key):
     code,result=request(origin,'/api/auth/login',{**message,'proof_b64':proof});assert code==200
     return result['token']
 
+def append_probe_symbols(layout,board,definitions):
+    cache=(board/'build/Release_Script/CMakeCache.txt').read_text()
+    nm=re.search(r'^CMAKE_NM:FILEPATH=(.*)$',cache,re.M)[1]
+    elf=board/layout['artifacts']['elf'];text=subprocess.check_output([nm,'-n',str(elf)],text=True)
+    symbols={parts[-1]for line in text.splitlines()if len(parts:=line.split())>=3}
+    for name,symbol,offset in definitions:
+        matches=[s for s in symbols if s==symbol or s.startswith(symbol+'.')]
+        if symbol in symbols:resolved=symbol
+        else:
+            if len(matches)!=1:raise ValueError('Missing/ambiguous real firmware probe '+symbol)
+            resolved=matches[0]
+        layout['execution']['memory_probes'].append({'name':name,'symbol':resolved,'byte_offset':offset})
+
 def prepare(args):
     out=args.evidence.resolve();assert not out.exists(),'Use a new additive evidence directory';out.mkdir(parents=True)
     config=out/'config';config.mkdir();diagnostics=out/'diagnostics';diagnostics.mkdir(mode=0o770);(diagnostics/'temp').mkdir(mode=0o770)
@@ -93,7 +106,15 @@ def prepare(args):
         layout['execution']['memory_probe_warmup_samples']=3
         layout['execution']['memory_probes']=[probe for probe in layout['execution'].get('memory_probes',[])if probe['name']in('panics','tlsf_failures','can_rx_frames','valve_commands_processed','actuator_commands_processed','uart_tx_frames','uart_rx_frames','fdcan_tx_ok','fdcan_rx')]
         if node['name']=='valve':
+            append_probe_symbols(layout,board,[(name,symbol,offset)for name,symbol,offset in [('launch_start_count','g_launch_sequence_start_count',0),('launch_service_count','g_launch_sequence_service_count',0),('launch_elapsed_ticks','g_launch_sequence_last_elapsed_ticks',0),('launch_pilot_attempts','g_launch_sequence_pilot_attempt_count',0),('launch_finish_count','g_launch_sequence_finish_count',0),('launch_abort_seen','g_launch_sequence_abort_seen_count',0),('pilot_actual_state','g_sim_pilot_valve_state',0),('pilot_driver_result','g_sim_pilot_solenoid_result',0),('valve_abort','g_sim_valve_aborted',0),('valve_local_ticks','_tx_timer_system_clock',0),('launch_command_utc_lo','g_thread_comm_launch_command_timestamp_ms',0),('launch_command_utc_hi','g_thread_comm_launch_command_timestamp_ms',4)]])
             sensor=next(p for p in layout['peripherals']if p.get('bus')=='adc3');sensor.update(channel_samples=[0],noise_lsb=0,stimulus_path='/diagnostics/pressure.raw')
+        if node['name']=='actuator':
+            append_probe_symbols(layout,board,[('ab_last_executed_command','g_sim_last_valve_command',0),('ab_sequence_active_word','g_launch_sequence_active',0),('ab_igniter_started_word','g_launch_sequence_igniter_started',0),('ab_igniter_output_word','g_igniter_on',0),('ab_igniter_start_ticks','g_launch_sequence_igniter_start_ticks',0),('ab_igniter_stop_ticks','g_launch_sequence_igniter_stop_ticks',0),('ab_abort_word','g_aborted',0),('ab_local_ticks','_tx_timer_system_clock',0)])
+            # Actual GPIO registers: PB7 is the firmware enable output; PC3 is
+            # the active-low driver fault input already modeled high by profile.
+            layout['execution']['memory_probes'] += [{'name':'ab_igniter_enable_odr','address':0x48000414},{'name':'ab_driver_fault_idr','address':0x48000810}]
+        if node['name']=='daq':
+            append_probe_symbols(layout,board,[('daq_launch_deadline_lo','g_sd_close_unix_ms',0),('daq_launch_deadline_hi','g_sd_close_unix_ms',4),('daq_launch_session_lo','g_sd_session',0),('daq_launch_session_hi','g_sd_session',4),('daq_local_deadline_lo','g_sd_close_local_ms',0),('daq_local_deadline_hi','g_sd_close_local_ms',4)])
         if node['name']=='daq' and args.positive_fill:
             next(p for p in layout['peripherals']if p.get('model')=='mcp3564r')['stimulus_path']='/diagnostics/loadcell.raw'
         (config/(node['name']+'.json')).write_text(json.dumps(layout))
@@ -111,7 +132,7 @@ def run(args):
     if args.prepare_only:return
     summary={'phase':'running','scope':'Assumed sensor response;actual firmwareADC/network/ACK/operationalpolicy;no direct qualification writes','image':args.image,'milestones':[],'plant_assumptions':{'nitrogen_psi_per_second':35,'relief_psi_per_second':200,'closed_leak_psi_per_second':0,'mass_target_intentionally_unmet':not args.positive_fill,'nitrous_fill_kg_per_second':2 if args.positive_fill else None}}
     progress=lambda:(out/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
-    log=(out/'simulator.log').open('w');process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT);start=time.monotonic();origin=None;token=None;stage='ready';pressure=0.;previous_clock=0;phase=None;mass=0.;fire_clock=False
+    log=(out/'simulator.log').open('w');process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT);start=time.monotonic();origin=None;token=None;stage='ready';pressure=0.;previous_clock=0;phase=None;mass=0.;fire_clock=False;previous_valves=None;fire_saved=False
     try:
         progress()
         while process.poll()is None:
@@ -137,6 +158,18 @@ def run(args):
             if args.positive_fill:
                 if status['phase']=='filling'and status['valves'][4]is True:mass=min(5.2,mass+2*delta/1000)
                 atomic(diagnostics/'loadcell.raw',mass_samples(mass))
+            if status['valves']!=previous_valves:
+                previous_valves=list(status['valves']);events=summary.setdefault('actual_valve_events',[])
+                assert len(events)<512,'Valve event evidence bound exceeded'
+                events.append({'virtual_ms':now,'valves':previous_valves});progress()
+            def saved_evidence(label):
+                data=json.loads((diagnostics/'state/qualification.json').read_text())
+                assert data['qualification']==status['qualification']
+                for name in ['qualification','checklists','calibration']:
+                    source=diagnostics/'state'/(name+'.json')
+                    shutil.copyfile(source,out/(label+'-'+name+'.json'))
+                cache=clocks[0].parent/'groundstation-network-variables.json'
+                if cache.exists():shutil.copyfile(cache,out/(label+'-network-variables.json'))
             if status['phase']!=phase:
                 phase=status['phase'];summary['milestones'].append({'virtual_ms':now,'phase':phase,'mission_stage':status['mission_stage'],'pressure_psi':status['pressure_psi']});progress()
             if status['qualification']['fault']or phase=='fault':raise AssertionError('Actual procedure fault: '+status['message'])
@@ -148,9 +181,11 @@ def run(args):
             elif stage=='self-test'and status['qualification']['self_test']:
                 document=request(origin,'/api/checklists',token=token)[1];assert document['checklists'][0]['items'][0]['checked'];assert not document['checklists'][0]['items'][1]['checked']
                 assert json.loads((diagnostics/'state/qualification.json').read_text())['qualification']['self_test']
+                saved_evidence('self-test-passed')
                 assert request(origin,'/api/command','NitrogenTest',token)[0]==200;stage='nitrogen'
             elif stage=='nitrogen'and status['qualification']['nitrogen_test']:
                 document=request(origin,'/api/checklists',token=token)[1];assert all(item['checked']for item in document['checklists'][0]['items'])
+                saved_evidence('nitrogen-passed')
                 assert request(origin,'/api/command','StartFill',token)[0]==200;stage='fill'
             elif stage=='fill'and phase=='filling':
                 assert status['mission_stage']=='fill'and not status['qualification']['fill_target']
@@ -161,11 +196,13 @@ def run(args):
                 assert status['mission_stage']=='armed'and status['valves']==[False]*5
                 assert json.loads((diagnostics/'state/qualification.json').read_text())['qualification']['fill_target']
                 summary['milestones'].append({'virtual_ms':now,'phase':'real_mass_target_armed','mass_input_kg':mass})
+                saved_evidence('mass-target-armed')
                 if args.fire:
                     assert request(origin,'/api/command','Launch',token)[0]==200;stage='fire'
                 else:
                     summary.update(phase='passed',virtual_ms=now,checks='realselftest/nitrogen;automaticdurablechecklists;actualDAQmass;Idle→Fill→Armed');progress();stage='complete'
             elif stage=='fire'and status['qualification']['fire_started']:
+                if not fire_saved:saved_evidence('fire-committed');fire_saved=True
                 clock=request(origin,'/api/launch_clock',token=token)[1]
                 assert status['mission_stage']=='fire'and status['qualification']['fire_started']
                 if clock['kind']=='t_minus':
@@ -174,6 +211,7 @@ def run(args):
                 elif clock['kind']=='t_plus':
                     assert fire_clock,'Countdown was never observed'
                     assert clock['anchor_timestamp_ms']is None and clock['duration_ms']>=0
+                    saved_evidence('pilot-tplus')
                     document=request(origin,'/api/checklists',token=token)[1]
                     assert not document['checklists'][0]['items'][1]['checked'],'Cold flow did not clear after real Fire'
                     summary.update(phase='passed',virtual_ms=now,checks='actualADC/DAQmassandACKs;Idle→Fill→Armed→Fire;countdowntopilotTplus;automaticchecklistsreset');progress();print('GSE_REAL_FIRMWARE_POSITIVE_FIRE_PASS',flush=True);stage='complete'
