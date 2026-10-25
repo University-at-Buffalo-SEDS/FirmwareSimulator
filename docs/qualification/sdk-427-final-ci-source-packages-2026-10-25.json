@@ -1,0 +1,266 @@
+{
+  "status": "SOURCE_PACKAGES_LOCAL_FULL_MATRIX_AND_PUSHED_MAIN_CI_PASS",
+  "source_package_commit": "b38b017c8e4c963682362d34fa1362c67607d4d1",
+  "code_qualification_commit": "a1e4b8415dd88a9e23a6e819f91d46cc96333562",
+  "code_to_pushed_commit_diff": {
+    "files": [
+      "docs/qualification-4.2.7-2026-10-25.json"
+    ],
+    "docs_only": true
+  },
+  "scope": "SDK source/package/CI qualification only. Existing simulator images/cohorts retain their exact earlier source identities; this does not relabel them or claim network/hardware qualification of a new runtime. No publication or tag created here.",
+  "source_packages": {
+    "source_commit": "b38b017c8e4c963682362d34fa1362c67607d4d1",
+    "no_publication": true,
+    "credential_free_environment": true,
+    "environment_keys": [
+      "CARGO_BUILD_JOBS",
+      "CARGO_HOME",
+      "CARGO_INCREMENTAL",
+      "CARGO_NET_OFFLINE",
+      "HOME",
+      "LANG",
+      "PATH",
+      "RUSTC",
+      "TMPDIR"
+    ],
+    "empty_home_remained_empty": true,
+    "cargo_home_entries": [
+      "registry cache symlink",
+      "git cache symlink"
+    ],
+    "source_rs_files_unchanged": 73,
+    "package_verification_enabled": true,
+    "results": [
+      {
+        "manifest": "sedsnet_macros/Cargo.toml",
+        "command": [
+          "cargo",
+          "package",
+          "--offline",
+          "--manifest-path",
+          "sedsnet_macros/Cargo.toml"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 3.32
+      },
+      {
+        "manifest": "Cargo.toml",
+        "command": [
+          "cargo",
+          "package",
+          "--offline",
+          "--manifest-path",
+          "Cargo.toml"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 11.76
+      }
+    ],
+    "artifacts": [
+      {
+        "name": "sedsnet_macros-2.1.1.crate",
+        "preserved_path": ".workspace-progress/sdk-427-final-source-package-check/sedsnet_macros-2.1.1-b38b017.crate",
+        "files": 5,
+        "bytes": 9720,
+        "sha256": "d54852c15aa014ac506b338745805a68af9e90d76a0404686888dbdd3e2d472f",
+        "credential_filenames_present": false,
+        "required_helpers_and_contracts_present": []
+      },
+      {
+        "name": "SEDSnet-4.2.7.crate",
+        "preserved_path": ".workspace-progress/sdk-427-final-source-package-check/SEDSnet-4.2.7-b38b017.crate",
+        "files": 268,
+        "bytes": 1018781,
+        "sha256": "76b962a7e144c4e02bdeb12abd34e69e6d39d56eeab0033c182780e691a51250",
+        "credential_filenames_present": false,
+        "required_helpers_and_contracts_present": [
+          "build.py",
+          "publish_crates.py",
+          "python_test_runner.py",
+          "release_logging.py",
+          "release_credentials.py",
+          "tests/test_build_cli.py",
+          "tests/test_publish_crates.py",
+          "src/tests/accepted_route_ownership.rs",
+          "src/tests/accepted_tx_ownership.rs"
+        ]
+      }
+    ],
+    "log_sha256": "2a29e56820cf5e7099ecbf5328fa440bbbb451dd7d6705c326352e6ddb669dd2"
+  },
+  "local_full_matrix": {
+    "terminal_metadata": {
+      "phase": "passed",
+      "commit": "a1e4b8415dd88a9e23a6e819f91d46cc96333562",
+      "command": [
+        "python3",
+        "build.py",
+        "test",
+        "--all",
+        "--full"
+      ],
+      "source_files": 267,
+      "environment_keys": [
+        "CARGO_BUILD_JOBS",
+        "CARGO_HOME",
+        "CARGO_INCREMENTAL",
+        "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "LANG",
+        "PATH",
+        "PYTHONUNBUFFERED",
+        "RUSTUP_HOME",
+        "SEDSNET_TEST_RUNNER"
+      ],
+      "credentials_forwarded": false,
+      "cargo_offline": true,
+      "pressure_duration_shortened": false,
+      "started_utc": "2026-10-25T21:55:56.311061+00:00",
+      "completed_utc": "2026-10-25T22:12:38.036345+00:00",
+      "elapsed_wall_seconds": 1001.7251479859697,
+      "exit_code": 0,
+      "source_unchanged": true,
+      "changed_source": [],
+      "result_file": "result.json",
+      "stage_summary_file": "stage-summary.json",
+      "pipeline_log_sha256": "72951294363f7df79bd045dc146be3a9e79bc0f44e6806c7b94c4fa021f57d05",
+      "initial_running_metadata": "campaign-started.json"
+    },
+    "result": {
+      "exit_code": 0,
+      "elapsed_wall_seconds": 1001.7251479859697,
+      "source_unchanged": true,
+      "changed_source": [],
+      "commit": "a1e4b8415dd88a9e23a6e819f91d46cc96333562",
+      "source_files": 267
+    },
+    "stage_summary": {
+      "profiles": [
+        {
+          "profile": "1/2: cryptography",
+          "native_rust_passed": 727,
+          "native_rust_failed": 0,
+          "native_rust_ignored": 0,
+          "python": [
+            [
+              "86",
+              "35.528",
+              "OK"
+            ]
+          ]
+        },
+        {
+          "profile": "2/2: cryptography,compact-packet-compression,fair-admission",
+          "native_rust_passed": 753,
+          "native_rust_failed": 0,
+          "native_rust_ignored": 0,
+          "python": [
+            [
+              "14",
+              "32.718",
+              "OK"
+            ]
+          ]
+        }
+      ],
+      "shared_uncompressed_stages": 1,
+      "shared_benchmark_stages": 1,
+      "source_head_unchanged": true,
+      "log_sha256": "72951294363f7df79bd045dc146be3a9e79bc0f44e6806c7b94c4fa021f57d05"
+    },
+    "initial_running_metadata": "campaign-started.json is preserved historical startup metadata, not the final result."
+  },
+  "github_main_ci": {
+    "run": {
+      "conclusion": "success",
+      "created_at": "2026-10-25T22:24:08Z",
+      "event": "push",
+      "head_branch": "main",
+      "head_sha": "b38b017c8e4c963682362d34fa1362c67607d4d1",
+      "html_url": "https://github.com/Rylan-Meilutis/SEDSnet/actions/runs/40240018125",
+      "id": 40240018125,
+      "name": "Rust Test CI",
+      "status": "completed",
+      "updated_at": "2026-10-25T22:45:32Z"
+    },
+    "jobs": {
+      "jobs": [
+        {
+          "completed_at": "2026-10-25T22:45:31Z",
+          "conclusion": "success",
+          "html_url": "https://github.com/Rylan-Meilutis/SEDSnet/actions/runs/40240018125/job/121309613047",
+          "id": 121309613047,
+          "name": "build_and_test",
+          "started_at": "2026-10-25T22:24:11Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Checkout code",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Install system packages",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Cache cargo-nextest",
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install cargo-nextest",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build and test",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Cache cargo-nextest",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Checkout code",
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "status": "completed"
+            }
+          ]
+        }
+      ],
+      "total_count": 1
+    },
+    "url": "https://github.com/Rylan-Meilutis/SEDSnet/actions/runs/40240018125",
+    "applies_to": "Pushed main b38 commit; not an unpushed documentation follow-up."
+  },
+  "i686_runtime_proof": {
+    "document": "i686-python-wheel-runtime-2026-10-25.json",
+    "scope": "Separate actual32-bit Python import/API verification on the built a1 wheel; preserve its exact wheel/image/source hashes."
+  },
+  "evidence_sha256": {
+    ".workspace-progress/sdk-427-final-source-package-check.json": "c1eb2a495e18ba0ac1f8137074decc578e2338002d2aec35800165f0b7e94c38",
+    ".workspace-progress/sdk-427-final-source-package-check.log": "2a29e56820cf5e7099ecbf5328fa440bbbb451dd7d6705c326352e6ddb669dd2",
+    ".workspace-progress/sdk-all-matrix-a1e4b84-20261025/campaign.json": "69a903a7d36403f49c7c67d1b6cf76ded0dd2a2dcd02fd9b61bfe0f03e994a42",
+    ".workspace-progress/sdk-all-matrix-a1e4b84-20261025/result.json": "e5885223da8e2d67ee1a6d217c95366f1c5839a8432108093933b1d2a28b9c3b",
+    ".workspace-progress/sdk-all-matrix-a1e4b84-20261025/stage-summary.json": "4e6935c37ac027d6f64363a195af5912b87334c1c2bbe55fc405060a13e251ee",
+    ".workspace-progress/sdk-427-final-main-ci-latest.json": "e83a1453566a2719a3ac8bd55be9e26b05ec42a4788a7468e2f459d47fc91ff7",
+    ".workspace-progress/sdk-427-final-main-ci-jobs-latest.json": "588f81c8e0d135d41daefee4affcd0ca8eba140ecb7515257276d811d359208a"
+  },
+  "release_boundary": "Crates/PyPI publication remains local-user workflow. No Jupiter tag or published GitHub release, because v* pushes trigger automatic package jobs."
+}
