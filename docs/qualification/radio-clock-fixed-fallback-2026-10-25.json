@@ -539,5 +539,400 @@
       "1": 11
     },
     "classification_limit": "This proves45 observed data frames were not relayed; it does not identify which private queue removal site accounts for each of46 aggregate counter increments. It does not claim telemetry loss was benign."
+  },
+  "telemetry_freshness": {
+    "result": "MULTISECOND_RELAY_TELEMETRY_GAPS_OBSERVED",
+    "scope": "Original trace byte order and timestamps retained. Packet identities deduplicated per source/type. Gaps measure wire arrivals, not private UI state. Leading/trailing intervals are censored observation bounds, not inferred missing packets. GPS_SATELLITE_NUMBER is satellite-count telemetry only, not coordinate or lock evidence.",
+    "confirmed_forwarding_window_ms": [
+      23040.0,
+      42060.0
+    ],
+    "per_source_type": [
+      {
+        "source": "PB",
+        "source_address": 213986670,
+        "type": "BATTERY_CURRENT",
+        "source_rf_tx": {
+          "count": 4,
+          "first_ms": 25438.269,
+          "last_ms": 40496.0,
+          "maximum_internal_gap_ms": 5066.897,
+          "leading_censored_interval_ms": 2398.269,
+          "trailing_censored_interval_ms": 1564.0,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 4,
+          "first_ms": 25460.7,
+          "last_ms": 40513.0,
+          "maximum_internal_gap_ms": 5068.7,
+          "leading_censored_interval_ms": 2420.7,
+          "trailing_censored_interval_ms": 1547.0,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 2,
+          "first_ms": 25706.5,
+          "last_ms": 35772.0,
+          "maximum_internal_gap_ms": 10065.5,
+          "leading_censored_interval_ms": 2666.5,
+          "trailing_censored_interval_ms": 6288.0,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 3,
+          "first_ms": 25706.5,
+          "last_ms": 40513.0,
+          "maximum_internal_gap_ms": 10065.5,
+          "leading_censored_interval_ms": 2666.5,
+          "trailing_censored_interval_ms": 1547.0,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 10290.0,
+          "preceding_report_ms": 15416.5,
+          "following_report_ms": 25706.5,
+          "preceding_packet_id": 13478960312350140055,
+          "following_packet_id": 426074262513928164
+        }
+      },
+      {
+        "source": "PB",
+        "source_address": 213986670,
+        "type": "BATTERY_VOLTAGE",
+        "source_rf_tx": {
+          "count": 4,
+          "first_ms": 25423.4,
+          "last_ms": 40481.073,
+          "maximum_internal_gap_ms": 5027.298,
+          "leading_censored_interval_ms": 2383.4,
+          "trailing_censored_interval_ms": 1578.927,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 4,
+          "first_ms": 25457.9,
+          "last_ms": 40492.6,
+          "maximum_internal_gap_ms": 5027.6,
+          "leading_censored_interval_ms": 2417.9,
+          "trailing_censored_interval_ms": 1567.4,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 2,
+          "first_ms": 25556.6,
+          "last_ms": 40756.6,
+          "maximum_internal_gap_ms": 15200.0,
+          "leading_censored_interval_ms": 2516.6,
+          "trailing_censored_interval_ms": 1303.4,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 2,
+          "first_ms": 25556.6,
+          "last_ms": 40492.6,
+          "maximum_internal_gap_ms": 14936.0,
+          "leading_censored_interval_ms": 2516.6,
+          "trailing_censored_interval_ms": 1567.4,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 14936.0,
+          "preceding_report_ms": 25556.6,
+          "following_report_ms": 40492.6,
+          "preceding_packet_id": 12792123766088037203,
+          "following_packet_id": 4461809207396653751
+        }
+      },
+      {
+        "source": "PB",
+        "source_address": 213986670,
+        "type": "BOARD_HEALTH",
+        "source_rf_tx": {
+          "count": 4,
+          "first_ms": 25164.3,
+          "last_ms": 40138.1,
+          "maximum_internal_gap_ms": 5074.581,
+          "leading_censored_interval_ms": 2124.3,
+          "trailing_censored_interval_ms": 1921.9,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 4,
+          "first_ms": 25203.1,
+          "last_ms": 40173.5,
+          "maximum_internal_gap_ms": 5067.5,
+          "leading_censored_interval_ms": 2163.1,
+          "trailing_censored_interval_ms": 1886.5,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 3,
+          "first_ms": 25454.1,
+          "last_ms": 40454.1,
+          "maximum_internal_gap_ms": 10075.1,
+          "leading_censored_interval_ms": 2414.1,
+          "trailing_censored_interval_ms": 1605.9,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 3,
+          "first_ms": 25454.1,
+          "last_ms": 40173.5,
+          "maximum_internal_gap_ms": 10075.1,
+          "leading_censored_interval_ms": 2414.1,
+          "trailing_censored_interval_ms": 1886.5,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 10233.7,
+          "preceding_report_ms": 15220.4,
+          "following_report_ms": 25454.1,
+          "preceding_packet_id": 15033589172563079113,
+          "following_packet_id": 19520374719289172
+        }
+      },
+      {
+        "source": "FC",
+        "source_address": 1010450070,
+        "type": "BAROMETER_DATA",
+        "source_rf_tx": {
+          "count": 89,
+          "first_ms": 23185.3,
+          "last_ms": 41906.1,
+          "maximum_internal_gap_ms": 368.184,
+          "leading_censored_interval_ms": 145.3,
+          "trailing_censored_interval_ms": 153.9,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 89,
+          "first_ms": 23198.5,
+          "last_ms": 41919.3,
+          "maximum_internal_gap_ms": 378.3,
+          "leading_censored_interval_ms": 158.5,
+          "trailing_censored_interval_ms": 140.7,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 72,
+          "first_ms": 23217.5,
+          "last_ms": 41938.3,
+          "maximum_internal_gap_ms": 2535.1,
+          "leading_censored_interval_ms": 177.5,
+          "trailing_censored_interval_ms": 121.7,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 73,
+          "first_ms": 23217.5,
+          "last_ms": 41919.3,
+          "maximum_internal_gap_ms": 2535.1,
+          "leading_censored_interval_ms": 177.5,
+          "trailing_censored_interval_ms": 140.7,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 3363.4,
+          "preceding_report_ms": 19854.1,
+          "following_report_ms": 23217.5,
+          "preceding_packet_id": 7756660370979596345,
+          "following_packet_id": 14871355353904918999
+        }
+      },
+      {
+        "source": "FC",
+        "source_address": 1010450070,
+        "type": "BOARD_HEALTH",
+        "source_rf_tx": {
+          "count": 4,
+          "first_ms": 25021.4,
+          "last_ms": 40028.1,
+          "maximum_internal_gap_ms": 5014.942,
+          "leading_censored_interval_ms": 1981.4,
+          "trailing_censored_interval_ms": 2031.9,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 4,
+          "first_ms": 25052.4,
+          "last_ms": 40076.3,
+          "maximum_internal_gap_ms": 5031.0,
+          "leading_censored_interval_ms": 2012.4,
+          "trailing_censored_interval_ms": 1983.7,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 3,
+          "first_ms": 25109.3,
+          "last_ms": 40154.2,
+          "maximum_internal_gap_ms": 10034.0,
+          "leading_censored_interval_ms": 2069.3,
+          "trailing_censored_interval_ms": 1905.8,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 3,
+          "first_ms": 25109.3,
+          "last_ms": 40076.3,
+          "maximum_internal_gap_ms": 9956.1,
+          "leading_censored_interval_ms": 2069.3,
+          "trailing_censored_interval_ms": 1983.7,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 10032.4,
+          "preceding_report_ms": 15076.9,
+          "following_report_ms": 25109.3,
+          "preceding_packet_id": 5152776972205748473,
+          "following_packet_id": 11165319118519589348
+        }
+      },
+      {
+        "source": "FC",
+        "source_address": 1010450070,
+        "type": "IMU_DATA",
+        "source_rf_tx": {
+          "count": 94,
+          "first_ms": 23227.7,
+          "last_ms": 41863.149,
+          "maximum_internal_gap_ms": 247.7,
+          "leading_censored_interval_ms": 187.7,
+          "trailing_censored_interval_ms": 196.851,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 95,
+          "first_ms": 23061.8,
+          "last_ms": 41878.8,
+          "maximum_internal_gap_ms": 279.5,
+          "leading_censored_interval_ms": 21.8,
+          "trailing_censored_interval_ms": 181.2,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 79,
+          "first_ms": 23084.5,
+          "last_ms": 41901.2,
+          "maximum_internal_gap_ms": 2159.2,
+          "leading_censored_interval_ms": 44.5,
+          "trailing_censored_interval_ms": 158.8,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 80,
+          "first_ms": 23084.5,
+          "last_ms": 41878.8,
+          "maximum_internal_gap_ms": 2159.2,
+          "leading_censored_interval_ms": 44.5,
+          "trailing_censored_interval_ms": 181.2,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 3248.4,
+          "preceding_report_ms": 19836.1,
+          "following_report_ms": 23084.5,
+          "preceding_packet_id": 18397524493779726190,
+          "following_packet_id": 12185371646589488688
+        }
+      },
+      {
+        "source": "RF",
+        "source_address": 3997908571,
+        "type": "BOARD_HEALTH",
+        "source_rf_tx": {
+          "count": 4,
+          "first_ms": 25120.3,
+          "last_ms": 40072.2,
+          "maximum_internal_gap_ms": 5004.646,
+          "leading_censored_interval_ms": 2080.3,
+          "trailing_censored_interval_ms": 1987.8,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 4,
+          "first_ms": 25151.3,
+          "last_ms": 40103.0,
+          "maximum_internal_gap_ms": 5013.9,
+          "leading_censored_interval_ms": 2111.3,
+          "trailing_censored_interval_ms": 1957.0,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 2,
+          "first_ms": 25344.1,
+          "last_ms": 40304.7,
+          "maximum_internal_gap_ms": 14960.6,
+          "leading_censored_interval_ms": 2304.1,
+          "trailing_censored_interval_ms": 1755.3,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 2,
+          "first_ms": 25344.1,
+          "last_ms": 40103.0,
+          "maximum_internal_gap_ms": 14758.9,
+          "leading_censored_interval_ms": 2304.1,
+          "trailing_censored_interval_ms": 1957.0,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 14758.9,
+          "preceding_report_ms": 25344.1,
+          "following_report_ms": 40103.0,
+          "preceding_packet_id": 6117084109638521611,
+          "following_packet_id": 4992645036877493243
+        }
+      },
+      {
+        "source": "RF",
+        "source_address": 3997908571,
+        "type": "GPS_SATELLITE_NUMBER",
+        "source_rf_tx": {
+          "count": 19,
+          "first_ms": 24025.1,
+          "last_ms": 42038.9,
+          "maximum_internal_gap_ms": 1072.0,
+          "leading_censored_interval_ms": 985.1,
+          "trailing_censored_interval_ms": 21.1,
+          "timestamp_backsteps": 0
+        },
+        "rrls_rf_arrival": {
+          "count": 19,
+          "first_ms": 24062.6,
+          "last_ms": 42058.2,
+          "maximum_internal_gap_ms": 1112.4,
+          "leading_censored_interval_ms": 1022.6,
+          "trailing_censored_interval_ms": 1.8,
+          "timestamp_backsteps": 0
+        },
+        "gs_down_data": {
+          "count": 16,
+          "first_ms": 23049.4,
+          "last_ms": 41135.7,
+          "maximum_internal_gap_ms": 4069.1,
+          "leading_censored_interval_ms": 9.4,
+          "trailing_censored_interval_ms": 924.3,
+          "timestamp_backsteps": 0
+        },
+        "gs_all_eligible_deduplicated": {
+          "count": 17,
+          "first_ms": 23049.4,
+          "last_ms": 42058.2,
+          "maximum_internal_gap_ms": 4069.1,
+          "leading_censored_interval_ms": 9.4,
+          "trailing_censored_interval_ms": 1.8,
+          "timestamp_backsteps": 0
+        },
+        "largest_app_gap_intersecting_window": {
+          "gap_ms": 4069.1,
+          "preceding_report_ms": 29046.4,
+          "following_report_ms": 33115.5,
+          "preceding_packet_id": 5338887381678824396,
+          "following_packet_id": 12524333120026860927
+        }
+      }
+    ],
+    "interpretation": "Controls and relay establishment pass their explicit gates; telemetry freshness is not resolved. Missing ordinary downlink reports create gaps substantially longer than source cadence, including PB voltage about15s, barometer2.5s, IMU2.2s and satellite count4.1s. No thresholds are relaxed."
   }
 }
