@@ -1,5 +1,5 @@
 {
-  "status": "ACTUAL_C_ABI_RED_GREEN_PASS_NEW_MATCHED_COHORT_QUALIFICATION_PENDING",
+  "status": "RUNTIME_C_ABI_GREEN_FULL_ENV_FIXTURE_FIXED_FULL_CAMPAIGN_RERUN_PENDING",
   "sdk_fix_commit": "3971aef",
   "version_at_source_fix": "4.2.6",
   "release_note": "Published 4.2.6 remains immutable; root coordinates a qualified 4.2.7 follow-up. This agent has not published or pushed.",
@@ -109,5 +109,48 @@
       "Transient busy holds original packet only for the unaccepted side; accepted side does not repeat on retry.",
       "Explicit Weighted and reliable best-overlap behavior unchanged."
     ]
+  },
+  "ci_seed_fixture_followup": {
+    "test_only_commit": "bf24fc2",
+    "runtime_router_sha256_unchanged": "26396e766a09bb3b92fad233ef789249677380a1c2243d993a36d9abbdb1bbe2",
+    "cause": "The full build.py campaigns seed generic GPS_DATA as Ordered with SD_CARD/RADIO and nonempty SD_CARD metadata. The actual-RF C ABI fixture initially attempted blank endpoint metadata registration, correctly rejected by the production registry.",
+    "fix": "Reuse existing canonical endpoint IDs and metadata. In the isolated GPS child only, remove the generic seeded GPS definition and register the actual RF delivery contract under its existing canonical type ID. Assert SD_CARD ID/description/local flag retained. No production registry weakening or routing changes.",
+    "failed_full_campaigns": {
+      "default": {
+        "log": ".workspace-progress/sdk-427-full-default.log",
+        "sha256": "dd57b0b84eb107d906d43b9c863a78abd17e1910a2401f3d5f1abff5b4894570",
+        "status": "FAILED_FIXTURE",
+        "scope": "Retained negative evidence. Neither aborted campaign is called a full pass."
+      },
+      "compact-fair-crypto": {
+        "log": ".workspace-progress/sdk-427-full-compact-fair-crypto.log",
+        "sha256": "8eed0351137e1d6920ee6c39199a48cd12da20abf0b0b78737ab019152de26ce",
+        "status": "FAILED_FIXTURE",
+        "scope": "Retained negative evidence. Neither aborted campaign is called a full pass."
+      }
+    },
+    "focused_results": {
+      "full_default_seed": {
+        "log": ".workspace-progress/sdk-multicast-seeded-default-tests.log",
+        "sha256": "677ebf6b9ab052015299cba09922880450c2ed7e4139b1fa57b73418e7b83897",
+        "passed": 6
+      },
+      "full_compact_fair_crypto_seed": {
+        "log": ".workspace-progress/sdk-multicast-seeded-compact-tests.log",
+        "sha256": "0ed32604d88be5aa94fe837472429e2867603a08c1c17a4582508b0a3273d011",
+        "passed": 6
+      },
+      "no_schema": {
+        "log": ".workspace-progress/sdk-multicast-no-schema-tests.log",
+        "sha256": "aec296b69eca0823e923b8578c959a6e6e414eae540c5f40bc370393d60f4df8",
+        "passed": 6
+      },
+      "strict_all_targets_compact_clippy": {
+        "log": ".workspace-progress/sdk-multicast-seeded-clippy.log",
+        "sha256": "1080d38e4c1b0261d14c69dfd80a025b2643318d6787e291a4ea8d433a2745fc",
+        "result": "PASS"
+      }
+    },
+    "remaining": "Root owns complete default and compact/fair/crypto full reruns with all ignored qualification tests; these focused checks do not replace them."
   }
 }
