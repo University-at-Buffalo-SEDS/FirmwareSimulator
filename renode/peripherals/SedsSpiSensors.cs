@@ -301,8 +301,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
     // conversion values through the STM32 SPI/DMA peripherals.
     public sealed class SedsMcp3564r : ISPIPeripheral, IGPIOReceiver
     {
-        public SedsMcp3564r(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, bool externalChipSelect = false)
+        public SedsMcp3564r(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, bool externalChipSelect = false, string stimulusPath = "")
         {
+            this.stimulusPath = stimulusPath ?? "";
             this.externalChipSelect = externalChipSelect;
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
@@ -323,6 +324,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 reading = (value & 0x03) == 0x01;
                 if(reading && registerAddress == 0)
                 {
+                    PollStimulus();
                     SelectChannel();
                     var format = (Register(4) >> 4) & 3;
                     dataBytes = format == 0 ? 3 : 4;
@@ -345,7 +347,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 position++;
                 if(position == dataBytes + 1)
                 {
-                    if(channel < 12) samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
+                    if(stimulusPath.Length == 0 && channel < 12) samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
                     // Internal temperature/reference fixtures stay steady during long soaks.
                     channel = (channel + 15) & 15;
                 }
@@ -366,6 +368,46 @@ namespace Antmicro.Renode.Peripherals.Sensors
             }
             position++;
             return output;
+        }
+
+        // Codes are the raw 24-bit two's-complement ADC representation, not calibrated units.
+        public void SetChannelSample(uint channel, uint value)
+        {
+            if(channel >= samples.Length || value > 0x00ffffffu)
+                throw new ArgumentOutOfRangeException("sample");
+            samples[channel] = value;
+        }
+
+        public ulong StimulusRejected { get; private set; }
+        private void PollStimulus()
+        {
+            // No fixture means no new filesystem operations and exact legacy drift.
+            // Ten conversion reads are approximately20ms at500Hz aggregate scan rate.
+            if(stimulusPath.Length == 0 || stimulusReads++ % 10 != 0) return;
+            try
+            {
+                var text = new char[1025];
+                int count;
+                using(var stream = new System.IO.StreamReader(stimulusPath))
+                    count = stream.ReadBlock(text, 0, text.Length);
+                if(count > 1024) throw new FormatException("oversized sensor fixture");
+                var parts = new string(text, 0, count).Trim().Split(',');
+                if(parts.Length != samples.Length) throw new FormatException("channel count");
+                var next = new uint[samples.Length];
+                for(var i = 0; i < next.Length; i++)
+                    if(!uint.TryParse(parts[i], System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out next[i]) || next[i] > 0x00ffffffu)
+                        throw new FormatException("invalid sensor sample");
+                Array.Copy(next, samples, samples.Length);
+            }
+            catch(System.IO.IOException) { RejectStimulus(); }
+            catch(UnauthorizedAccessException) { RejectStimulus(); }
+            catch(FormatException) { RejectStimulus(); }
+        }
+
+        private void RejectStimulus()
+        {
+            if(StimulusRejected != ulong.MaxValue) StimulusRejected++;
         }
 
         private byte Register(int address)
@@ -424,6 +466,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
         {
             selected = !externalChipSelect;
             transactions = 0;
+            stimulusReads = 0;
             faulted = false;
             position = 0;
             reading = false;
@@ -441,6 +484,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
             channel = 15; // SCAN visits enabled inputs from MSb to LSb.
         }
 
+        private readonly string stimulusPath;
+        private ulong stimulusReads;
         private readonly Dictionary<int, byte> registers = new Dictionary<int, byte>();
         private readonly bool externalChipSelect;
         private bool selected;
