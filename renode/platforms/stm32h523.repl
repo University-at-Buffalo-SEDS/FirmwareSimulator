@@ -10,12 +10,18 @@ dwt: Miscellaneous.DWT @ sysbus 0xE0001000
     frequency: 250000000
 rcc: Miscellaneous.SedsStm32Rcc @ sysbus 0x44020C00
     variant: "h5"
+    pwr: pwr
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32System.cs
 iwdg: Miscellaneous.SedsStm32Iwdg @ sysbus 0x40003000
     rcc: rcc
 pwr: Miscellaneous.SedsStm32Pwr @ sysbus 0x44020800
     variant: "h5"
+rtc: Timers.SedsStm32H5Rtc @ sysbus 0x44007800
+    rcc: rcc
+    pwr: pwr
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32H5Rtc.cs
 gpio: GPIOPort.SedsStm32GpioBank @ sysbus 0x42020000
     ports: 8
     preinit:

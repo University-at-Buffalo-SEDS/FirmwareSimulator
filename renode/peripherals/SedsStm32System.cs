@@ -10,10 +10,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
     public sealed class SedsStm32Rcc : IDoubleWordPeripheral, IKnownSize
     {
-        public SedsStm32Rcc(string variant)
+        public SedsStm32Rcc(string variant, SedsStm32Pwr pwr = null)
         {
             if(variant != "g4" && variant != "h5" && variant != "u5" && variant != "h7" && variant != "h7rs") throw new ArgumentException("unknown RCC variant");
             this.variant = variant;
+            this.pwr = pwr;
             Reset();
         }
 
@@ -22,6 +23,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             uint value;
             registers.TryGetValue(offset, out value);
             if(offset == ResetFlagsOffset) value |= resetFlags;
+            if(variant == "h5" && offset == 0xF0)
+            {
+                value &= ~((1u << 27) | 2u);
+                if((value & (1u << 26)) != 0) value |= 1u << 27;
+                if((value & 1u) != 0) value |= 2u;
+            }
             if(offset == 0)
             {
                 if(variant == "g4") value |= 0x400u | ((value & (1u << 24)) << 1);
@@ -47,8 +54,26 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 // Reset-cause flags are read-only; RMVF is a write-one clear.
                 value &= ~0xFF800000u;
             }
+            if(variant == "h5" && offset == 0xF0)
+            {
+                uint previous;
+                registers.TryGetValue(offset, out previous);
+                const uint protectedBits = 0x000183FDu;
+                value &= ~((1u << 27) | 2u); // Ready flags are read-only.
+                if(pwr != null && !pwr.BackupWriteEnabled)
+                    value = (value & ~protectedBits) | (previous & protectedBits);
+                if((value & (1u << 16)) != 0)
+                {
+                    value &= ~0x000083FDu;
+                    if((previous & (1u << 16)) == 0 && H5BackupReset != null) H5BackupReset();
+                }
+                else if((previous & 0x300u) != 0)
+                    value = (value & ~0x300u) | (previous & 0x300u);
+            }
             registers[offset] = value;
             writes++;
+            if(variant == "h5" && (offset == 0xF0 || offset == 0xA8) && H5RtcClockChanged != null)
+                H5RtcClockChanged();
             if((variant == "g4" && offset == 0x08)
                 || ((variant == "h7" || variant == "h7rs") && offset == 0x10)
                 || ((variant == "h5" || variant == "u5") && offset == 0x1c))
@@ -58,13 +83,24 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public ulong GetWrites() { return writes; }
         public ulong GetClockSwitches() { return clockSwitches; }
         public long Size { get { return 0x400; } }
-        public void Reset() { registers.Clear(); writes = clockSwitches = 0; }
+        public void Reset()
+        {
+            uint backup;
+            registers.TryGetValue(0xF0, out backup);
+            registers.Clear();
+            if(variant == "h5") registers[0xF0] = backup;
+            writes = clockSwitches = 0;
+            if(H5RtcClockChanged != null) H5RtcClockChanged();
+        }
+        public event Action H5RtcClockChanged;
+        public event Action H5BackupReset;
 
         public void NoteWatchdogReset() { resetFlags |= 1u << 29; }
         private long ResetFlagsOffset { get { return variant == "g4" ? 0x94 : (variant == "h5" || variant == "u5" ? 0xF4 : -1); } }
         // Reset cause survives a peripheral/machine reset until firmware clears RMVF.
         private uint resetFlags;
         private readonly string variant;
+        private readonly SedsStm32Pwr pwr;
         private readonly Dictionary<long, uint> registers = new Dictionary<long, uint>();
         private ulong writes, clockSwitches;
     }
@@ -186,6 +222,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             return value;
         }
 
+        public bool BackupWriteEnabled
+        {
+            get { uint value; return variant == "h5" && registers.TryGetValue(0x24, out value) && (value & 1u) != 0; }
+        }
         public void WriteDoubleWord(long offset, uint value) { registers[offset] = value; }
         public long Size { get { return 0x400; } }
         public void Reset() { registers.Clear(); }
