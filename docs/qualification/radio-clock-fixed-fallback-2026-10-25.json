@@ -1,0 +1,518 @@
+{
+  "result": "PASS_SCOPED_CONTROL_FALLBACK_AND_CLOCK_AUTHORITY",
+  "image": "sha256:ab07941110da9b2d4163833acbe75e3548f37584a4296fa554c23718a7520b02",
+  "workspace": "FirmwareSimulator/build/clock-fixed-cohort-20261025/workspace",
+  "evidence_dir": "FirmwareSimulator/build/clock-fixed-cohort-20261025/qualification/fallback-60s-hb500",
+  "virtual_duration_ms": 60000,
+  "trace_until_ms": 56000,
+  "production_heartbeat_period_ms": 500,
+  "strict_fallback": {
+    "result": "PASS",
+    "observations": 1414,
+    "loss_requested_ms": 22880,
+    "forwarding_ms": 23040,
+    "restored_first_observation_ms": 40060,
+    "direct_restored_ms": 42060,
+    "observer_tolerance_ms": 250,
+    "command_ack_limit_ms": 500,
+    "wire": {
+      "result": "PASS",
+      "direct_kind": 5,
+      "fallback_kind": 2,
+      "rrls_downlink_kind": 1,
+      "gs_heartbeats": 111,
+      "heartbeat_maximum": 114,
+      "configured_heartbeat_ms": 500
+    }
+  },
+  "managed_startup_round_ms": [
+    150,
+    260,
+    300
+  ],
+  "rf_control_round_ms": [
+    110,
+    140,
+    370,
+    290,
+    150,
+    140
+  ],
+  "rf_exact_receipt_wire": {
+    "managed_original_packet_ids": 15,
+    "all_rf_receipts_received": true,
+    "maximum_first_wire_roundtrip_us": 281900
+  },
+  "fc_command_exact_receipts": [
+    {
+      "packet_id": 18297932349848453212,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 5882327092900742552,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 13430537385627933358,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 5123571963053571175,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 10318834398202879133,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 6689123680251846674,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    },
+    {
+      "packet_id": 10566544785090909166,
+      "frozen_targets": [
+        4702443431355738920
+      ],
+      "returned_ack_owners": [
+        4702443431355738920
+      ]
+    }
+  ],
+  "finite_radio_final_snapshot": {
+    "air_bits": 1227944,
+    "nodes": [
+      {
+        "index": 0,
+        "counters": [
+          0,
+          0,
+          296,
+          225,
+          0,
+          0,
+          7800,
+          54639,
+          51134
+        ]
+      },
+      {
+        "index": 1,
+        "counters": [
+          0,
+          0,
+          236,
+          256,
+          0,
+          0,
+          15332,
+          36658,
+          61583
+        ]
+      },
+      {
+        "index": 2,
+        "counters": [
+          0,
+          0,
+          180,
+          256,
+          0,
+          0,
+          0,
+          22276,
+          91297
+        ]
+      }
+    ]
+  },
+  "finite_fifo_gate": {
+    "tx_refused_bytes": 0,
+    "rx_dropped_bytes": 0,
+    "directed_loss_bytes": 23132,
+    "tx_peak_bytes": 296,
+    "rx_peak_bytes": 256
+  },
+  "mesh_aggregate_counters": {
+    "primary": {
+      "max_sampled_queue": 1,
+      "final_dropped_frames": 0
+    },
+    "rrls": {
+      "max_sampled_queue": 24,
+      "final_dropped_frames": 46
+    }
+  },
+  "mesh_drop_classification": "RRLS aggregate 46 is retained unclassified. Counter merges replacement, expiry, capacity and transition removal; UART traces do not expose private queue removal events, so no zero-loss or benign-coalescing claim is made. Exact tested SDK command/ACK receipts and finite FIFO results are separately proven.",
+  "heartbeat_source_breakdown": {
+    "14161550": {
+      "packets": 59,
+      "unique_packet_ids": 59,
+      "median_uart_gap_ms": 1000.0,
+      "relay_kinds": {
+        "5": 40,
+        "2": 19
+      }
+    },
+    "483403151": {
+      "packets": 59,
+      "unique_packet_ids": 59,
+      "median_uart_gap_ms": 1000.4,
+      "relay_kinds": {
+        "5": 40,
+        "2": 19
+      }
+    },
+    "3852079518": {
+      "packets": 59,
+      "unique_packet_ids": 59,
+      "median_uart_gap_ms": 1000.0,
+      "relay_kinds": {
+        "5": 40,
+        "2": 19
+      }
+    },
+    "3561204631": {
+      "packets": 111,
+      "unique_packet_ids": 111,
+      "median_uart_gap_ms": 500.0,
+      "relay_kinds": {
+        "5": 73,
+        "2": 38
+      }
+    },
+    "310625998": {
+      "packets": 57,
+      "unique_packet_ids": 57,
+      "median_uart_gap_ms": 1006.0,
+      "relay_kinds": {
+        "5": 38,
+        "2": 19
+      }
+    }
+  },
+  "actual_gs_heartbeat_source_address": 3561204631,
+  "clock_and_authority": {
+    "result": "PASS",
+    "sender": "RF",
+    "station": 0,
+    "source_address": 3997908571,
+    "epoch_ms": 1767225600000,
+    "announcements": 28,
+    "first_utc_ms": 1767225600000,
+    "last_utc_ms": 1767225654041,
+    "utc_elapsed_ms": 54041,
+    "wire_elapsed_ms": 53922.3,
+    "minimum_utc_minus_wire_ms": -705.3,
+    "maximum_utc_minus_wire_ms": -59.0,
+    "scope": "Actual SDK time-sync payload decoder; queue delay is retained, not removed or sorted. Packet/UI wall timestamps are recorded separately.",
+    "authority": {
+      "result": "PASS",
+      "recovery_after_ms": 45000,
+      "post_recovery_rf_announcements": 5,
+      "first_recovered_rf_mono_us": 46144000,
+      "observed_priorities": {
+        "3561204631": [
+          50
+        ],
+        "3997908571": [
+          1
+        ]
+      },
+      "scope": "Observed SDK-decoded announcements only; private elected-leader state is not inferred. Actual-SDK source/holdover/recovery fixture separately validates election."
+    }
+  },
+  "codec_errors": 0,
+  "trace_statuses": {
+    "rocket_radio-station-1-tx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 35537,
+      "until_us": 56000000,
+      "last_record_us": 56000000,
+      "capped": false,
+      "finished": true
+    },
+    "rocket_radio-station-1-rx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 59229,
+      "until_us": 56000000,
+      "last_record_us": 55930500,
+      "capped": false,
+      "finished": true
+    },
+    "rocket_radio-station-2-tx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 22276,
+      "until_us": 56000000,
+      "last_record_us": 42480900,
+      "capped": false,
+      "finished": true
+    },
+    "rocket_radio-station-2-rx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 87801,
+      "until_us": 56000000,
+      "last_record_us": 55930500,
+      "capped": false,
+      "finished": true
+    },
+    "rocket_radio-station-0-tx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 52285,
+      "until_us": 56000000,
+      "last_record_us": 55914100,
+      "capped": false,
+      "finished": true
+    },
+    "rocket_radio-station-0-rx.bin.status.json": {
+      "version": 1,
+      "max_bytes": 4194304,
+      "header_bytes": 32,
+      "record_bytes": 9,
+      "records": 49992,
+      "until_us": 56000000,
+      "last_record_us": 55675500,
+      "capped": false,
+      "finished": true
+    }
+  },
+  "limits": [
+    "Simulator only; no physical RFD MAC or RF interference qualification",
+    "UTC advances and source authority confirmed on actual wire; queue delay preserved, not a claim of submillisecond synchronization accuracy",
+    "Private router leader state is not inferred from a received announcement; independent actual-SDK election fixture proves policy",
+    "RRLS aggregate queue drops remain unclassified; this is not proof of zero telemetry loss"
+  ],
+  "finite_radio_counter_scope": "Last sampled checkpoint11, nominal55s; trace and control receipt proof continue through56s, scenario ends60s.",
+  "rf_parser_sync_counter_followup": {
+    "frozen_image_uses_old_counter_semantics": true,
+    "observed_sync_counter_by_checkpoint": [
+      0,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      5
+    ],
+    "trace_raw_bytes": 49992,
+    "complete_crc_valid_rr_uart_frames": 847,
+    "bytes_partitioned_into_valid_frames": 49992,
+    "unframed_or_discarded_trace_bytes": 0,
+    "maximum_payload_bytes": 200,
+    "old_counter_replay": [
+      {
+        "chunk_bytes": 1,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 847,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 2,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 409,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 16,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 49,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 64,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 11,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 128,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 5,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 256,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 2,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 1028,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 2,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 65536,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 2,
+        "bad_length": 0,
+        "crc_errors": 0
+      }
+    ],
+    "fixed_counter_replay": [
+      {
+        "chunk_bytes": 1,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 2,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 16,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 64,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 128,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 256,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 1028,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      },
+      {
+        "chunk_bytes": 65536,
+        "input_bytes": 49992,
+        "frames_ok": 847,
+        "callbacks": 467,
+        "remaining": 0,
+        "sync_loss": 0,
+        "bad_length": 0,
+        "crc_errors": 0
+      }
+    ],
+    "interpretation": "Actual parser counts a lone retained sync prefix as a loss under arbitrary chunking. Every tested chunking accepts the same847 frames and467 eligible callbacks with zero bad length/CRC/leftover bytes. Exact runtime ISR/service boundaries were not traced; synthetic128-byte chunking also gives5 but is not asserted to reconstruct runtime event timestamps.",
+    "diagnostic_only_fix": "Increment loss only if bytes are discarded rather than a single valid first sync byte retained; parsing/forwarding behavior unchanged. Frozen image and active long soaks remain unchanged."
+  }
+}

@@ -29,6 +29,23 @@ class RadioClockTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'two'):
             CLOCK.analyze(report([(100,1000)]),epoch_ms=1000)
 
+    def test_recovered_rf_authority_and_consumer_holdover_are_distinct(self):
+        data = {'known_source_addresses': {'GS': 7, 'RF': 9, 'RRLS': 11}, 'streams': [
+            {'station': 1, 'direction': 1, 'packets': [
+                dict(source_address=13, at_us=25_000_000, timesync_announce=dict(priority=100)),
+                dict(source_address=9, at_us=45_010_000, timesync_announce=dict(priority=1))]}]}
+        result = CLOCK.analyze_authorities(data, 45_000)
+        self.assertEqual(result['post_recovery_rf_announcements'], 1)
+        data['streams'][0]['packets'][0]['timesync_announce']['priority'] = 0
+        with self.assertRaisesRegex(ValueError, 'priority-zero'):
+            CLOCK.analyze_authorities(data, 45_000)
+        data['streams'][0]['packets'][0]['timesync_announce']['priority'] = 25
+        with self.assertRaisesRegex(ValueError, 'holdover'):
+            CLOCK.analyze_authorities(data, 45_000)
+        data['streams'][0]['packets'][0]['timesync_announce']['priority'] = 100
+        with self.assertRaisesRegex(ValueError, 'post-recovery'):
+            CLOCK.analyze_authorities(data, 50_000)
+
 
 if __name__ == '__main__':
     unittest.main()

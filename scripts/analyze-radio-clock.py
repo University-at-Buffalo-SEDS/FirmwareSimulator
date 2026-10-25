@@ -40,6 +40,44 @@ def analyze(report, epoch_ms, station=1, sender='GS'):
                       scope='Actual SDK time-sync payload decoder; queue delay is retained, not removed or sorted. Packet/UI wall timestamps are recorded separately.')
 
 
+def analyze_authorities(report, recovery_after_ms):
+    """Validate this cohort's source policy from observed SDK-decoded announces.
+
+    This records received announcements, not a private router leader snapshot.
+    The separate actual-SDK election fixture verifies selection from these priorities.
+    """
+    known = report['known_source_addresses']
+    allowed = {known['RF']: 1, known['GS']: 50}
+    if 'RRLS' in known:
+        allowed[known['RRLS']] = 50
+    observed = {}
+    recovered_rf = []
+    for stream in report['streams']:
+        for packet in stream['packets']:
+            announce = packet.get('timesync_announce')
+            if announce is None:
+                continue
+            source = packet['source_address']
+            priority = announce['priority']
+            if priority == 0:
+                raise ValueError('priority-zero authority observed in the corrected cohort')
+            if source in allowed:
+                if priority != allowed[source]:
+                    raise ValueError('configured RF/host authority priority changed')
+            elif priority <= 50:
+                raise ValueError('holdover consumer outranks a configured RF/host authority')
+            observed.setdefault(source, set()).add(priority)
+            if (stream['station'], stream['direction']) == (1, 1) and source == known['RF'] and packet['at_us'] >= recovery_after_ms * 1000:
+                recovered_rf.append(packet['at_us'])
+    if not recovered_rf:
+        raise ValueError('no post-recovery RF authority announcement received by primary station')
+    return dict(result='PASS', recovery_after_ms=recovery_after_ms,
+                post_recovery_rf_announcements=len(recovered_rf),
+                first_recovered_rf_mono_us=min(recovered_rf),
+                observed_priorities={str(source): sorted(values) for source, values in observed.items()},
+                scope='Observed SDK-decoded announcements only; private elected-leader state is not inferred. Actual-SDK source/holdover/recovery fixture separately validates election.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('decoded', type=Path)
@@ -48,12 +86,18 @@ def main():
     parser.add_argument('--sender', default='GS')
     parser.add_argument('--csv', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--rf-recovery-after-ms', type=int, help='Check corrected cohort source priorities and RF authority received after direct-link restoration')
     args = parser.parse_args()
     with args.decoded.open('rb') as source:
         data = source.read(64*1024*1024+1)
     if len(data) > 64*1024*1024:
         parser.error('decoded evidence exceeds64MiB bound')
-    rows, result = analyze(json.loads(data), args.epoch_ms, args.station, args.sender)
+    report = json.loads(data)
+    rows, result = analyze(report, args.epoch_ms, args.station, args.sender)
+    if args.rf_recovery_after_ms is not None:
+        if args.rf_recovery_after_ms < 0:
+            parser.error('--rf-recovery-after-ms must be nonnegative')
+        result['authority'] = analyze_authorities(report, args.rf_recovery_after_ms)
     with args.csv.open('w', newline='') as output:
         writer = csv.DictWriter(output, fieldnames=list(rows[0]))
         writer.writeheader()
