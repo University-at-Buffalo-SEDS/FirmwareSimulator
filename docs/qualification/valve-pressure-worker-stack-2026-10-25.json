@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-10-26T01:56:53.100629+00:00",
+  "updated_utc": "2026-10-26T02:32:46.469528+00:00",
   "phase": "stack_overflow_localized_fix_validation_pending",
   "release_ready": false,
   "failed_original_candidate": "d5c699b82bd133352a9d91032a68749a91690648",
@@ -29,11 +29,65 @@
     "factory_on_off": "passed_zero_warnings",
     "static_ram_bytes": 113352,
     "static_ram_capacity_bytes": 114688,
-    "native90": "running_not_pass"
+    "native90": "running_not_pass",
+    "native_prefix": {
+      "through_ms": 40000,
+      "stack_errors": 0,
+      "pressure_worker_remaining_bytes": 2540,
+      "acquisition_remaining_bytes": 1652,
+      "control_remaining_bytes": 5304,
+      "cpu_fault_status": 0
+    }
   },
   "limits": [
     "Original530s battery-loss causal attribution remains unproven.",
     "Factory linking does not establish native stack margin or endurance acceptance.",
     "No physical hardware or package publication."
-  ]
+  ],
+  "unchanged_candidate5_diagnostic90": {
+    "phase": "failed_existing_stack_margin_threshold",
+    "native_model_ms": 90000,
+    "crash_observed": false,
+    "acquisition_remaining_bytes": 200,
+    "existing_required_minimum_bytes": 1024,
+    "evidence": "build/valve-fair-matched-three-20261025/stack-diagnostic90",
+    "scope": "Nine sampled intervals, no CPU fault or pressure guard damage; overallnativegate stillfailed due insufficientstackmargin. Not a pass and not proofearliercrashgone."
+  },
+  "existing_targeted_checks": {
+    "pressure_sd_tests": 5,
+    "watchdog_tests": 2,
+    "threadx_idle_tests": 1,
+    "status": "all_passed",
+    "sanitizers": "ExistingCsanitizers enabled. Sandboxptrace preventedLeakSanitizerinitially; normalunsandboxedreruns passed withoutdisablingchecks."
+  },
+  "fixed7_90s_validation": {
+    "result": "native_source_and_recorded_GPS_passed_wrapper_duration_error_retained",
+    "evidence": "build/valve-fair-stack-fixed7-20261025/validation90/validation-result.json",
+    "wrapper_exit_code": 1,
+    "reason": "Observertarget inherited590s fromlongtemplate; full9actual90srowsstrictlypostvalidatedforplanned90sduration. Originalfailure preserved.",
+    "native_and_source": true,
+    "source_windows": 7,
+    "gps_windows": 9,
+    "stack_errors": 0,
+    "cpu_faults": 0,
+    "min_remaining_bytes": {
+      "control": 5304,
+      "network": 3656,
+      "acquisition": 1652,
+      "pressure": 2540
+    }
+  },
+  "final8_running_prefix": {
+    "compiled_board_commit": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+    "scope": "Exactfinalrebuiltartifact; source/probecontract includespermanentpressure>=1024andstackerrors0. Differentsha7artifactnotrelabeled.",
+    "two_model_ms": 60000,
+    "three_model_ms": 60000,
+    "three_pressure_remaining_bytes": 1800,
+    "three_pressure_used_bytes": 4856,
+    "old_pressure_capacity_bytes": 4608,
+    "measured_use_exceeds_old_bytes": 248,
+    "failure_counters": 0,
+    "endurance_and_operations": "pending",
+    "evidence": "build/valve-fair-final8-20261025/qualification-3-final/running-snapshot.json"
+  }
 }
