@@ -89,5 +89,17 @@
     "failure_counters": 0,
     "endurance_and_operations": "pending",
     "evidence": "build/valve-fair-final8-20261025/qualification-3-final/running-snapshot.json"
+  },
+  "final8_acceptance": {
+    "updated_utc": "2026-10-26T04:24:14.851810+00:00",
+    "status": "PASS",
+    "scope": "Matching final8 simulated firmware acceptance completed; historical candidates retain their original verdicts. Physical hardware acceptance is outside this proof.",
+    "compiled_source": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+    "reports": [
+      "valve-final8-endurance-2026-10-25.json",
+      "valve-final8-operational-2026-10-25.json",
+      "valve-final8-restart-2026-10-25.json",
+      "valve-final8-relay-2026-10-25.json"
+    ]
   }
 }

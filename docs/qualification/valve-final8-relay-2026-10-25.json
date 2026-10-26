@@ -1,0 +1,90 @@
+{
+  "proof_version": 1,
+  "status": "PASS",
+  "updated_utc": "2026-10-26T04:14:30.968244+00:00",
+  "scope": "Simulator only; final8 ValveBoard with compact PowerBoard cohort, original other six firmware artifacts. Actual host route status plus real SDK decoding of UART captures.",
+  "compiled_valve_source": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+  "valve_binary_sha256": "d363c8c3a5588ebdf684a9a1328685949f0710d665a90720d16b9ff2fc0ac0c9",
+  "host_image": "sha256:7fd22415df986aaacbc5168c87412a2f4200764ce18a5352a8530d5094746dec",
+  "duration_virtual_ms": 60000,
+  "fallback_validation": {
+    "result": "PASS",
+    "observations": 1430,
+    "loss_requested_ms": 22970,
+    "forwarding_ms": 23050,
+    "restored_first_observation_ms": 40020,
+    "direct_restored_ms": 42030,
+    "observer_tolerance_ms": 250,
+    "command_ack_limit_ms": 500,
+    "wire": {
+      "result": "PASS",
+      "direct_kind": 5,
+      "fallback_kind": 2,
+      "rrls_downlink_kind": 1,
+      "gs_heartbeats": 111,
+      "heartbeat_maximum": 114,
+      "configured_heartbeat_ms": 500
+    }
+  },
+  "sdk_trace_streams": [
+    {
+      "file": "rocket_radio-station-0-rx.bin",
+      "packet_count": 703,
+      "codec_errors": 0,
+      "backward_timestamp_count": 0,
+      "max_clock_backstep_us": 0
+    },
+    {
+      "file": "rocket_radio-station-0-tx.bin",
+      "packet_count": 905,
+      "codec_errors": 0,
+      "backward_timestamp_count": 2655,
+      "max_clock_backstep_us": 14
+    },
+    {
+      "file": "rocket_radio-station-1-rx.bin",
+      "packet_count": 996,
+      "codec_errors": 0,
+      "backward_timestamp_count": 0,
+      "max_clock_backstep_us": 0
+    },
+    {
+      "file": "rocket_radio-station-1-tx.bin",
+      "packet_count": 423,
+      "codec_errors": 0,
+      "backward_timestamp_count": 0,
+      "max_clock_backstep_us": 0
+    },
+    {
+      "file": "rocket_radio-station-2-rx.bin",
+      "packet_count": 1327,
+      "codec_errors": 0,
+      "backward_timestamp_count": 0,
+      "max_clock_backstep_us": 0
+    },
+    {
+      "file": "rocket_radio-station-2-tx.bin",
+      "packet_count": 383,
+      "codec_errors": 0,
+      "backward_timestamp_count": 0,
+      "max_clock_backstep_us": 0
+    }
+  ],
+  "decoder_scope": "Diagnostic CRC-valid UART candidate scan; acceptance/timing by production UART parser is NOT inferred",
+  "codec_clock": "running maximum of frame completion milliseconds; raw byte order/timestamps preserved; explicit backstep limit<=100us",
+  "source_lock_unchanged": {
+    "test-radio-fallback.py": "6ebbc2e7ec7aabf68a2ef13237f4dc4d8f7b73e6ba691c2be0cd01c38e1b51d8",
+    "radio-fallback-observer.py": "ab932b0df603dae860aa7f3365661b12d4af4e774c03af13f6c2f15f38cea434",
+    "test-route-recovery.py": "c3e020d653f0dadee055fccec666c9e253d62271569a855fa92f41113140f4d2",
+    "radio_profile.py": "0b7ee9a99e63b99ea5e1a90b6377b096b864abc15cdf609929c5e2249b265c4f",
+    "fill_delivery_report.py": "16176fc87df47380bb26d316309cc8a5bd6dd44f68d770b236339d37c8809c07"
+  },
+  "evidence_workspace_relative": "FirmwareSimulator/build/valve-fair-final8-20261025/qualification-relay60",
+  "evidence_sha256": {
+    "FirmwareSimulator/build/valve-fair-final8-20261025/qualification-relay60/fallback-validation.json": "9d0b8fb92433f3a5f6f679358a9cd8f06972ca081662fb170b4e824a4ef58569",
+    "FirmwareSimulator/build/valve-fair-final8-20261025/qualification-relay60/sdk-decoded.json": "d7605c43bf0b035473f4824d600a430802d3635019d511bd9a9d7edae4924472",
+    "FirmwareSimulator/build/valve-fair-final8-20261025/qualification-relay60/rrls-status.jsonl": "dd05f3ff166244ea4c06854e320eb108025c46a4547c392a2a461e4590cbafd7",
+    ".workspace-progress/qualify-valve-final8-relay60.log": "c8003bbd01990d268351211ba88c973d6883486ba54541eaf9afc16e71163ab0",
+    "FirmwareSimulator/build/valve-fair-final8-20261025/qualification-relay60-sources/post-run-source-validation.json": "885758c54985f6408472006de9dd25fac0cee35f6fd58850e444e1fbb464f00c"
+  }
+}

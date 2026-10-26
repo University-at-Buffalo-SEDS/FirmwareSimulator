@@ -373,5 +373,29 @@
     "factory_phase": "passed_zero_warnings_both",
     "native": "build/valve-fair-stack-diag6-20261025/diagnostic90",
     "native_phase": "running_not_pass"
+  },
+  "superseding_final_artifact": {
+    "compiled_source": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+    "binary_sha256": "d363c8c3a5588ebdf684a9a1328685949f0710d665a90720d16b9ff2fc0ac0c9",
+    "scope": "This report preserves earlier queue candidates and failures. Current firmware also increases pressure/acquisition stack capacity; earlier runs are not relabeled as final8.",
+    "stack_report": "valve-pressure-worker-stack-2026-10-25.json",
+    "operational_report": "valve-final8-operational-2026-10-25.json",
+    "restart_report": "valve-final8-restart-2026-10-25.json",
+    "remaining": [],
+    "status": "PASS",
+    "endurance_report": "valve-final8-endurance-2026-10-25.json",
+    "relay_report": "valve-final8-relay-2026-10-25.json"
+  },
+  "final8_acceptance": {
+    "updated_utc": "2026-10-26T04:24:14.851810+00:00",
+    "status": "PASS",
+    "scope": "Matching final8 simulated firmware acceptance completed; historical candidates retain their original verdicts. Physical hardware acceptance is outside this proof.",
+    "compiled_source": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+    "reports": [
+      "valve-final8-endurance-2026-10-25.json",
+      "valve-final8-operational-2026-10-25.json",
+      "valve-final8-restart-2026-10-25.json",
+      "valve-final8-relay-2026-10-25.json"
+    ]
   }
 }

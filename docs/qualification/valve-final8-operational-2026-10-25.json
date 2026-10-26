@@ -2080,7 +2080,7 @@
     "InitialsandboxDockerdeniedpositiveattempt startednoapplication andisretained separately."
   ],
   "release_ready": false,
-  "remaining_scope": "Matching endurance/source/SD/restart/relay gates remain separate and pending; SDK publication already completed by maintainer.",
+  "remaining_scope": "Matching final8 endurance/source/GPS/control/SD, restart and relay checks subsequently passed; see valve-final8-endurance-2026-10-25.json, valve-final8-restart-2026-10-25.json and valve-final8-relay-2026-10-25.json. Physical hardware acceptance remains outside simulator proof.",
   "postvalidator_sha256": "8bb2621d10af2d0c5fcc2d1d58830f5f1fd43afa8a73acc41081f18eb065a6f7",
   "byte_probe_contract": {
     "image": "sha256:23a28aedc2df659007e24c99fe284b32bfb99044326c0538b5c62ffe939ec251",
