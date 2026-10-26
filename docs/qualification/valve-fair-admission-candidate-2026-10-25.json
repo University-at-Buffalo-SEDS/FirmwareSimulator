@@ -1,0 +1,109 @@
+{
+  "updated_utc": "2026-10-26T00:03:12.873317+00:00",
+  "release_ready": false,
+  "scope": "Candidate board configuration and factory-build verification; linked network acceptance is pending. No publication, physical flashing or actuation.",
+  "candidate_board_commit": "abdd7480a7b6ca183477b4c8ac929d32339801ef",
+  "sdk_source_commit": "b38b017c8e4c963682362d34fa1362c67607d4d1",
+  "change": "ValveBoard26 enables existing SEDSNET_FAIR_ADMISSION while preserving its 8192-byte queue budget and all other frozen configuration. No SDK runtime code or wire format changed.",
+  "motivating_failure": {
+    "capture": "build/multicast-427-owned-tx-cohort-20261025/qualification-2-final-retry",
+    "status": "failed",
+    "window_ms": [
+      530000,
+      540000
+    ],
+    "voltage_received": 8,
+    "max_gap_ms": 3050,
+    "requirements": "At least9 reports per10seconds and gap<=3000ms. Loadcell preservation, GPS/control latency and SD reconciliations passed independently.",
+    "causal_limit": "Voltage publication counters increased10 while classified CAN attempts increased8; compact-frame underclassification prevents using these counters alone as proof of pre-CAN eviction. Focused finite-ring tests independently reproduce accepted best-effort eviction. Passive wire correlation remains pending."
+  },
+  "telemetry_on_factory": {
+    "phase": "passed",
+    "flash_used_bytes": 439016,
+    "flash_capacity_bytes": 474624,
+    "percent": 92.5,
+    "static_ram_bytes": 111208,
+    "prior_static_ram_bytes": 111208,
+    "warnings": [],
+    "artifacts": {
+      "Valve_Board26Bootloader.map": {
+        "bytes": 153817,
+        "sha256": "235a42f9add7646198fc9560a4b6e82a9a54f418c0884dd3c9d17a173c78fbe3"
+      },
+      "Valve_Board26Bootloader.elf": {
+        "bytes": 34116,
+        "sha256": "0721c746e8101520c8a4bd7bb5289bc9ff5415213b4ae92e1c869dca6f7814b2"
+      },
+      "Valve_Board26Bootloader.bin": {
+        "bytes": 8912,
+        "sha256": "c05d69977d4e7e4e10e89eaab28d6a7f3c1d0263a10731a8135e9e6fdf5a86a1"
+      },
+      "Valve_Board26.map": {
+        "bytes": 10535872,
+        "sha256": "bf54b0b592c49a3296d46d5b6a6c77b45ab508443917f36fffbdcd2b34ed0c36"
+      },
+      "Valve_Board26.elf": {
+        "bytes": 2536888,
+        "sha256": "6bf3a4493ee44b1d9d62b15e68dc98ca7f90946a1f89b351fb10296a8d8d2d9d"
+      },
+      "Valve_Board26.bin": {
+        "bytes": 439016,
+        "sha256": "71ebe270af924948909199614d96608bd40d313228d902d5c296c52d2ff6b38e"
+      },
+      "Valve_Board26.launchcore.img": {
+        "bytes": 439528,
+        "sha256": "c336ad95cd398b537d2ed88be9bcc59a168b2c21994eac6637b552cf29f20afc"
+      },
+      "Valve_Board26.factory.bin": {
+        "bytes": 516252,
+        "sha256": "e168b597d44ee9c614addacc259367552c170f48b3881e0434326120d8b967aa"
+      }
+    },
+    "source_unchanged": true,
+    "evidence": "build/valve-fair-candidate-20261025/result.json",
+    "configuration": {
+      "SEDSNET_COMPACT_PACKET_COMPRESSION": "OFF",
+      "SEDSNET_COMPACT_PACKET_STORE": "ON",
+      "SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD": "30",
+      "SEDSNET_ENV_QUEUE_GROW_STEP": "1.0",
+      "SEDSNET_ENV_RELIABLE_MAX_END_TO_END_ACK_CACHE": "8",
+      "SEDSNET_ENV_RELIABLE_MAX_END_TO_END_PENDING": "8",
+      "SEDSNET_ENV_RELIABLE_MAX_PENDING": "8",
+      "SEDSNET_ENV_RELIABLE_MAX_RETURN_ROUTES": "8",
+      "SEDSNET_ENV_STARTING_QUEUE_SIZE": "512",
+      "SEDSNET_FAIR_ADMISSION": "ON",
+      "SEDSNET_MAX_QUEUE_BUDGET": "8192",
+      "SEDSNET_MAX_QUEUE_SIZE": "",
+      "SEDSNET_MAX_RECENT_RX_IDS": "16",
+      "SEDSNET_MAX_STACK_PAYLOAD": "128",
+      "SEDSNET_INGRESS_TARGET_FILTER": "OFF",
+      "FETCHCONTENT_SOURCE_DIR_SEDSLAUNCHCORE": "/home/rylan/seds-gateway-fidelity-20261020/ValveBoard26/build/Release_Script/_deps/sedslaunchcore-src",
+      "FETCHCONTENT_SOURCE_DIR_SEDSNET": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-candidate-20261025/sdk",
+      "SEDS_FIRMWARE_SIM_TEST": "ON",
+      "ENABLE_TELEMETRY": "ON",
+      "ENABLE_BOARD_WATCHDOG": "ON",
+      "TELEMETRY_USE_TLSF": "ON",
+      "SEDSNET_OFFLINE": "ON",
+      "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+      "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
+    }
+  },
+  "telemetry_off_factory": {
+    "phase": "passed",
+    "flash_used_bytes": 42088,
+    "sdk_source_absent": true,
+    "rust_tool_invocations": 0,
+    "warnings": [],
+    "source_unchanged": true,
+    "evidence": "build/valve-fair-no-telemetry-20261025/result.json"
+  },
+  "remaining": [
+    "Complete actual-SDK queue-policy reproduction with protected pressure-SD competition.",
+    "Run passive CAN-traced baseline/candidate linked tests before deciding whether this candidate resolves the observed native failure.",
+    "If selected, complete matching endurance/SD/source acceptance; preserve failed baseline evidence."
+  ],
+  "limitations": [
+    "Flash factory verification does not imply linked network or physical acceptance.",
+    "No compiled or tested artifact from the prior failed run has been replaced or relabeled."
+  ]
+}
