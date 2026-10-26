@@ -1,7 +1,7 @@
 {
-  "updated_utc": "2026-10-26T01:04:47.996253+00:00",
+  "updated_utc": "2026-10-26T01:48:50.887219+00:00",
   "release_ready": false,
-  "scope": "Candidate board configuration and factory-build verification; linked network acceptance is pending. No publication, physical flashing or actuation.",
+  "scope": "Factory and linked70s candidate5 gates passed; candidate5three-radio endurance failed with CPUfault/watchdog. Two-radio600continues independently. Diagnosticcandidate6 localonly; qualification remains blocked.",
   "candidate_board_commit": "d5c699b82bd133352a9d91032a68749a91690648",
   "sdk_source_commit": "b38b017c8e4c963682362d34fa1362c67607d4d1",
   "change": "Enable existing fair admission and increase startup queue allocation from512 to2048 bytes within unchanged8192-byte logical queue budget. Actual ARM128-byte payload layout requires224 bytes per TX item. Simulation-only snapshot uses existing allocation-free C API; SDK runtime and wire format unchanged.",
@@ -351,5 +351,27 @@
     "queue_storage_bytes": 4144,
     "interpretation": "RX10x200 + TX9x224 + recent16x8. SeparateISR10x200 excluded. Native allocation check still pending; logical shared admissionbudget is separate from raw physical ring sizes.",
     "status": "verified_in_all69_linked_SRAM_snapshots"
+  },
+  "candidate5_three_endurance_failure": {
+    "phase": "failed",
+    "capture": "build/valve-fair-matched-three-20261025/qualification-3-final",
+    "last_gps_model_ms": 80000,
+    "watchdog_reset_count": 1,
+    "cpu_checkpoint_70s": {
+      "pc": "0x0800e4fe HardFault_Handler",
+      "cfsr": "0x00020000 INVSTATE",
+      "hfsr": "0x40000000 FORCED"
+    },
+    "earlier_corruption": "First10s checkpoint: acquisition watermark0, power publishers stopped after1accepted each, pressureSD counters impossible. CAN RX stops around67s and hardware FIFO overflows follow. TLSF failure/panic counters remained0.",
+    "causal_limit": "Stack pressure is under investigation; original530s loss attribution and exact corruption origin remain unproven."
+  },
+  "diagnostic_candidate6": {
+    "board_commit": "f1beee7a1fe577387c1932ca7863be2ca6b29b77",
+    "scope": "FirstThreadXstackerror capture and pressureworker watermark only; no stack size, queue or SDK changes. Uses existingRFBoard error-handler pattern.",
+    "factory_on": "build/valve-fair-candidate6-20261025/result.json",
+    "factory_off": "build/valve-fair-no-telemetry6-20261025/result.json",
+    "factory_phase": "passed_zero_warnings_both",
+    "native": "build/valve-fair-stack-diag6-20261025/diagnostic90",
+    "native_phase": "running_not_pass"
   }
 }
