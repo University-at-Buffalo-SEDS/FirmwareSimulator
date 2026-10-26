@@ -999,5 +999,41 @@
     "host_literal512_capacity": 2,
     "host624_capacity": 3
   },
-  "exploratory_payload64_board_starting_bytes": 512
+  "exploratory_payload64_board_starting_bytes": 512,
+  "exact_original_payload128_baseline": {
+    "max_stack_payload": 128,
+    "fair": false,
+    "host_starting_bytes": 544,
+    "actual_arm_starting_bytes": 512,
+    "tx_capacity": 2,
+    "budget": 8192,
+    "service_before_current": false,
+    "protected_sd_backlog": 1,
+    "background": "none; actualSD+voltage+PT+current publication types only",
+    "passed": false,
+    "case_count": 12,
+    "prefills_losing_accepted_voltage": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "current_all_one": true,
+    "protected_sd_all_one": true,
+    "pressure_all_zero_after_current": true,
+    "log": ".workspace-progress/vb-queue-payload128-original-capacity2-fair0-sensors.log",
+    "sha256": "539f6faf337ccf3311fa5a455ecd366d93fdfa88be22b58a93e5eba94bf7df17",
+    "separate_priority_saturation_stress": {
+      "log": ".workspace-progress/vb-queue-payload128-original-capacity2-fair0.log",
+      "result": "With all3backgroundtypes prequeued, SDadmission itself fails priorityqueue saturated; this is not acceptedvoltage-loss evidence."
+    }
+  }
 }
