@@ -1,0 +1,71 @@
+{
+  "phase": "passed",
+  "exit_code": 0,
+  "completed_at": "2026-10-26T01:04:11.053491+00:00",
+  "source_windows": 5,
+  "all14_can_streams_valid": true,
+  "sram_snapshots": 69,
+  "startup": [
+    16,
+    1,
+    8192,
+    4144
+  ],
+  "wire": {
+    "54485088": {
+      "count": 68,
+      "max_gap_ms": 1027.745
+    },
+    "213503347": {
+      "count": 68,
+      "max_gap_ms": 1032.645
+    }
+  },
+  "gps": {
+    "exit_codes": [
+      0
+    ],
+    "all_threads_finished": true
+  },
+  "scope": "70-second linked candidate5 diagnostic, not600s proof; model instrumented only, backend and other6ELFs unchanged",
+  "schema_version": 1,
+  "kind": "linked_candidate5_short_acceptance",
+  "board_commit": "d5c699b82bd133352a9d91032a68749a91690648",
+  "valve_elf_sha256": "41043b3d733a202f7975040b6da011ef9385efb7d5971b98356294e5f5714e92",
+  "diagnostic_image": "sha256:192b7a0db8fa719d61b26e996365946135c964d3ab1e8a80f3c4e7fc71fb20c5",
+  "unchanged_backend_base_image": "sha256:2ec618eb65ca77c16574c4b62cd7c9547161b10bc7c6aa075a5c4f0b60a29629",
+  "duration_model_ms": 70000,
+  "prior_failure": {
+    "two_radio_600": "failed: VB battery voltage3.05s freshness gap at530\u2013540s",
+    "attribution_limit": "That earlier run did not capture CAN payloads. Raw typed CAN counters do not classify every SDT encoding. The exact original gap mechanism is not established."
+  },
+  "selected_policy": {
+    "fair_admission": true,
+    "starting_queue_bytes": 2048,
+    "budget_bytes": 8192,
+    "actual_arm_rx_item_bytes": 200,
+    "actual_arm_tx_item_bytes": 224,
+    "rx_slots": 10,
+    "tx_slots": 9,
+    "recent_id_slots": 16,
+    "startup_queue_storage_bytes": 4144,
+    "boundary": "Router-reported storage excludes separate ISR queues and is not a whole-system memory measurement."
+  },
+  "frozen_sources": {
+    "other_six_elf_hashes_unchanged": true,
+    "backend_sdk_no_runtime_edits": true,
+    "model_only_changes": "opt-in passive CAN writer/receive taps and once-per-virtual-second SRAM observations; no extra timers"
+  },
+  "not_claimed": [
+    "600-second final acceptance",
+    "physical sensor or pneumatic validation",
+    "definitive reproduction of the earlier530s loss"
+  ],
+  "evidence": {
+    "result.json": "3f778b0717a2abf681f273f8809a951f5354e30d3d1c5c9a68b99ed5f858423e",
+    "baseline70/source-aware-delivery.json": "bb92064ebda0db79b7f2057700f56003fca6426378c4e7f9a1d83d2bfbfa80bb",
+    "all-can-taxonomy.json": "2d87ada82f9ad9970b976e604aede68bbdeb61cec52f34334433bcfeaa11310e",
+    "observer-result.json": "33888083745c68fbf613dca41bc6104f129d0891ee866ff1f70bb205dbee1cb9",
+    "valve-tx-logical-packets.jsonl": "d740430dd61a541f5307ddad59837cc6e413c00e0a608c83c5f367dedab108ea"
+  }
+}
