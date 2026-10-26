@@ -623,19 +623,185 @@
   "release_ready": false,
   "sdk_runtime_sha256": "e705ffe5729d1d60df51f79e7bfe5f11315430f73c00cb7297733206497c2925",
   "fixture": "tests/vb-queue-admission/vb_queue_admission.rs",
-  "fixture_sha256": "e2cb08b4a3ab0ca1e3b5db8a31dafba7eeee56e0de3892394394972255a60176",
+  "fixture_sha256": "c56b5e1b84152f8c1f950b1555cc6ede7d8659155171b928c78f7047710a8086",
   "schema": "tests/vb-queue-admission/valve-schema.json",
   "schema_sha256": "7a6bf9ea003164cce2d7f3015d919054b2b1d7fdb56b6e2dfc662a950293b49e",
   "reproduce": {
     "preparation": "Copy exact post-CMake frozen SDK into a private evidence directory; copy fixture into its tests/vb_queue_admission.rs; preserve production source manifest before/after. This fixture intentionally fails when accepted voltage is evicted.",
     "command": "SEDSNET_EMBEDDED_SCHEMA_PATH=<absolute valve-schema.json> CARGO_TARGET_DIR=<existing target> CARGO_BUILD_JOBS=2 VB_REPRO_PROTECTED_SD=1 VB_REPRO_STARTING_BYTES=<host bytes> VB_REPRO_BACKGROUND=<comma-separated heartbeat,status,discovery> cargo test --manifest-path <private SDK>/Cargo.toml --offline --no-default-features --features embedded,compact-packet-store[,fair-admission] --test vb_queue_admission -- --nocapture --test-threads=1",
     "service_option": "Set VB_REPRO_SERVICE_BEFORE_CURRENT=1 for a real dispatch between pressure burst and current admission; otherwise no dispatch occurs until all publications are admitted.",
-    "literal_abi_case": "VB_REPRO_STARTING_BYTES=512 intentionally models the literal host ABI, capacity2; hosted624 is needed for actual ARM512 capacity3."
+    "literal_abi_case": "VB_REPRO_STARTING_BYTES=512 intentionally models the literal host ABI, capacity2; hosted624 is needed for actual ARM512 capacity3.",
+    "sd_backlog_option": "VB_REPRO_SD_BACKLOG=1,2,3: distinct44-byte reliableSD publications; default1; nine-slot matrix asserts all protected receipts plus each background callback."
   },
   "limitations": [
     "Canonical packed callback without CAN packetization, driver scheduling, SDT templates or source-paced native timing; cannot establish native530s failure cause.",
     "Discovery and status injected as deliberate backlog stress, not measured native simultaneous load. UMBILICAL_STATUS is an actual schema Ordered2-byte publication, HEARTBEAT actual Off/priority255.",
     "Finite queue cannot preserve arbitrarily many distinct unserviced reports. Six-slot candidate passes four sensor types plus any two background types, but loses voltage if all seven distinct types are unserviced simultaneously.",
     "No firmware/SDK production source changed by these isolated tests. Actual source-aware linked acceptance is required before release."
-  ]
+  ],
+  "nine_slot_results": [
+    {
+      "fair": false,
+      "protected_sd_backlog": 1,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair0-sd1-all-background.log",
+      "sha256": "8484f325698e1f776c182b34b484ba8f1d4ed84ac10779764c709b4c437d411c",
+      "pressure_callback_count_range": [
+        3,
+        4
+      ],
+      "pressure_present_every_case": true
+    },
+    {
+      "fair": false,
+      "protected_sd_backlog": 2,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair0-sd2-all-background.log",
+      "sha256": "16a47e019139ff47253f7402a8adbc8ec1c6717799adca701af69f6b2a7b2377",
+      "pressure_callback_count_range": [
+        2,
+        3
+      ],
+      "pressure_present_every_case": true
+    },
+    {
+      "fair": false,
+      "protected_sd_backlog": 3,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair0-sd3-all-background.log",
+      "sha256": "e378c94eef06eb0b3563d74e9794cdbdab30bd5a7192a198650e2f147179561f",
+      "pressure_callback_count_range": [
+        1,
+        2
+      ],
+      "pressure_present_every_case": true
+    },
+    {
+      "fair": true,
+      "protected_sd_backlog": 1,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair1-sd1-all-background.log",
+      "sha256": "7ec0f70fed916679e0d0d5c1520d2c3961f219b10797b3cd7f8847ef59875ec5",
+      "pressure_callback_count_range": [
+        3,
+        3
+      ],
+      "pressure_present_every_case": true
+    },
+    {
+      "fair": true,
+      "protected_sd_backlog": 2,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair1-sd2-all-background.log",
+      "sha256": "6ebb2ba07df9603214505e6e8985f7ffbbfa708bc9637371575e3b00ef9427a5",
+      "pressure_callback_count_range": [
+        2,
+        2
+      ],
+      "pressure_present_every_case": true
+    },
+    {
+      "fair": true,
+      "protected_sd_backlog": 3,
+      "host_starting_bytes": 1872,
+      "arm_candidate_starting_bytes": 1536,
+      "capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-capacity9-fair1-sd3-all-background.log",
+      "sha256": "3a9b273c7f09b4bbb8cf3e32dd57bad5467be2d06f5e7050d7ebc37313f5f4b4",
+      "pressure_callback_count_range": [
+        1,
+        1
+      ],
+      "pressure_present_every_case": true
+    }
+  ],
+  "conclusion": "Existing fairness plus9-slot fixed ring survives all known7-type burst cases with1..3 protectedSD publications before service (36cases), whereas noFair still evicts accepted voltage. This bounded canonical queue mechanism supports native candidate validation; it does not prove original530s causality or native acceptance."
 }

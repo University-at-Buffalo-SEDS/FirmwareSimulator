@@ -28,7 +28,7 @@ fn accepted_rare_voltage_survives_fast_same_sender_pressure_before_later_current
   if background.contains("heartbeat") {node.log_queue(DataType::named("HEARTBEAT"),&[] as &[u8]).unwrap();}
   if background.contains("status") {node.log_queue(DataType::named("UMBILICAL_STATUS"),&[0u8;2]).unwrap();}
   if background.contains("discovery") {node.tx_queue(sedsnet::discovery::build_discovery_announce("VB",1,&[]).unwrap()).unwrap();}
-  if competing_sd {node.log_queue(sd,&[0u8;44]).expect("protected raw SD publication accepted");}
+  if competing_sd {for sequence in 0..std::env::var("VB_REPRO_SD_BACKLOG").ok().map(|s|s.parse::<u8>().unwrap()).unwrap_or(1) {let mut bytes=[0u8;44];bytes[0]=sequence;node.log_queue(sd,&bytes).expect("protected raw SD publication accepted");}}
   node.log_queue(voltage,&[12.25f32]).expect("rare report publication accepted");
   let after_voltage=node.queue_counters();
   for n in 0..32 {node.log_queue(pressure,&[n as f32]).unwrap();}
@@ -37,7 +37,8 @@ fn accepted_rare_voltage_survives_fast_same_sender_pressure_before_later_current
   let before_drain=node.queue_counters();node.dispatch_tx_queue_with_timeout(0).unwrap();
   let capture=captured.lock().unwrap();let v=capture.iter().filter(|(ty,_)|*ty==voltage).count();let c=capture.iter().filter(|(ty,_)|*ty==current).count();let p=capture.iter().filter(|(ty,_)|*ty==pressure).count();let raw=capture.iter().filter(|(ty,_)|*ty==sd).count();
   println!("VB_QUEUE prefill={prefill} fair={} accepted_voltage=1 actual_voltage_callback={v} current={c} pressure={p} protected_sd={raw} service_before_current={service_before_current} after_voltage={after_voltage:?} before_drain={before_drain:?}",cfg!(feature="fair-admission"));
-  if competing_sd {assert_eq!(raw,1,"protected SD must not be evicted");}
+  for (name,ty) in [("heartbeat",DataType::named("HEARTBEAT")),("status",DataType::named("UMBILICAL_STATUS")),("discovery",sedsnet::discovery::build_discovery_announce("VB",1,&[]).unwrap().data_type())] {if background.contains(name) {let count=capture.iter().filter(|(t,_)|*t==ty).count();println!("BACKGROUND prefill={prefill} kind={name} callbacks={count}");assert_eq!(count,1,"background must reach callback");}}
+  if competing_sd {assert_eq!(raw,std::env::var("VB_REPRO_SD_BACKLOG").ok().map(|s|s.parse::<usize>().unwrap()).unwrap_or(1),"protected SD must not be evicted");}
   if v!=1 {failures.push(prefill);}
   assert_eq!(c,1,"later current must demonstrate that route still works");
  }
