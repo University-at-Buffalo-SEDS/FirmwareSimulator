@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-10-26T00:46:30.715151+00:00",
+  "updated_utc": "2026-10-26T01:04:47.996253+00:00",
   "release_ready": false,
   "scope": "Candidate board configuration and factory-build verification; linked network acceptance is pending. No publication, physical flashing or actuation.",
   "candidate_board_commit": "d5c699b82bd133352a9d91032a68749a91690648",
@@ -98,8 +98,9 @@
     "evidence": "build/valve-fair-no-telemetry5-20261025/result.json"
   },
   "remaining": [
-    "Complete passive CAN-traced baseline/candidate comparison with actual startup allocation assertions.",
-    "Complete matching endurance/source/SD/GPS acceptance with the selected candidate; preserve original failed baseline."
+    "Complete matching two/three-source600s source/GPS/control/SD acceptance on original uninstrumented2ec host and correctedValveartifact.",
+    "Complete targeted ordinary-flight positive/negative and test-fire operational checks with correctedValve artifact.",
+    "Diagnose mirroredSDKGitLabRustjob failure using protected log; no qualification-ready claim until remaining gates resolved."
   ],
   "limitations": [
     "Flash factory verification does not imply linked network or physical acceptance.",
@@ -196,13 +197,6 @@
     "six_slot_limit": "Four sensor streams plus heartbeat, ordered status and discovery can still lose voltage before service.",
     "selected_nine_slot_result": "Corrected explicit inline-payload128 matrix: hostedTX272/start2448 and actualARMTX224/start2048 both9slots. FairON36/36 cases pass with all3background streams, protectedSD1/2/3 and no service; all3fairOFFvariants reproduce accepted voltage loss. Earlier payload64 results retained as exploratory.",
     "limitation": "Finite tested burst; no arbitrary overload guarantee and no proof of the original native530s cause."
-  },
-  "startup_capacity_assertion_pending": {
-    "words": 16,
-    "version": 1,
-    "queue_budget_bytes": 8192,
-    "queue_storage_bytes": 4144,
-    "interpretation": "RX10x200 + TX9x224 + recent16x8. SeparateISR10x200 excluded. Native allocation check still pending; logical shared admissionbudget is separate from raw physical ring sizes."
   },
   "capacity_calculation_correction": {
     "status": "previous_nine_slot_prediction_incorrect",
@@ -317,5 +311,45 @@
       "source_unchanged": true,
       "evidence": "build/valve-fair-no-telemetry4-20261025/result.json"
     }
+  },
+  "linked_short_candidate5": {
+    "phase": "passed",
+    "exit_code": 0,
+    "completed_at": "2026-10-26T01:04:11.053491+00:00",
+    "source_windows": 5,
+    "all14_can_streams_valid": true,
+    "sram_snapshots": 69,
+    "startup": [
+      16,
+      1,
+      8192,
+      4144
+    ],
+    "wire": {
+      "54485088": {
+        "count": 68,
+        "max_gap_ms": 1027.745
+      },
+      "213503347": {
+        "count": 68,
+        "max_gap_ms": 1032.645
+      }
+    },
+    "gps": {
+      "exit_codes": [
+        0
+      ],
+      "all_threads_finished": true
+    },
+    "scope": "70-second linked candidate5 diagnostic, not600s proof; model instrumented only, backend and other6ELFs unchanged",
+    "evidence": "build/can-trace-counters-diagnostic-20261025/candidate5-70/result.json"
+  },
+  "startup_capacity_verified": {
+    "words": 16,
+    "version": 1,
+    "queue_budget_bytes": 8192,
+    "queue_storage_bytes": 4144,
+    "interpretation": "RX10x200 + TX9x224 + recent16x8. SeparateISR10x200 excluded. Native allocation check still pending; logical shared admissionbudget is separate from raw physical ring sizes.",
+    "status": "verified_in_all69_linked_SRAM_snapshots"
   }
 }
