@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read passive SEDSCAN1 captures; reassemble CAN fragments without decoding SDT compact frames."""
+"""Read passive SEDSCAN1 captures; reassemble CAN fragments without decoding SDT compact/chunk frames."""
 import argparse
 import collections
 import json
@@ -72,7 +72,7 @@ def read_capture(path, emit=None):
                 and status.get('record_bytes') == RECORD.size and status.get('records') == count
                 and status.get('until_us') == until and status.get('max_bytes') == limit):
             raise ValueError('capture not finished, complete, or status/header mismatch')
-        result = {'path': str(path), 'records': count, 'logical_packets': 0,
+        result = {'path': str(path), 'records': count, 'logical_packets': 0, 'boundary': 'CAN fragment reassembly only; each undecoded SDT chunk is a separate payload, not a complete SDK packet',
                   'fragment_frames': 0, 'fragment_duplicates': 0, 'fragment_rejected': 0,
                   'fragment_expired': 0, 'kinds': collections.Counter(),
                   'data_types': collections.Counter(), 'per_second': {}}
@@ -161,7 +161,7 @@ def main():
                 raise ValueError('logical packet output exceeds 64MiB bound')
             output.write(line)
         summaries = [read_capture(path, emit if output else None) for path in args.captures]
-        print(json.dumps({'scope': 'Passive CAN taxonomy; compact SDT remains undecoded; no CRC/application validity claim', 'captures': summaries}, indent=2))
+        print(json.dumps({'scope': 'Passive CAN taxonomy; compact/chunk SDT remains undecoded; no CRC/application validity claim', 'captures': summaries}, indent=2))
     finally:
         if output:
             output.close()
