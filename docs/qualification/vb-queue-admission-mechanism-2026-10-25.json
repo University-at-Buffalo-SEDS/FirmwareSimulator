@@ -82,7 +82,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": false,
@@ -148,7 +150,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -215,7 +219,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -269,7 +275,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -323,7 +331,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     }
   ],
   "actual_board_starting_bytes": 512,
@@ -400,7 +410,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "background": "heartbeat,status",
@@ -454,7 +466,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "background": "heartbeat,discovery",
@@ -508,7 +522,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "background": "status,discovery",
@@ -562,7 +578,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "background": "heartbeat,status,discovery",
@@ -616,7 +634,9 @@
         1,
         1,
         1
-      ]
+      ],
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     }
   ],
   "status": "mechanism_proven_native_causality_pending",
@@ -628,7 +648,7 @@
   "schema_sha256": "7a6bf9ea003164cce2d7f3015d919054b2b1d7fdb56b6e2dfc662a950293b49e",
   "reproduce": {
     "preparation": "Copy exact post-CMake frozen SDK into a private evidence directory; copy fixture into its tests/vb_queue_admission.rs; preserve production source manifest before/after. This fixture intentionally fails when accepted voltage is evicted.",
-    "command": "SEDSNET_EMBEDDED_SCHEMA_PATH=<absolute valve-schema.json> CARGO_TARGET_DIR=<existing target> CARGO_BUILD_JOBS=2 VB_REPRO_PROTECTED_SD=1 VB_REPRO_STARTING_BYTES=<host bytes> VB_REPRO_BACKGROUND=<comma-separated heartbeat,status,discovery> cargo test --manifest-path <private SDK>/Cargo.toml --offline --no-default-features --features embedded,compact-packet-store[,fair-admission] --test vb_queue_admission -- --nocapture --test-threads=1",
+    "command": "MAX_STACK_PAYLOAD=128 SEDSNET_EMBEDDED_SCHEMA_PATH=<absolute valve-schema.json> CARGO_TARGET_DIR=<existing target> CARGO_BUILD_JOBS=2 VB_REPRO_PROTECTED_SD=1 VB_REPRO_SD_BACKLOG=<1,2,3> VB_REPRO_STARTING_BYTES=2448 VB_REPRO_BACKGROUND=heartbeat,status,discovery cargo test --manifest-path <private SDK>/Cargo.toml --offline --no-default-features --features embedded,compact-packet-store[,fair-admission] --test vb_queue_admission -- --nocapture --test-threads=1",
     "service_option": "Set VB_REPRO_SERVICE_BEFORE_CURRENT=1 for a real dispatch between pressure burst and current admission; otherwise no dispatch occurs until all publications are admitted.",
     "literal_abi_case": "VB_REPRO_STARTING_BYTES=512 intentionally models the literal host ABI, capacity2; hosted624 is needed for actual ARM512 capacity3.",
     "sd_backlog_option": "VB_REPRO_SD_BACKLOG=1,2,3: distinct44-byte reliableSD publications; default1; nine-slot matrix asserts all protected receipts plus each background callback."
@@ -669,7 +689,9 @@
         3,
         4
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": false,
@@ -701,7 +723,9 @@
         2,
         3
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": false,
@@ -734,7 +758,9 @@
         1,
         2
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -756,7 +782,9 @@
         3,
         3
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -778,7 +806,9 @@
         2,
         2
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     },
     {
       "fair": true,
@@ -800,8 +830,171 @@
         1,
         1
       ],
-      "pressure_present_every_case": true
+      "pressure_present_every_case": true,
+      "max_stack_payload": 64,
+      "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     }
   ],
-  "conclusion": "Existing fairness plus9-slot fixed ring survives all known7-type burst cases with1..3 protectedSD publications before service (36cases), whereas noFair still evicts accepted voltage. This bounded canonical queue mechanism supports native candidate validation; it does not prove original530s causality or native acceptance."
+  "conclusion": "Actual MAX_STACK_PAYLOAD128: existing fairness plus9-slot fixed TXring (ARMinitial2048; host2448) survives all known7-type burst cases with1..3 protectedSD publications before service (36cases), while noFair loses acceptedvoltage. Corrected bounds supersede old64-byte ARM capacity mappings. Native source-aware acceptance and memory probes remain necessary; original530s cause not established by this canonical queue fixture.",
+  "correction": "Earlier matrix used default MAX_STACK_PAYLOAD64. Actual board is128: ARM TxQueued224/RX200; hostTxQueued272. All earlier ARM capacity mappings apply only to64-byte shape and MUST NOT establish actual candidate capacity. Superseding exact128-byte matrix below useshost2448->9TXslots matchingARM2048->9TXslots.",
+  "earlier_payload_bytes": 64,
+  "actual_payload128_layout": {
+    "max_stack_payload": 128,
+    "host_TxQueued_bytes": 272,
+    "arm_TxQueued_bytes": 224,
+    "arm_RxQueued_bytes": 200,
+    "host_starting_bytes": 2448,
+    "arm_starting_bytes": 2048,
+    "tx_slots": 9,
+    "arm_prior1536_tx_slots": 6,
+    "host_layout_log": ".workspace-progress/vb-host-compact-payload128-layout.log",
+    "host_layout_sha256": "f5ce1cb3803bf89899f07d2498dc39b2a92bee07d8bf124765f789a29801b9ac",
+    "arm_evidence": "Actual candidateELF decoded byroot/replay3d; priorpayload64 type-print did not matchMAX_STACK_PAYLOAD128."
+  },
+  "exact_payload128_nine_slot_results": [
+    {
+      "fair": false,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 1,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair0-sd1-all-background.log",
+      "sha256": "0561ac1ec53412e272be14c69310688eb99c171e5aae6ba9ced6c9b1aed1df84"
+    },
+    {
+      "fair": false,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 2,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair0-sd2-all-background.log",
+      "sha256": "dc2bc65d95db3acd390c1d457b6c26ae66dfc90d0d7aa577c641b3cd8b44821e"
+    },
+    {
+      "fair": false,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 3,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": false,
+      "case_count": 12,
+      "prefills_losing_voltage": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair0-sd3-all-background.log",
+      "sha256": "5a3f7c19eddb9a7825eb854eb1f7d3c395c039817488857d90df1aff20208f9b"
+    },
+    {
+      "fair": true,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 1,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair1-sd1-all-background.log",
+      "sha256": "2d5886784344a54a5ee7522f7f1a6516a3ffdfa3097e628492a8c017a206df2c"
+    },
+    {
+      "fair": true,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 2,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair1-sd2-all-background.log",
+      "sha256": "d7b253b27fcf1e7360ef77272c82a15103472da5490632676bf312c50ec20202"
+    },
+    {
+      "fair": true,
+      "max_stack_payload": 128,
+      "protected_sd_backlog": 3,
+      "host_starting_bytes": 2448,
+      "arm_candidate_starting_bytes": 2048,
+      "tx_capacity": 9,
+      "service_before_current": false,
+      "passed": true,
+      "case_count": 12,
+      "prefills_losing_voltage": [],
+      "current_all_one": true,
+      "pressure_present_every_case": true,
+      "protected_sd_all_delivered": true,
+      "background_checked_count": 36,
+      "background_all_one": true,
+      "log": ".workspace-progress/vb-queue-payload128-capacity9-fair1-sd3-all-background.log",
+      "sha256": "33816cd3b29b01941916595434fafd6ec42a5b5dcd67ae8ac333c1548c085ad6"
+    }
+  ]
 }
