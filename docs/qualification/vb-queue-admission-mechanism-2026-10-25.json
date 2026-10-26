@@ -336,14 +336,6 @@
       "applicability": "Exploratory64-byte stack shape, not actual board128-byte configuration."
     }
   ],
-  "actual_board_starting_bytes": 512,
-  "layout": {
-    "arm_TxQueued_bytes": 160,
-    "host_TxQueued_bytes": 208,
-    "board_starting512_capacity": 3,
-    "host_literal512_capacity": 2,
-    "host624_capacity": 3
-  },
   "six_slot_background_results": [
     {
       "background": "heartbeat,status,discovery",
@@ -849,7 +841,10 @@
     "arm_prior1536_tx_slots": 6,
     "host_layout_log": ".workspace-progress/vb-host-compact-payload128-layout.log",
     "host_layout_sha256": "f5ce1cb3803bf89899f07d2498dc39b2a92bee07d8bf124765f789a29801b9ac",
-    "arm_evidence": "Actual candidateELF decoded byroot/replay3d; priorpayload64 type-print did not matchMAX_STACK_PAYLOAD128."
+    "arm_evidence": "Actual candidateELF decoded byroot/replay3d; priorpayload64 type-print did not matchMAX_STACK_PAYLOAD128.",
+    "original_arm_starting_bytes": 512,
+    "original_arm_tx_slots": 2,
+    "original_arm_rx_slots": 2
   },
   "exact_payload128_nine_slot_results": [
     {
@@ -996,5 +991,13 @@
       "log": ".workspace-progress/vb-queue-payload128-capacity9-fair1-sd3-all-background.log",
       "sha256": "33816cd3b29b01941916595434fafd6ec42a5b5dcd67ae8ac333c1548c085ad6"
     }
-  ]
+  ],
+  "exploratory_payload64_layout": {
+    "arm_TxQueued_bytes": 160,
+    "host_TxQueued_bytes": 208,
+    "board_starting512_capacity": 3,
+    "host_literal512_capacity": 2,
+    "host624_capacity": 3
+  },
+  "exploratory_payload64_board_starting_bytes": 512
 }
