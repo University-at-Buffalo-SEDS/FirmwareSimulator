@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-10-26T00:41:45.384878+00:00",
+  "updated_utc": "2026-10-26T00:45:34.275071+00:00",
   "release_ready": false,
   "scope": "Candidate board configuration and factory-build verification; linked network acceptance is pending. No publication, physical flashing or actuation.",
   "candidate_board_commit": "26e98a00e7fd01c88cde89708205ce0606a4bf75",
@@ -202,6 +202,37 @@
     "version": 1,
     "queue_budget_bytes": 8192,
     "queue_storage_bytes": 3064,
-    "interpretation": "Expected RX11x136 + TX9x160 + recent16x8; counter excludes ISR ring. Must verify actual simulation snapshot, not only compiled configuration."
+    "interpretation": "Expected RX11x136 + TX9x160 + recent16x8; counter excludes ISR ring. Must verify actual simulation snapshot, not only compiled configuration.",
+    "status": "superseded_incorrect_payload_layout_prediction_retained_for_audit"
+  },
+  "capacity_calculation_correction": {
+    "status": "previous_nine_slot_prediction_incorrect",
+    "candidate4_actual_snapshot": {
+      "words": 16,
+      "version": 1,
+      "queue_budget_bytes": 8192,
+      "queue_storage_bytes": 2872
+    },
+    "actual_arm_layout": {
+      "inline_payload_bytes": 128,
+      "rx_item_bytes": 200,
+      "tx_item_bytes": 224,
+      "recent_id_bytes": 8
+    },
+    "candidate4_capacities": {
+      "rx": 7,
+      "tx": 6,
+      "recent": 16
+    },
+    "explanation": "Prior RX136/TX160 estimate used a64-byte inline payload. Actual candidate ELF multiplication operands prove RX200/TX224. 7x200+6x224+16x8=2872 exactly; no shrink is implied. Previous nine-slot fixture does not prove that the1536-byte candidate has nine transmit slots.",
+    "evidence": ".workspace-progress/vb-candidate4-memory-counters-disassembly.log",
+    "corrected_candidate": {
+      "board_commit": "d5c699b82bd133352a9d91032a68749a91690648",
+      "startup_bytes": 2048,
+      "predicted_rx_capacity": 10,
+      "predicted_tx_capacity": 9,
+      "predicted_queue_storage_bytes": 4144,
+      "status": "factory_build_running_actual_native_allocation_unverified"
+    }
   }
 }
