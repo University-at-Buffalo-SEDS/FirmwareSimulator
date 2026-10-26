@@ -46,7 +46,10 @@ def configure_radio_profile(directory, topology, profile, with_rrls=False):
         return
     if any(host['name'] == 'rrls' for host in topology['host_nodes']):
         raise ValueError('RRLS host already exists')
-    station['env']['GS_RRLS_ROLE'] = 'primary'
+    if station['env'].get('GS_RRLS_ROLE') not in (None, 'primary'):
+        raise ValueError('primary station cannot disable recovery in an RRLS scenario')
+    # Exercise production raw-UART startup defaults. Injecting "primary" here
+    # used to hide the installed systemd service's disabled recovery layer.
     # Each station gets a distinct UART PTY on the same medium. RRLS has no
     # fill-side cable and no simulator command producer. Its live Mesh receives
     # AV data and can relay the primary's envelopes when direct radio is lost.

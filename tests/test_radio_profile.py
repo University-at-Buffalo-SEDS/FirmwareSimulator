@@ -26,7 +26,7 @@ class RadioProfileTests(unittest.TestCase):
             profile.configure_radio_profile(Path(tmp), t, p, True)
             rr = t['host_nodes'][1]
             self.assertEqual(rr['env']['GS_RRLS_ROLE'], 'rrls')
-            self.assertEqual(t['host_nodes'][0]['env']['GS_RRLS_ROLE'], 'primary')
+            self.assertNotIn('GS_RRLS_ROLE', t['host_nodes'][0]['env'])
             self.assertEqual(rr['serial_links'], [{'link': 'rocket_radio', 'env': 'GS_AV_BAY_SERIAL_PORT'}])
             self.assertNotIn('GS_SIM_VALIDATE_SOAK_COMMANDS', rr['env'])
             self.assertNotIn('fill_box', json.loads((Path(tmp) / 'comms-rrls.json').read_text()))
@@ -42,6 +42,14 @@ class RadioProfileTests(unittest.TestCase):
                         'GS_CHECKLISTS_FILE', 'GS_MISSION_SETTINGS_PATH'):
                 self.assertTrue(rr['env'][key].startswith('/tmp/simulator-rrls-'))
                 self.assertNotEqual(rr['env'][key], t['host_nodes'][0]['env'].get(key))
+    def test_rrls_scenario_rejects_a_disabled_or_receiver_primary_role(self):
+        for role in ('off', 'rrls'):
+            p, t = self.scenario()
+            t['host_nodes'][0]['env']['GS_RRLS_ROLE'] = role
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(ValueError, 'primary station'):
+                    profile.configure_radio_profile(Path(tmp), t, p, True)
+
     def test_finite_two_node_profile_keeps_primary_role_and_sources_unchanged(self):
         p, t = self.scenario()
         with tempfile.TemporaryDirectory() as tmp:
