@@ -1,0 +1,18 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32h523.repl
+machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/flight-sensors.repl
+cpu IsHalted true
+python "sensor = monitor.Machine['sysbus.spi1.flightSensors']; exec('def baro_write(reg, value):\n sensor.OnGPIO(0, False)\n sensor.Transmit(reg)\n sensor.Transmit(value)\n sensor.OnGPIO(0, True)\ndef baro_read(reg):\n sensor.OnGPIO(0, False)\n sensor.Transmit(reg | 128)\n sensor.Transmit(0)\n value = sensor.Transmit(0)\n sensor.OnGPIO(0, True)\n return value'); baro_write(0x19, 0x42); baro_write(0x1d, 0); baro_write(0x1b, 0x33)"
+emulation RunFor "0.0101s"
+python "print(sensor.GetAcquisitionState()); assert sensor.Connections[0].IsSet, 'DRDY missing after conversion'"
+emulation RunFor "0.0023s"
+python "assert sensor.Connections[0].IsSet, 'DRDY pulse ended early'"
+emulation RunFor "0.0002s"
+python "assert not sensor.Connections[0].IsSet, 'non-latched DRDY did not expire at 2.5ms'; assert baro_read(0x11) == 8; assert baro_read(0x11) == 0"
+emulation RunFor "0.0025s"
+python "assert sensor.Connections[0].IsSet, 'next conversion did not produce a fresh edge'; baro_read(4); assert sensor.Connections[0].IsSet, 'data read incorrectly cleared pulse'; assert baro_read(0x11) == 8; assert not sensor.Connections[0].IsSet; baro_write(0x19, 0x46)"
+emulation RunFor "0.005s"
+python "assert sensor.Connections[0].IsSet, 'latched DRDY missing'"
+emulation RunFor "0.003s"
+python "assert sensor.Connections[0].IsSet, 'latched DRDY incorrectly expired'; baro_read(4); assert sensor.Connections[0].IsSet; assert baro_read(0x11) == 8; assert not sensor.Connections[0].IsSet; print('BMP390_REAL_VIRTUAL_CLOCK_INTERRUPT_PASS')"
+quit

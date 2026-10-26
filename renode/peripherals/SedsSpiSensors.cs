@@ -18,15 +18,32 @@ namespace Antmicro.Renode.Peripherals.Sensors
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
             Connections = new Dictionary<int, IGPIO> { {0, new GPIO()}, {1, new GPIO()}, {2, new GPIO()} };
+            // BMP390 datasheet 3.7.5.3: non-latched DRDY self-clears after
+            // 2.5ms, independently of a data-register read. Firmware uses 0x42.
+            barometerPulse = new LimitTimer(machine.ClockSource, 1000000, this,
+                "barometerDrdyPulse", limit: 2500, enabled: false, eventEnabled: true,
+                workMode: Antmicro.Renode.Time.WorkMode.OneShot);
+            barometerPulse.LimitReached += () => SetBarometerInterrupt(false);
             timers = new LimitTimer[3];
             for(var i = 0; i < 3; i++)
             {
                 var sensor = i;
                 timers[i] = new LimitTimer(machine.ClockSource, 3200000, this,
-                    "conversion" + i, limit: 32000, enabled: false, eventEnabled: true);
+                    "conversion" + i, limit: 32000, enabled: false, eventEnabled: true,
+                    direction: Antmicro.Renode.Time.Direction.Ascending);
                 timers[i].LimitReached += () => {
                     conversions[sensor]++;
-                    if(transactions <= disconnectAfter) Connections[sensor].Set(true);
+                    if(transactions <= disconnectAfter)
+                    {
+                        if(sensor == 0)
+                        {
+                            barometerDataReady = true;
+                            SetBarometerInterrupt(true);
+                            barometerPulse.Reset();
+                            barometerPulse.Enabled = (Get(Device.Barometer, 0x19) & 4) == 0;
+                        }
+                        else Connections[sensor].Set(true);
+                    }
                 };
             }
             Reset();
@@ -85,13 +102,23 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(!value) { device = (Device)number; selected = true; position = 0; sampleRead = false; }
             else if(selected && device == (Device)number)
             {
-                if(sampleRead && !faulted) { samples[number]++; Connections[number].Set(false); }
+                if(sampleRead && !faulted)
+                {
+                    samples[number]++;
+                    if(number != 0) Connections[number].Set(false);
+                }
                 selected = false;
                 position = 0;
             }
         }
 
         public IReadOnlyDictionary<int, IGPIO> Connections { get; private set; }
+
+        private void SetBarometerInterrupt(bool asserted)
+        {
+            var activeHigh = (Get(Device.Barometer, 0x19) & 2) != 0;
+            Connections[0].Set(asserted ? activeHigh : !activeHigh);
+        }
 
         public string GetAcquisitionState()
         {
@@ -141,10 +168,14 @@ namespace Antmicro.Renode.Peripherals.Sensors
             reading = false;
             transactions = 0;
             faulted = false;
+            barometerDataReady = false;
+            barometerPulse.Reset();
+            barometerPulse.Enabled = false;
             Array.Clear(conversions, 0, conversions.Length);
             Array.Clear(samples, 0, samples.Length);
             foreach(var timer in timers) { timer.Reset(); timer.Enabled = false; }
             foreach(var output in Connections.Values) output.Set(false);
+            registers[Key(Device.Barometer, 0x19)] = 0x02;
             // A deterministic valid trim set: 25 C and 100000 Pa for the raw
             // sample below, through the firmware's actual compensation math.
             for(byte register = 0x31; register <= 0x45; register++)
@@ -167,6 +198,14 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 return 0x1e;
             }
             if(selected == Device.Barometer && register == 0x03) return 0x60;
+            if(selected == Device.Barometer && register == 0x11)
+            {
+                var status = barometerDataReady ? (byte)8 : (byte)0;
+                barometerDataReady = false;
+                barometerPulse.Enabled = false;
+                SetBarometerInterrupt(false);
+                return status;
+            }
             // Stable approximately-resting raw samples.
             if(selected == Device.Barometer && register >= 0x04 && register <= 0x09)
                 return new byte[] { 0x00, 0x80, 0x65, 0x00, 0x6a, 0x31 }[register - 0x04];
@@ -190,6 +229,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private bool selected;
         private bool sampleRead;
         private readonly LimitTimer[] timers;
+        private readonly LimitTimer barometerPulse;
+        private bool barometerDataReady;
         private readonly ulong[] conversions = new ulong[3];
         private readonly ulong[] samples = new ulong[3];
         private readonly List<string> initializationTrace = new List<string>();
