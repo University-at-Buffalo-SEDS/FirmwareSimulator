@@ -46,6 +46,7 @@ fdcan1: CAN.SedsFixedFdcan @ sysbus 0x40006400
     Int0 -> nvic@21
     Int1 -> nvic@22
     preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsCanTrace.cs
         include @/opt/firmware-sim/renode/peripherals/SedsStm32H5Fdcan.cs
 fdcan2: CAN.SedsFixedFdcan @ sysbus 0x40006800
     messageRam: fdcan2MessageRAM

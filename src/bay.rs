@@ -1653,9 +1653,13 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     && fs::read_to_string(&configured_platform)?.contains("SedsFixedFdcan")
                 {
                     script += &format!(
-                        "sysbus.{} BusName \"{}\"\n",
+                        "sysbus.{} BusName \"{}\"\nsysbus.{} TraceName \"{}-{}-{}\"\n",
                         safe(&endpoint.peripheral),
-                        safe(&link.name)
+                        safe(&link.name),
+                        safe(&endpoint.peripheral),
+                        safe(&link.name),
+                        safe(&node.name),
+                        safe(&endpoint.peripheral)
                     );
                 }
                 script += &format!(

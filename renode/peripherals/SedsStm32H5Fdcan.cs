@@ -8,6 +8,8 @@ using Antmicro.Renode.Utilities;
 using Antmicro.Renode.Utilities.Packets;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using Antmicro.Renode.Time;
 using Antmicro.Renode.Peripherals.Timers;
@@ -37,6 +39,80 @@ namespace Antmicro.Renode.Peripherals.CAN
             this.clockFrequency = clockFrequency;
             inner = new SedsBoundedRxFdcan(machine, STM32Series.L5, messageRam);
         }
+
+        public string TraceName
+        {
+            set {
+                var directory = Environment.GetEnvironmentVariable("FIRMWARE_SIM_CAN_TRACE_DIR");
+                if(string.IsNullOrEmpty(directory)) return;
+                if(string.IsNullOrEmpty(value) || value.Length > 160) throw new RecoverableException("Invalid CAN trace name");
+                foreach(var c in value) if(!char.IsLetterOrDigit(c) && c != '-' && c != '_' && c != '.')
+                    throw new RecoverableException("Invalid CAN trace name");
+                ulong until;
+                if(!ulong.TryParse(Environment.GetEnvironmentVariable("FIRMWARE_SIM_CAN_TRACE_UNTIL_MS"), out until)
+                    || until == 0 || until > 3600000) throw new RecoverableException("CAN trace window must be1..3600000 milliseconds");
+                Directory.CreateDirectory(directory);
+                if(txTrace != null) throw new RecoverableException("CAN trace already configured");
+                txTrace = new SedsCanTrace(Path.Combine(directory, value + "-tx.bin"), until * 1000);
+                rxTrace = new SedsCanTrace(Path.Combine(directory, value + "-rx.bin"), until * 1000);
+                var spec = Environment.GetEnvironmentVariable("FIRMWARE_SIM_CAN_PROBES_" + value.ToUpperInvariant().Replace('-', '_').Replace('.', '_'));
+                if(!string.IsNullOrEmpty(spec)) {
+                    if(spec.Length > 2048) throw new RecoverableException("CAN RAM probe specification too large");
+                    foreach(var field in spec.Split(',')) {
+                        var parts = field.Split('='); uint address;
+                        if(parts.Length != 2 || parts[0].Length == 0 || parts[0].Length > 64)
+                            throw new RecoverableException("Invalid CAN RAM probe");
+                        foreach(var c in parts[0]) if(!char.IsLetterOrDigit(c) && c != '_')
+                            throw new RecoverableException("Invalid CAN RAM probe name");
+                        var hex = parts[1].StartsWith("0x") ? parts[1].Substring(2) : parts[1];
+                        if(!uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address)
+                            || address < 0x20000000 || address > 0x200ffffc || (address & 3) != 0)
+                            throw new RecoverableException("CAN probes require aligned SRAM addresses");
+                        counterFields.Add(new CounterField(parts[0], address));
+                    }
+                    if(counterFields.Count > 32) throw new RecoverableException("Too many CAN RAM probes");
+                    counterUntilUs = until * 1000;
+                    counterWriter = new StreamWriter(new FileStream(Path.Combine(directory, value + "-counters.jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read));
+                }
+                inner.FrameSent += frame => TraceFrame(txTrace, frame);
+            }
+        }
+        private void TraceFrame(SedsCanTrace trace, CANMessageFrame frame)
+        {
+            if(trace == null) return;
+            var now = (ulong)TimeDomainsManager.Instance.GetEffectiveVirtualTimeStamp().TimeElapsed.TotalMicroseconds;
+            // At most one passive SRAM snapshot per virtual second, triggered
+            // by observed traffic; no new timers or emulation stepping.
+            if(counterWriter != null) {
+                try {
+                    if(now > counterUntilUs) { counterWriter.Dispose(); counterWriter = null; }
+                    else if(now >= nextCounterUs) {
+                        var fields = new List<string>();
+                        foreach(var field in counterFields)
+                            fields.Add("\"" + field.Name + "\":" + machine.GetSystemBus(this).ReadDoubleWord(field.Address).ToString(CultureInfo.InvariantCulture));
+                        counterWriter.WriteLine("{\"virtual_us\":" + now.ToString(CultureInfo.InvariantCulture) + ",\"values\":{" + string.Join(",", fields) + "}}");
+                        counterWriter.Flush(); nextCounterUs = (now / 1000000 + 1) * 1000000;
+                    }
+                } catch(Exception) {
+                    // The frame still reaches the hub; an incomplete diagnostic
+                    // is rejected by its consumer instead of altering CAN.
+                    try { counterWriter.Dispose(); } catch(Exception) { }
+                    counterWriter = null;
+                }
+            }
+            byte flags = (byte)((frame.FDFormat ? 1 : 0) | (frame.ExtendedFormat ? 2 : 0)
+                | (frame.RemoteFrame ? 4 : 0) | (frame.BitRateSwitch ? 8 : 0));
+            trace.Record(now, frame.Id, flags, frame.Data);
+        }
+        private SedsCanTrace txTrace, rxTrace;
+        private sealed class CounterField
+        {
+            public CounterField(string name, uint address) { Name = name; Address = address; }
+            public readonly string Name; public readonly uint Address;
+        }
+        private readonly List<CounterField> counterFields = new List<CounterField>();
+        private StreamWriter counterWriter;
+        private ulong counterUntilUs, nextCounterUs;
 
         public bool Acknowledged { get; set; } = true;
         public string BusName
@@ -68,6 +144,8 @@ namespace Antmicro.Renode.Peripherals.CAN
 
         public void OnFrameReceived(CANMessageFrame message)
         {
+            // Observed wire reception, before hardware INIT/filter/FIFO rules.
+            TraceFrame(rxTrace, message);
             // A controller in INIT is not participating in bus reception.
             // The underlying model otherwise fills RX FIFOs before firmware
             // initialization, asserting IRQs while HAL still reports READY.
