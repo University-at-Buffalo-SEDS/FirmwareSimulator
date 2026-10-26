@@ -1,0 +1,39 @@
+{
+  "updated_utc": "2026-10-26T01:56:53.100629+00:00",
+  "phase": "stack_overflow_localized_fix_validation_pending",
+  "release_ready": false,
+  "failed_original_candidate": "d5c699b82bd133352a9d91032a68749a91690648",
+  "diagnostic_candidate": "f1beee7a1fe577387c1932ca7863be2ca6b29b77",
+  "diagnostic_scope": "Queue/SDK/stack sizes unchanged; added existingRFBoard-style ThreadX first-error notification and read-only pressure worker watermark.",
+  "first_error": {
+    "count": 1,
+    "thread_address": "0x200198d8",
+    "thread_symbol": "pressure_sd.c worker",
+    "stack_start": "0x200185d8",
+    "stack_end": "0x200197d3",
+    "configured_bytes": 4608,
+    "highest_pointer_before_error": "0x20018944",
+    "fault_status_at_first_checkpoint": 0
+  },
+  "evidence": "FirmwareSimulator/build/valve-fair-stack-diag6-20261025/diagnostic90/source-stack-diagnostic90/bay-live-s3bhcC/memory-probes.txt",
+  "evidence_sha256": "c86eddb92c558659232cf96ecfd75c17b2b2e62fb650fc6a762f0eeb7748e314",
+  "interpretation": "ThreadX detects pressure-SD worker stack damage before CPUHardFault. Power publishers stop after one report and pressureSD counters corrupt, matching the earlier failedthree-radio startup pattern. Unchangedcandidate5 diagnostic also has a healthy prefix, so the trigger is schedule-dependent.",
+  "fix_candidate": {
+    "board_commit": "dfe6ab28057d7626abe98bbee3c0c9887ef0598b",
+    "pressure_worker_bytes": 6656,
+    "acquisition_bytes": 5632,
+    "control_bytes": 11264,
+    "prior_control_bytes": 12288,
+    "measured_prior_control_unused_bytes": 6328,
+    "net_static_increase_bytes": 2048,
+    "factory_on_off": "passed_zero_warnings",
+    "static_ram_bytes": 113352,
+    "static_ram_capacity_bytes": 114688,
+    "native90": "running_not_pass"
+  },
+  "limits": [
+    "Original530s battery-loss causal attribution remains unproven.",
+    "Factory linking does not establish native stack margin or endurance acceptance.",
+    "No physical hardware or package publication."
+  ]
+}
