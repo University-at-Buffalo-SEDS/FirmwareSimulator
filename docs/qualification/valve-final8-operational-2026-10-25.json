@@ -1,0 +1,2091 @@
+{
+  "phase": "passed",
+  "scope": "AffectedValveBoardconfiguration revalidation, simulatedfirmware only; no physicalhardware. Ordinarypositive/GPSnegative7MCUs andtestfire4MCUs for70000ms each.",
+  "candidate_board": "ae0514730102a0af1114cb0471b5ea4759626c7d",
+  "candidate_sdk": "b38b017c8e4c963682362d34fa1362c67607d4d1",
+  "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626",
+  "original_other_six": "build/multicast-427-owned-tx-cohort-20261025/workspace",
+  "artifact_manifest": [
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26.bin",
+      "sha256": "b80ed4d60161ddcdc4274d75bb1477be09f026eb4d3883869ac99b88408eb5b6"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26.elf",
+      "sha256": "21376bae38716bf0b9627f7e2731bd530fa79459bf0ffdb7b5c15867dbec11d8"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26.factory.bin",
+      "sha256": "a1d76cccbb53303dc820557feadf78757309e66f9cdc2838854fd17d8217d186"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26.launchcore.img",
+      "sha256": "55ff8d20fdcb15660540ff31f65b8f7c8ecbd88088b0734a1acc1d07efa7d968"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26.map",
+      "sha256": "37ddbea223dc323738ddd64ce8ac9d141988e0c3d1522204abfb63ce56fea79d"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26Bootloader.bin",
+      "sha256": "68aede24a0e438338d43bf9c2847c52bf03a7eb29661d5256742993e97172df5"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26Bootloader.elf",
+      "sha256": "ef414665f5eccd9e2e77918d1086b44d65e87e371f67c5117c000a43349bf3a8"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/RFBoard26/build/Release/RFBoard26Bootloader.map",
+      "sha256": "999bf2c167729e0120e486b67df2869d721f6166a1652d547f8f2f278cfe2c08"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26.bin",
+      "sha256": "bcddb335650d92099fe6d57ccfc8eca1b1bfb0025aee6a01fa5eec77a2eaecba"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26.elf",
+      "sha256": "0d1fbbd3e2b4748a7c5386e93e821ac4e4eb75fbd0067851e123b4039d33e73c"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26.factory.bin",
+      "sha256": "1ecbb81c5be0565286ebd3816fa5c1ec6a0c5026aa4354642c8d4354b355c102"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26.launchcore.img",
+      "sha256": "1a92c1dfb2dff5f965fc7eb11b5c317b1e9db7c8bfc941af2c312eb299b50aed"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26.map",
+      "sha256": "612521dd6c22aa0a0a80a93dbd0de1daa8966b947ccb932f329133dca28bcfcf"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26Bootloader.bin",
+      "sha256": "bc39aeb726a5e6459dff21d794aabd6c3384d699f1e44ee1a6b69324a62920af"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26Bootloader.elf",
+      "sha256": "b87b2df349dc1d007008e20875cdf231498e229b8bb468a742a566d1ae30e37c"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/PowerBoard26/build/Release_Script/PowerBoard26Bootloader.map",
+      "sha256": "0016ed5f7e8803367f00c4728f3a3e5e0adc4e7c97d79fcb58fa49d7c12cd24a"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26.bin",
+      "sha256": "ba5fddffc4f3363ee1ece9cc2e3a782774fdcc4d85a38431214dfd2dde46ce06"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26.elf",
+      "sha256": "9fcc1d6026eeac8db5785a7bc76462ceeb431b32a09585d6033a36498b465acf"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26.factory.bin",
+      "sha256": "5179ff620f895d2e1fb6e803f60a798345ebe38b5dd53de95cda2b6cf6ef8393"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26.launchcore.img",
+      "sha256": "0340286cc341f2dd5661bd4fbdbf49031b427300b9f84e4c610371808eea047e"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26.map",
+      "sha256": "e018a8d283ed290cb2a377b73ea3433c547e2d30712ceb8453fc758edc120a9d"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26Bootloader.bin",
+      "sha256": "9020f344e5ffe75580abdc3fb3ed947b6680c7b19be291f0188f026234114ac1"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26Bootloader.elf",
+      "sha256": "58e0d9d9ec89bfb60db46c4628400eb7ea45e80494abacc15de58ae8579f0269"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/FlightComputer26/build/Release/FlightComputer26Bootloader.map",
+      "sha256": "aa8fccb446e75968e2b9bab1fba1493e19bd143427a884146297c60015e2e3b4"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_board.bin",
+      "sha256": "9d67d384f30cff29f6e7daf92d205ec68d84877e98fb3ad4cfefd48f6227b1e3"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_board.elf",
+      "sha256": "a7fd36204f42116d0946eec1fed5bebb60dd47a9a05459777720ad73381464da"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_board.factory.bin",
+      "sha256": "8071afc742f203c93f5ef5712ce780a8d7b2b2e53910411b07bf79e1d3aa2a81"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_board.launchcore.img",
+      "sha256": "c216d2ad65d23a6606986edcced71a0c23875ab6f9ece9893a38dff7f2e493be"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_board.map",
+      "sha256": "370245a626a333a4059e502e7f05bbf30ccb0120c8b5b3291eb341f967475029"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_boardBootloader.bin",
+      "sha256": "a3c1a615936c8670b2bfc8a165125dbb07e61a2631a0b3a832561f3e207057e2"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_boardBootloader.elf",
+      "sha256": "db918b987f3fb04798fe3dc6e1f1d2a0840196b58b17469c9da590c71509644f"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/gateway-board26/build/Release_Script/gateway_boardBootloader.map",
+      "sha256": "8242840362ece0137ad8ad64939499c41ff38d36e7b6561979e6ff95c3868012"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoard.bin",
+      "sha256": "ac8df58f1c70d6bf202a2c18189b0c9669c4a45152a8b46e78ea349d39e09b3e"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoard.elf",
+      "sha256": "cb4569b36aa8f2a222d25e5cbd3efe3af92e6c490b311822ba15dc25fb3e0d6a"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoard.factory.bin",
+      "sha256": "23ce716516d0ed5b7d055b0fbdcc79d4ef5269094336caf739668f5661aae627"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoard.launchcore.img",
+      "sha256": "171d34c77eb79430910b4eba02837868071dacdb03b14728987b00c07529a8f4"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoard.map",
+      "sha256": "4221c1a83031cfe03627f46eaea34306a7a0c67b8ebb419d4c29fbca3a6ee438"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoardBootloader.bin",
+      "sha256": "5d6eb36f8543fb7ad2027348e9bb20d753f7c7b77a2113bc0129cc046f7fb07f"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoardBootloader.elf",
+      "sha256": "38ae32f610104574ed222ca0f957abcead1d8a060a43f0e7d4c30172fff8d7c4"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/ActuatorBoard26/build/Release_Script/ActuationBoardBootloader.map",
+      "sha256": "21c6f92eda674a085e8b0101bdcb3782858a6b570aec858f85aab301d1f6100f"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26.bin",
+      "sha256": "d363c8c3a5588ebdf684a9a1328685949f0710d665a90720d16b9ff2fc0ac0c9"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26.elf",
+      "sha256": "2f915d75f69f2969e76e7adeda91fc94e40a8e609ae27902fce7b4e95d8c8a1a"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26.factory.bin",
+      "sha256": "9303dbe66e190af54f7329c1edcb1357fde55345656f26701d150aa0ad832c93"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26.launchcore.img",
+      "sha256": "5c171a5132712eebe8af87422142141b4f0802f13f6a21e6561c5534bdc3013c"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26.map",
+      "sha256": "2264b31c994a16e14e7859f6f0afd568d93da233cb33927b0e92a6f720442581"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26Bootloader.bin",
+      "sha256": "c05d69977d4e7e4e10e89eaab28d6a7f3c1d0263a10731a8135e9e6fdf5a86a1"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26Bootloader.elf",
+      "sha256": "0721c746e8101520c8a4bd7bb5289bc9ff5415213b4ae92e1c869dca6f7814b2"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-final8-20261025/ValveBoard26/build/Release_Script/Valve_Board26Bootloader.map",
+      "sha256": "235a42f9add7646198fc9560a4b6e82a9a54f418c0884dd3c9d17a173c78fbe3"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-Board.bin",
+      "sha256": "9dfdf2189e550e50dd142e4a456acabe2fa8be9e297c1c36cb23c81110969e47"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-Board.elf",
+      "sha256": "ef3ac974e05b45aab0909cfc7b6e69180c4c95660cd7fd616be291455f8d36aa"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-Board.factory.bin",
+      "sha256": "a0802d980d054199c66e1cce32777b2bb452783850abffa61c416a72adc3e9db"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-Board.launchcore.img",
+      "sha256": "4ca9031b68e79cf90885d859fdb01a696012640b0d8512209b2dcf6293fb4248"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-Board.map",
+      "sha256": "8003fbe5b330c227e6e542c9259c76dafe81b1f23f78fc0d334c29c25f1827a0"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-BoardBootloader.bin",
+      "sha256": "0d93f72985654a1292c5eb4d1941f0a5186354a372c8e68b4c4cb4700b87b9d5"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-BoardBootloader.elf",
+      "sha256": "01703fffcbc154a0732284678fc684fd96240a3a0a6bfe8f27c4574a8201d8f1"
+    },
+    {
+      "path": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/multicast-427-owned-tx-cohort-20261025/DAQ-Board/build/Release_Script/DAQ-BoardBootloader.map",
+      "sha256": "9c570fb6337478765e8cc1bffc824e0a60211a3e84c12aff8cdffab846dee4fc"
+    }
+  ],
+  "cases": {
+    "positive-flight": {
+      "result": {
+        "phase": "passed",
+        "scope": "Assumed sensor response;actual firmwareADC/network/ACK/operationalpolicy;no direct qualification writes",
+        "image": "sha256:6ee94c869fac5222d4bdb8e38eb8937718b4a88ec7a1098f104ecf896ce5dd82",
+        "milestones": [
+          {
+            "virtual_ms": 0,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 3950,
+            "phase": "cancel_setup",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 4020,
+            "phase": "cancelled",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 4030,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9030,
+            "phase": "self_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9050,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9070,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11070,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11100,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11120,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13120,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13150,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13190,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15200,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15230,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15280,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17280,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17310,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17340,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19340,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19350,
+            "phase": "self_finish",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19370,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19380,
+            "phase": "baseline_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19450,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 24460,
+            "phase": "nitrogen_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 24510,
+            "phase": "raising",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 26020,
+            "phase": "settling",
+            "mission_stage": "idle",
+            "pressure_psi": 50.273929595947266
+          },
+          {
+            "virtual_ms": 28010,
+            "phase": "holding",
+            "mission_stage": "idle",
+            "pressure_psi": 52.207542419433594
+          },
+          {
+            "virtual_ms": 33010,
+            "phase": "dumping",
+            "mission_stage": "idle",
+            "pressure_psi": 52.207542419433594
+          },
+          {
+            "virtual_ms": 34320,
+            "phase": "passed",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 34340,
+            "phase": "fill_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 34420,
+            "phase": "filling",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 36970,
+            "phase": "pause_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 37020,
+            "phase": "paused",
+            "mission_stage": "armed",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 37020,
+            "phase": "real_mass_target_armed",
+            "mass_input_kg": 5.019999999999981
+          }
+        ],
+        "plant_assumptions": {
+          "nitrogen_psi_per_second": 35,
+          "relief_psi_per_second": 200,
+          "closed_leak_psi_per_second": 0,
+          "mass_target_intentionally_unmet": false,
+          "nitrous_fill_kg_per_second": 2
+        },
+        "actual_valve_events": [
+          {
+            "virtual_ms": 0,
+            "valves": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "virtual_ms": 3960,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 9070,
+            "valves": [
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 11100,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 11120,
+            "valves": [
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 13150,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 13190,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15230,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15280,
+            "valves": [
+              false,
+              true,
+              true,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 17310,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 17340,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 19350,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 24510,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 24560,
+            "valves": [
+              false,
+              false,
+              false,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 26050,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 33060,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 33070,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 34420,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 34460,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 37020,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          }
+        ],
+        "fc_initial_watchdog_resume_rejected": 0,
+        "qd": {
+          "dispatched_model_ms": 38120,
+          "first_observed_ack_model_ms": 38300,
+          "ack_model_interval_ms": [
+            38290,
+            38290
+          ],
+          "settlement_contract_ms": 5000,
+          "status": "Settling { remaining_ms: 4990 }",
+          "queue_observed_model_ms": 38310,
+          "fire_observed_model_ms": 43300
+        },
+        "virtual_ms": 53340,
+        "checks": "actualADC/DAQmassandACKs;Idle\u2192Fill\u2192Armed\u2192Fire;countdowntopilotTplus;automaticchecklistsreset"
+      },
+      "native_exit": {
+        "case": "positive-flight",
+        "exit_code": 0,
+        "elapsed_wall_seconds": 1027.1260254383087,
+        "artifacts_unchanged": true,
+        "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626",
+        "image": "sha256:6ee94c869fac5222d4bdb8e38eb8937718b4a88ec7a1098f104ecf896ce5dd82"
+      },
+      "actual_final_counters": {
+        "rf": {
+          "panics": 0,
+          "fdcan_rx": 2648,
+          "fdcan_tx_ok": 1165,
+          "radio_rx_frames": 971,
+          "radio_tx_frames": 1648,
+          "rf_gps_has_fix_word": 0,
+          "rf_gps_publish_attempts": 23,
+          "rf_gps_publish_ok": 23,
+          "rf_gps_time_valid": 1,
+          "rf_gps_time_offset_lo": 350,
+          "rf_gps_time_offset_hi": 0,
+          "rf_gps_stack_remaining": 6316,
+          "rf_gps_stack_used": 5971,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "power": {
+          "panics": 0,
+          "fdcan_rx": 2800,
+          "fdcan_tx_ok": 1013,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "flight": {
+          "panics": 0,
+          "fdcan_rx": 2074,
+          "fdcan_tx_ok": 1635,
+          "fc_commands_received": 1,
+          "fc_commands_accepted": 1,
+          "fc_commands_processed": 1,
+          "fc_last_command_id": 1,
+          "fc_last_command_msg": 4294967295,
+          "fc_recovery_dequeued": 56,
+          "fc_config_flags": 7340661,
+          "fc_state": 3,
+          "fc_watchdog_resume_rejected": 0,
+          "fc_watchdog_resumed": 0,
+          "can_fifo_overflow_fdcan1": 0
+        },
+        "gateway": {
+          "fdcan_rx": 57891,
+          "fdcan_tx_ok": 1685,
+          "uart_rx_frames": 1537,
+          "uart_tx_frames": 42681,
+          "panics": 0,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "actuator": {
+          "panics": 0,
+          "fdcan_rx": 58233,
+          "fdcan_tx_ok": 1343,
+          "ab_last_executed_command": 14,
+          "ab_sequence_active_word": 65792,
+          "ab_igniter_started_word": 16777216,
+          "ab_igniter_output_word": 0,
+          "ab_igniter_start_ticks": 47464,
+          "ab_igniter_stop_ticks": 57468,
+          "ab_abort_word": 0,
+          "ab_local_ticks": 69901,
+          "ab_igniter_enable_odr": 0,
+          "ab_driver_fault_idr": 15,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "valve": {
+          "fdcan_rx": 46584,
+          "fdcan_tx_ok": 12992,
+          "panics": 0,
+          "launch_start_count": 1,
+          "launch_service_count": 7477,
+          "launch_elapsed_ticks": 11504,
+          "launch_pilot_attempts": 1,
+          "launch_finish_count": 1,
+          "launch_abort_seen": 0,
+          "pilot_actual_state": 0,
+          "pilot_driver_result": 0,
+          "valve_abort": 0,
+          "valve_local_ticks": 69901,
+          "launch_command_utc_lo": 1994084501,
+          "launch_command_utc_hi": 411,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "daq": {
+          "fdcan_rx": 15876,
+          "fdcan_tx_ok": 43556,
+          "panics": 0,
+          "daq_launch_deadline_lo": 1994214561,
+          "daq_launch_deadline_hi": 411,
+          "daq_launch_session_lo": 1994084644,
+          "daq_launch_session_hi": 411,
+          "daq_local_deadline_lo": 173314,
+          "daq_local_deadline_hi": 0,
+          "can_fifo_overflow_fdcan1": 0
+        }
+      },
+      "all_sampled_panics_and_can_overflows": 0,
+      "proof_root": "FirmwareSimulator/build/valve-final8-operational-20261025/positive-flight",
+      "result_sha256": "8a851127a29a12f079e47b88eb81ef05d9d6ec6277bb34602872464276023092",
+      "simulator_log_sha256": "562a42bcc4f8a35c503066c25f9c919ea278664a1627b5fb1293465f44629100",
+      "probe_sha256": "17b305316b1c953ce8d9ca41f0e5302809b903f5c474c5b50569967aca71088d",
+      "listener_isolation": {
+        "primary_http": "127.0.0.1:36883",
+        "unauthenticated_gse_status_http_status": 401,
+        "other_concurrent_primary_ports": [
+          49895,
+          40091
+        ],
+        "other_concurrent_rrls_ports": [
+          37743
+        ],
+        "port_distinct": true,
+        "actual_ethernet_ingress_translated": true,
+        "host_features": "testing=false hitl_mode=false test_fire_mode=false",
+        "checked_source": "Actualrunninghost/simulatorlogs andtargetedunauthenticatedHTTPstatus only"
+      },
+      "before_fire": {
+        "qualification": {
+          "version": 2,
+          "generation": 0,
+          "self_test": true,
+          "nitrogen_test": true,
+          "fill_target": true,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": true,
+          "fire_started": false
+        },
+        "automatic_abort_claimed": false,
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 225
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "after_fire": {
+        "qualification": {
+          "version": 2,
+          "generation": 1,
+          "self_test": true,
+          "nitrogen_test": false,
+          "fill_target": false,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": false,
+          "fire_started": true
+        },
+        "automatic_abort_claimed": false,
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 225
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "valve_local_ticks_progressed_all_recorded_intervals": true,
+      "stack_measurement_scope": "This unchanged operational controller selects functional probes and does not record stack watermarks. Exact stack margins/error counters are checked separately in the matching network cases; no missing operational measurements are reported as zero."
+    },
+    "negative-gps-loss": {
+      "result": {
+        "phase": "passed",
+        "scope": "Assumed sensor response;actual firmwareADC/network/ACK/operationalpolicy;no direct qualification writes",
+        "image": "sha256:6ee94c869fac5222d4bdb8e38eb8937718b4a88ec7a1098f104ecf896ce5dd82",
+        "milestones": [
+          {
+            "virtual_ms": 0,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 3740,
+            "phase": "cancel_setup",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 3810,
+            "phase": "cancelled",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 3820,
+            "phase": "baseline_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 3830,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 8830,
+            "phase": "self_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 8840,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 8870,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 10890,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 10920,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 10930,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 12920,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 12950,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 12980,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15000,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15020,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15050,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17060,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17090,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17120,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19120,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19150,
+            "phase": "self_finish",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19160,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19170,
+            "phase": "baseline_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 19240,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 24230,
+            "phase": "nitrogen_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 24280,
+            "phase": "raising",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 25770,
+            "phase": "settling",
+            "mission_stage": "idle",
+            "pressure_psi": 50.273929595947266
+          },
+          {
+            "virtual_ms": 27770,
+            "phase": "holding",
+            "mission_stage": "idle",
+            "pressure_psi": 52.85207748413086
+          },
+          {
+            "virtual_ms": 32760,
+            "phase": "dumping",
+            "mission_stage": "idle",
+            "pressure_psi": 52.85207748413086
+          },
+          {
+            "virtual_ms": 34050,
+            "phase": "passed",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 34070,
+            "phase": "fill_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 34130,
+            "phase": "filling",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 36690,
+            "phase": "pause_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 36740,
+            "phase": "paused",
+            "mission_stage": "armed",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 36740,
+            "phase": "real_mass_target_armed",
+            "mass_input_kg": 5.019999999999981
+          }
+        ],
+        "plant_assumptions": {
+          "nitrogen_psi_per_second": 35,
+          "relief_psi_per_second": 200,
+          "closed_leak_psi_per_second": 0,
+          "mass_target_intentionally_unmet": false,
+          "nitrous_fill_kg_per_second": 2
+        },
+        "actual_valve_events": [
+          {
+            "virtual_ms": 0,
+            "valves": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "virtual_ms": 3750,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 8870,
+            "valves": [
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 10920,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 10930,
+            "valves": [
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 12950,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 12980,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15020,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15050,
+            "valves": [
+              false,
+              true,
+              true,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 17090,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 17120,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 19150,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 24280,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 24300,
+            "valves": [
+              false,
+              false,
+              false,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 25810,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 32820,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 32840,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 34130,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 34180,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 36730,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          }
+        ],
+        "fc_initial_watchdog_resume_rejected": 0,
+        "qd": {
+          "dispatched_model_ms": 37070,
+          "first_observed_ack_model_ms": 37310,
+          "ack_model_interval_ms": [
+            37300,
+            37300
+          ],
+          "settlement_contract_ms": 5000,
+          "status": "Settling { remaining_ms: 4990 }",
+          "queue_observed_model_ms": 37320,
+          "gps_loss_stimulus_model_ms": 37320
+        },
+        "virtual_ms": 42320,
+        "checks": "actualrawNMEAfixloss\u2192RFno-fix\u2192queuedQDLaunchcancelled;noFire"
+      },
+      "native_exit": {
+        "case": "negative-gps-loss",
+        "exit_code": 0,
+        "elapsed_wall_seconds": 1008.8328561782837,
+        "artifacts_unchanged": true,
+        "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626",
+        "image": "sha256:6ee94c869fac5222d4bdb8e38eb8937718b4a88ec7a1098f104ecf896ce5dd82"
+      },
+      "actual_final_counters": {
+        "rf": {
+          "panics": 0,
+          "fdcan_rx": 2511,
+          "fdcan_tx_ok": 1147,
+          "radio_rx_frames": 970,
+          "radio_tx_frames": 1463,
+          "rf_gps_has_fix_word": 0,
+          "rf_gps_publish_attempts": 1,
+          "rf_gps_publish_ok": 1,
+          "rf_gps_time_valid": 1,
+          "rf_gps_time_offset_lo": 10,
+          "rf_gps_time_offset_hi": 0,
+          "rf_gps_stack_remaining": 6268,
+          "rf_gps_stack_used": 6019,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "power": {
+          "panics": 0,
+          "fdcan_rx": 2600,
+          "fdcan_tx_ok": 1058,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "flight": {
+          "panics": 0,
+          "fdcan_rx": 2102,
+          "fdcan_tx_ok": 1453,
+          "fc_commands_received": 0,
+          "fc_commands_accepted": 0,
+          "fc_commands_processed": 0,
+          "fc_last_command_id": 0,
+          "fc_last_command_msg": 4294967295,
+          "fc_recovery_dequeued": 42,
+          "fc_config_flags": 6291573,
+          "fc_state": 2,
+          "fc_watchdog_resume_rejected": 0,
+          "fc_watchdog_resumed": 0,
+          "can_fifo_overflow_fdcan1": 0
+        },
+        "gateway": {
+          "fdcan_rx": 58250,
+          "fdcan_tx_ok": 1739,
+          "uart_rx_frames": 1512,
+          "uart_tx_frames": 42699,
+          "panics": 0,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "actuator": {
+          "panics": 0,
+          "fdcan_rx": 58479,
+          "fdcan_tx_ok": 1510,
+          "ab_last_executed_command": 8,
+          "ab_sequence_active_word": 65792,
+          "ab_igniter_started_word": 16777216,
+          "ab_igniter_output_word": 0,
+          "ab_igniter_start_ticks": 0,
+          "ab_igniter_stop_ticks": 0,
+          "ab_abort_word": 0,
+          "ab_local_ticks": 69901,
+          "ab_igniter_enable_odr": 0,
+          "ab_driver_fault_idr": 15,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "valve": {
+          "fdcan_rx": 46939,
+          "fdcan_tx_ok": 13050,
+          "panics": 0,
+          "launch_start_count": 0,
+          "launch_service_count": 0,
+          "launch_elapsed_ticks": 0,
+          "launch_pilot_attempts": 0,
+          "launch_finish_count": 0,
+          "launch_abort_seen": 0,
+          "pilot_actual_state": 0,
+          "pilot_driver_result": 0,
+          "valve_abort": 0,
+          "valve_local_ticks": 69901,
+          "launch_command_utc_lo": 0,
+          "launch_command_utc_hi": 0,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "daq": {
+          "fdcan_rx": 16154,
+          "fdcan_tx_ok": 43690,
+          "panics": 0,
+          "daq_launch_deadline_lo": 0,
+          "daq_launch_deadline_hi": 0,
+          "daq_launch_session_lo": 0,
+          "daq_launch_session_hi": 0,
+          "daq_local_deadline_lo": 0,
+          "daq_local_deadline_hi": 0,
+          "can_fifo_overflow_fdcan1": 0
+        }
+      },
+      "all_sampled_panics_and_can_overflows": 0,
+      "proof_root": "FirmwareSimulator/build/valve-final8-operational-20261025/negative-gps-loss",
+      "result_sha256": "78131c691cd5b6b739a420d868d0c68895214021fb3c6a39a0d219d3f0922350",
+      "simulator_log_sha256": "b8391d1c919c7c6583c301e4d6915c5808d0d2c78fc7a7f8bb67a2fb8c595970",
+      "probe_sha256": "49fe6307016e65264e916483dd1de6e17aa9eb89328f69b47c23f1300840b703",
+      "listener_isolation": {
+        "primary_http": "127.0.0.1:33553",
+        "unauthenticated_gse_status_http_status": 401,
+        "other_concurrent_primary_ports": [
+          49895,
+          40091
+        ],
+        "other_concurrent_rrls_ports": [
+          37743
+        ],
+        "port_distinct": true,
+        "actual_ethernet_ingress_translated": true,
+        "host_features": "testing=false hitl_mode=false test_fire_mode=false",
+        "checked_source": "Actualrunninghost/simulatorlogs andtargetedunauthenticatedHTTPstatus only"
+      },
+      "actual_zero_satellite_rows_after_fix": 5,
+      "saved_qualification": {
+        "qualification": {
+          "version": 2,
+          "generation": 0,
+          "self_test": true,
+          "nitrogen_test": true,
+          "fill_target": true,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": true,
+          "fire_started": false
+        },
+        "automatic_abort_claimed": false,
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 229
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "valve_local_ticks_progressed_all_recorded_intervals": true,
+      "stack_measurement_scope": "This unchanged operational controller selects functional probes and does not record stack watermarks. Exact stack margins/error counters are checked separately in the matching network cases; no missing operational measurements are reported as zero."
+    },
+    "positive-testfire": {
+      "result": {
+        "phase": "passed",
+        "scope": "Assumed sensor response;actual firmwareADC/network/ACK/operationalpolicy;no direct qualification writes",
+        "image": "sha256:23a28aedc2df659007e24c99fe284b32bfb99044326c0538b5c62ffe939ec251",
+        "milestones": [
+          {
+            "virtual_ms": 0,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 2370,
+            "phase": "cancel_setup",
+            "mission_stage": "idle",
+            "pressure_psi": null
+          },
+          {
+            "virtual_ms": 2420,
+            "phase": "cancelled",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 2430,
+            "phase": "baseline_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 2440,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 7440,
+            "phase": "self_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 7460,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 7480,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9490,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9510,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 9550,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11550,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11580,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 11600,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13600,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13620,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 13660,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15650,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15690,
+            "phase": "self_open",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 15730,
+            "phase": "self_hold",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17740,
+            "phase": "self_close",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17770,
+            "phase": "self_finish",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17790,
+            "phase": "idle",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17800,
+            "phase": "baseline_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 17850,
+            "phase": "baseline",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 22860,
+            "phase": "nitrogen_setup",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 22930,
+            "phase": "raising",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 24460,
+            "phase": "settling",
+            "mission_stage": "idle",
+            "pressure_psi": 50.91846466064453
+          },
+          {
+            "virtual_ms": 26460,
+            "phase": "holding",
+            "mission_stage": "idle",
+            "pressure_psi": 54.14115524291992
+          },
+          {
+            "virtual_ms": 31450,
+            "phase": "dumping",
+            "mission_stage": "idle",
+            "pressure_psi": 54.14115524291992
+          },
+          {
+            "virtual_ms": 32790,
+            "phase": "passed",
+            "mission_stage": "idle",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 32800,
+            "phase": "fill_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 32860,
+            "phase": "filling",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 35420,
+            "phase": "pause_setup",
+            "mission_stage": "fill",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 35480,
+            "phase": "paused",
+            "mission_stage": "armed",
+            "pressure_psi": 0.0
+          },
+          {
+            "virtual_ms": 35480,
+            "phase": "real_mass_target_armed",
+            "mass_input_kg": 5.019999999999981
+          }
+        ],
+        "plant_assumptions": {
+          "nitrogen_psi_per_second": 35,
+          "relief_psi_per_second": 200,
+          "closed_leak_psi_per_second": 0,
+          "mass_target_intentionally_unmet": false,
+          "nitrous_fill_kg_per_second": 2
+        },
+        "actual_valve_events": [
+          {
+            "virtual_ms": 0,
+            "valves": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "virtual_ms": 2380,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 7480,
+            "valves": [
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 9510,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 9550,
+            "valves": [
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 11580,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 11600,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 13620,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 13660,
+            "valves": [
+              false,
+              true,
+              true,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15690,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 15730,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 17770,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 22910,
+            "valves": [
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 22930,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 22970,
+            "valves": [
+              false,
+              false,
+              false,
+              true,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 24510,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 31510,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 31530,
+            "valves": [
+              false,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 32860,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 32910,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              true
+            ]
+          },
+          {
+            "virtual_ms": 35460,
+            "valves": [
+              false,
+              true,
+              false,
+              false,
+              false
+            ]
+          },
+          {
+            "virtual_ms": 35480,
+            "valves": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ]
+          }
+        ],
+        "virtual_ms": 45520,
+        "checks": "actualADC/DAQmassandACKs;Idle\u2192Fill\u2192Armed\u2192Fire;countdowntopilotTplus;automaticchecklistsreset"
+      },
+      "native_exit": {
+        "case": "positive-testfire",
+        "exit_code": 0,
+        "elapsed_wall_seconds": 756.1801106929779,
+        "artifacts_unchanged": true,
+        "controller_sha256": "9d589d4c0528796a04fe31772778824d17fbd38b16a0562795b70c7721f6d626",
+        "image": "sha256:23a28aedc2df659007e24c99fe284b32bfb99044326c0538b5c62ffe939ec251"
+      },
+      "actual_final_counters": {
+        "gateway": {
+          "fdcan_rx": 57095,
+          "fdcan_tx_ok": 1311,
+          "uart_rx_frames": 1184,
+          "uart_tx_frames": 42669,
+          "panics": 0,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "actuator": {
+          "panics": 0,
+          "fdcan_rx": 57341,
+          "fdcan_tx_ok": 1065,
+          "ab_last_executed_command": 14,
+          "ab_sequence_active_word": 0,
+          "ab_igniter_started_word": 0,
+          "ab_igniter_output_word": 0,
+          "ab_igniter_start_ticks": 39633,
+          "ab_igniter_stop_ticks": 49633,
+          "ab_abort_word": 0,
+          "ab_local_ticks": 69901,
+          "ab_igniter_enable_odr": 0,
+          "ab_driver_fault_idr": 15,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "valve": {
+          "fdcan_rx": 45685,
+          "fdcan_tx_ok": 12721,
+          "panics": 0,
+          "launch_start_count": 1,
+          "launch_service_count": 7479,
+          "launch_elapsed_ticks": 11503,
+          "launch_pilot_attempts": 1,
+          "launch_finish_count": 1,
+          "launch_abort_seen": 0,
+          "pilot_actual_state": 0,
+          "pilot_driver_result": 0,
+          "valve_abort": 0,
+          "valve_local_ticks": 69901,
+          "launch_command_utc_lo": 1994076824,
+          "launch_command_utc_hi": 411,
+          "can_fifo_overflow_fdcan1": 0,
+          "can_fifo_overflow_fdcan2": 0
+        },
+        "daq": {
+          "fdcan_rx": 14952,
+          "fdcan_tx_ok": 43309,
+          "panics": 0,
+          "daq_launch_deadline_lo": 1994206854,
+          "daq_launch_deadline_hi": 411,
+          "daq_launch_session_lo": 1994076824,
+          "daq_launch_session_hi": 411,
+          "daq_local_deadline_lo": 165496,
+          "daq_local_deadline_hi": 0,
+          "can_fifo_overflow_fdcan1": 0
+        }
+      },
+      "all_sampled_panics_and_can_overflows": 0,
+      "proof_root": "FirmwareSimulator/build/valve-final8-operational-20261025/positive-testfire",
+      "result_sha256": "5eca0873a1bbe85a496e40d73bfcd97dcf49d2c33554f24d6eaf002b90e3f9c7",
+      "simulator_log_sha256": "4011de284225b0e5fbeaa591e85aa8fb399910fe674d6d2b885463c9cc7b025c",
+      "probe_sha256": "8d83161b561b820528e8a95461bca40c2252cd10c80b602bca2d3da934c2d52b",
+      "listener_isolation": {
+        "primary_http": "127.0.0.1:41947",
+        "unauthenticated_gse_status_http_status": 401,
+        "other_concurrent_primary_ports": [
+          49895,
+          40091
+        ],
+        "other_concurrent_rrls_ports": [
+          37743
+        ],
+        "port_distinct": true,
+        "actual_ethernet_ingress_translated": true,
+        "host_features": "testing=false hitl_mode=false test_fire_mode=true",
+        "checked_source": "Actualrunninghost/simulatorlogs andtargetedunauthenticatedHTTPstatus only"
+      },
+      "before_fire": {
+        "qualification": {
+          "version": 2,
+          "generation": 0,
+          "self_test": true,
+          "nitrogen_test": true,
+          "fill_target": true,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": true,
+          "fire_started": false
+        },
+        "automatic_abort_claimed": false,
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 224
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "after_fire": {
+        "qualification": {
+          "version": 2,
+          "generation": 1,
+          "self_test": true,
+          "nitrogen_test": false,
+          "fill_target": false,
+          "fault": null,
+          "nitrogen_override": null,
+          "filling_started": false,
+          "fire_started": true
+        },
+        "automatic_abort_claimed": false,
+        "baseline": {
+          "average_psi": 0.0,
+          "min_psi": 0.0,
+          "max_psi": 0.0,
+          "noise_psi": 0.0,
+          "samples": 224
+        },
+        "fill_target_kg": 5.0,
+        "pending_checklists": [],
+        "checklist_digest": null
+      },
+      "programmed_igniter_span_threadx_ticks": 10000,
+      "actual_gpio_sampled_pulse_bounds_ticks": [
+        9000,
+        11000
+      ],
+      "actual_gpio_high_samples": 10,
+      "boolean_probe_decoding": {
+        "ab_igniter_started_word": {
+          "elf_symbol": "g_launch_sequence_igniter_started",
+          "address": "0x200191c5",
+          "bit_shift": 8,
+          "width_bytes": 1
+        },
+        "ab_igniter_output_word": {
+          "elf_symbol": "g_igniter_on",
+          "address": "0x200191cb",
+          "bit_shift": 8,
+          "width_bytes": 1
+        },
+        "ab_abort_word": {
+          "elf_symbol": "g_aborted",
+          "address": "0x200191d8",
+          "bit_shift": 0,
+          "width_bytes": 1
+        }
+      },
+      "pulse_timing_scope": "ActualPB7 high interval sampled at1Hz and outputoff throughend. Tickfields record scheduledstart/updatedstopdeadline, notsubmillisecondactualGPIOtransitiontimestamps.",
+      "valve_local_ticks_progressed_all_recorded_intervals": true,
+      "stack_measurement_scope": "This unchanged operational controller selects functional probes and does not record stack watermarks. Exact stack margins/error counters are checked separately in the matching network cases; no missing operational measurements are reported as zero."
+    }
+  },
+  "limits": [
+    "Explicit synthetic pressure/massplant and rawNMEA; no physicalactuator/pneumatics/combustion qualification.",
+    "70s endsbeforefullDAQSDclose; independent600s source/SDcampaigns authoritative.",
+    "Original failed530s has no retained passiveCANtrace; boundedqueuefixture supports mechanism butdoesnotretroactivelytraceoriginalpacketloss.",
+    "InitialsandboxDockerdeniedpositiveattempt startednoapplication andisretained separately."
+  ],
+  "release_ready": false,
+  "remaining_scope": "Matching endurance/source/SD/restart/relay gates remain separate and pending; SDK publication already completed by maintainer.",
+  "postvalidator_sha256": "8bb2621d10af2d0c5fcc2d1d58830f5f1fd43afa8a73acc41081f18eb065a6f7",
+  "byte_probe_contract": {
+    "image": "sha256:23a28aedc2df659007e24c99fe284b32bfb99044326c0538b5c62ffe939ec251",
+    "artifact": "build/actuator-byte-probe-contract-20261025/testfire-image.log",
+    "sha256": "5a4502598ba2be3de40b28f189b2ceb393c6e3e4083e93b053182671620b7b45",
+    "scope": "Isolated emptyRAM, symbolsloadedonly, nofirmwareexecution/network. Confirmsoddbyteobject symbols normalizedbyclearingbit0; resultingwordprefix decodedwithonebyteshift. ExactGPIOregisterobservations independent ofsymbolnormalization."
+  }
+}
