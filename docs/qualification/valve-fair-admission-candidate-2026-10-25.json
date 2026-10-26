@@ -1,10 +1,10 @@
 {
-  "updated_utc": "2026-10-26T00:45:34.275071+00:00",
+  "updated_utc": "2026-10-26T00:46:30.715151+00:00",
   "release_ready": false,
   "scope": "Candidate board configuration and factory-build verification; linked network acceptance is pending. No publication, physical flashing or actuation.",
-  "candidate_board_commit": "26e98a00e7fd01c88cde89708205ce0606a4bf75",
+  "candidate_board_commit": "d5c699b82bd133352a9d91032a68749a91690648",
   "sdk_source_commit": "b38b017c8e4c963682362d34fa1362c67607d4d1",
-  "change": "Enable existing fair admission and increase fixed startup queue allocation from512 to1536 bytes within the unchanged8192-byte queue budget. Simulation-only startup memory snapshot records actual allocation through the existing allocation-free C API. SDK runtime and wire format unchanged.",
+  "change": "Enable existing fair admission and increase startup queue allocation from512 to2048 bytes within unchanged8192-byte logical queue budget. Actual ARM128-byte payload layout requires224 bytes per TX item. Simulation-only snapshot uses existing allocation-free C API; SDK runtime and wire format unchanged.",
   "motivating_failure": {
     "capture": "build/multicast-427-owned-tx-cohort-20261025/qualification-2-final-retry",
     "status": "failed",
@@ -38,24 +38,24 @@
         "sha256": "c05d69977d4e7e4e10e89eaab28d6a7f3c1d0263a10731a8135e9e6fdf5a86a1"
       },
       "Valve_Board26.map": {
-        "bytes": 10566373,
-        "sha256": "edd66ee20aeab9c3e9e4a48ad8f8ba339c11ebaf04702492eee2b58b0522c6ef"
+        "bytes": 10566334,
+        "sha256": "bc7854855b03576b8c0e9dc492858673c8f0a7a89ecbe3c1e0b7bc6945456901"
       },
       "Valve_Board26.elf": {
         "bytes": 2554432,
-        "sha256": "a03b70d76a2b91d3dfffc6ac812135faa017f4d8e8085d66cca9d7739751b5a5"
+        "sha256": "41043b3d733a202f7975040b6da011ef9385efb7d5971b98356294e5f5714e92"
       },
       "Valve_Board26.bin": {
         "bytes": 441476,
-        "sha256": "c45d5c536cb8e88420c8a34ce60f3b909c3cba14ec021acdd0f006d543ded3ff"
+        "sha256": "f6b85757eb3aaa740c8f0257ad02703774d24c01921a8d73b124a66d829a29b5"
       },
       "Valve_Board26.launchcore.img": {
         "bytes": 441988,
-        "sha256": "2d588455064d1b5cc255cc5b79b5ad5ccede7e94af16c7e1cec0323ebb9e9ae8"
+        "sha256": "cd34c4fefaa9613f5b02bbb3eb5c67cc0e88e6cb8638a1cee77a9d05468d17ee"
       },
       "Valve_Board26.factory.bin": {
         "bytes": 516252,
-        "sha256": "abeddae1c8dc50225c99979cccff602424a62a3722515c429979e844a65099c5"
+        "sha256": "eaee6749ffac506132402cf7eb07cdd0d0e2d1d6e5168ecb70934d2c87078368"
       }
     },
     "source_unchanged": true,
@@ -68,7 +68,7 @@
       "SEDSNET_ENV_RELIABLE_MAX_END_TO_END_PENDING": "8",
       "SEDSNET_ENV_RELIABLE_MAX_PENDING": "8",
       "SEDSNET_ENV_RELIABLE_MAX_RETURN_ROUTES": "8",
-      "SEDSNET_ENV_STARTING_QUEUE_SIZE": "1536",
+      "SEDSNET_ENV_STARTING_QUEUE_SIZE": "2048",
       "SEDSNET_FAIR_ADMISSION": "ON",
       "SEDSNET_MAX_QUEUE_BUDGET": "8192",
       "SEDSNET_MAX_QUEUE_SIZE": "",
@@ -76,7 +76,7 @@
       "SEDSNET_MAX_STACK_PAYLOAD": "128",
       "SEDSNET_INGRESS_TARGET_FILTER": "OFF",
       "FETCHCONTENT_SOURCE_DIR_SEDSLAUNCHCORE": "/home/rylan/seds-gateway-fidelity-20261020/ValveBoard26/build/Release_Script/_deps/sedslaunchcore-src",
-      "FETCHCONTENT_SOURCE_DIR_SEDSNET": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-candidate4-20261025/sdk",
+      "FETCHCONTENT_SOURCE_DIR_SEDSNET": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-candidate5-20261025/sdk",
       "SEDS_FIRMWARE_SIM_TEST": "ON",
       "ENABLE_TELEMETRY": "ON",
       "ENABLE_BOARD_WATCHDOG": "ON",
@@ -85,7 +85,7 @@
       "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
       "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
     },
-    "evidence": "build/valve-fair-candidate4-20261025/result.json"
+    "evidence": "build/valve-fair-candidate5-20261025/result.json"
   },
   "telemetry_off_factory": {
     "phase": "passed",
@@ -95,7 +95,7 @@
     "rust_tool_invocations": 0,
     "warnings": [],
     "source_unchanged": true,
-    "evidence": "build/valve-fair-no-telemetry4-20261025/result.json"
+    "evidence": "build/valve-fair-no-telemetry5-20261025/result.json"
   },
   "remaining": [
     "Complete passive CAN-traced baseline/candidate comparison with actual startup allocation assertions.",
@@ -194,16 +194,15 @@
     "status": "proven_in_isolated_actual_sdk_fixture_native_causality_pending",
     "three_slot_limit": "Fair admission alone loses voltage when protected SD and four sensor streams are admitted before service.",
     "six_slot_limit": "Four sensor streams plus heartbeat, ordered status and discovery can still lose voltage before service.",
-    "selected_nine_slot_result": "All36 fair-admission cases passed with all three background streams and one, two or three protected SD publications. Matching no-fair cases still lose accepted voltage.",
+    "selected_nine_slot_result": "Corrected explicit inline-payload128 matrix: hostedTX272/start2448 and actualARMTX224/start2048 both9slots. FairON36/36 cases pass with all3background streams, protectedSD1/2/3 and no service; all3fairOFFvariants reproduce accepted voltage loss. Earlier payload64 results retained as exploratory.",
     "limitation": "Finite tested burst; no arbitrary overload guarantee and no proof of the original native530s cause."
   },
   "startup_capacity_assertion_pending": {
     "words": 16,
     "version": 1,
     "queue_budget_bytes": 8192,
-    "queue_storage_bytes": 3064,
-    "interpretation": "Expected RX11x136 + TX9x160 + recent16x8; counter excludes ISR ring. Must verify actual simulation snapshot, not only compiled configuration.",
-    "status": "superseded_incorrect_payload_layout_prediction_retained_for_audit"
+    "queue_storage_bytes": 4144,
+    "interpretation": "RX10x200 + TX9x224 + recent16x8. SeparateISR10x200 excluded. Native allocation check still pending; logical shared admissionbudget is separate from raw physical ring sizes."
   },
   "capacity_calculation_correction": {
     "status": "previous_nine_slot_prediction_incorrect",
@@ -232,7 +231,91 @@
       "predicted_rx_capacity": 10,
       "predicted_tx_capacity": 9,
       "predicted_queue_storage_bytes": 4144,
-      "status": "factory_build_running_actual_native_allocation_unverified"
+      "status": "factory_passed_short_native_pending"
+    }
+  },
+  "candidate4_factory_history": {
+    "candidate_board_commit": "26e98a00e7fd01c88cde89708205ce0606a4bf75",
+    "change": "Enable existing fair admission and increase fixed startup queue allocation from512 to1536 bytes within the unchanged8192-byte queue budget. Simulation-only startup memory snapshot records actual allocation through the existing allocation-free C API. SDK runtime and wire format unchanged.",
+    "telemetry_on_factory": {
+      "phase": "passed",
+      "flash_used_bytes": 441476,
+      "flash_capacity_bytes": 474624,
+      "static_ram_bytes": 111272,
+      "static_ram_capacity_bytes": 114688,
+      "warnings": [],
+      "artifacts": {
+        "Valve_Board26Bootloader.map": {
+          "bytes": 153817,
+          "sha256": "235a42f9add7646198fc9560a4b6e82a9a54f418c0884dd3c9d17a173c78fbe3"
+        },
+        "Valve_Board26Bootloader.elf": {
+          "bytes": 34116,
+          "sha256": "0721c746e8101520c8a4bd7bb5289bc9ff5415213b4ae92e1c869dca6f7814b2"
+        },
+        "Valve_Board26Bootloader.bin": {
+          "bytes": 8912,
+          "sha256": "c05d69977d4e7e4e10e89eaab28d6a7f3c1d0263a10731a8135e9e6fdf5a86a1"
+        },
+        "Valve_Board26.map": {
+          "bytes": 10566373,
+          "sha256": "edd66ee20aeab9c3e9e4a48ad8f8ba339c11ebaf04702492eee2b58b0522c6ef"
+        },
+        "Valve_Board26.elf": {
+          "bytes": 2554432,
+          "sha256": "a03b70d76a2b91d3dfffc6ac812135faa017f4d8e8085d66cca9d7739751b5a5"
+        },
+        "Valve_Board26.bin": {
+          "bytes": 441476,
+          "sha256": "c45d5c536cb8e88420c8a34ce60f3b909c3cba14ec021acdd0f006d543ded3ff"
+        },
+        "Valve_Board26.launchcore.img": {
+          "bytes": 441988,
+          "sha256": "2d588455064d1b5cc255cc5b79b5ad5ccede7e94af16c7e1cec0323ebb9e9ae8"
+        },
+        "Valve_Board26.factory.bin": {
+          "bytes": 516252,
+          "sha256": "abeddae1c8dc50225c99979cccff602424a62a3722515c429979e844a65099c5"
+        }
+      },
+      "source_unchanged": true,
+      "configuration": {
+        "SEDSNET_COMPACT_PACKET_COMPRESSION": "OFF",
+        "SEDSNET_COMPACT_PACKET_STORE": "ON",
+        "SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD": "30",
+        "SEDSNET_ENV_QUEUE_GROW_STEP": "1.0",
+        "SEDSNET_ENV_RELIABLE_MAX_END_TO_END_ACK_CACHE": "8",
+        "SEDSNET_ENV_RELIABLE_MAX_END_TO_END_PENDING": "8",
+        "SEDSNET_ENV_RELIABLE_MAX_PENDING": "8",
+        "SEDSNET_ENV_RELIABLE_MAX_RETURN_ROUTES": "8",
+        "SEDSNET_ENV_STARTING_QUEUE_SIZE": "1536",
+        "SEDSNET_FAIR_ADMISSION": "ON",
+        "SEDSNET_MAX_QUEUE_BUDGET": "8192",
+        "SEDSNET_MAX_QUEUE_SIZE": "",
+        "SEDSNET_MAX_RECENT_RX_IDS": "16",
+        "SEDSNET_MAX_STACK_PAYLOAD": "128",
+        "SEDSNET_INGRESS_TARGET_FILTER": "OFF",
+        "FETCHCONTENT_SOURCE_DIR_SEDSLAUNCHCORE": "/home/rylan/seds-gateway-fidelity-20261020/ValveBoard26/build/Release_Script/_deps/sedslaunchcore-src",
+        "FETCHCONTENT_SOURCE_DIR_SEDSNET": "/home/rylan/Documents/Gitkraken/SEDS/FirmwareSimulator/build/valve-fair-candidate4-20261025/sdk",
+        "SEDS_FIRMWARE_SIM_TEST": "ON",
+        "ENABLE_TELEMETRY": "ON",
+        "ENABLE_BOARD_WATCHDOG": "ON",
+        "TELEMETRY_USE_TLSF": "ON",
+        "SEDSNET_OFFLINE": "ON",
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+        "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
+      },
+      "evidence": "build/valve-fair-candidate4-20261025/result.json"
+    },
+    "telemetry_off_factory": {
+      "phase": "passed",
+      "flash_used_bytes": 42088,
+      "static_ram_bytes": 71576,
+      "sdk_source_absent": true,
+      "rust_tool_invocations": 0,
+      "warnings": [],
+      "source_unchanged": true,
+      "evidence": "build/valve-fair-no-telemetry4-20261025/result.json"
     }
   }
 }
