@@ -167,22 +167,49 @@ def configure_policy_qualified_controls(topology):
             check["name"]="Controlled rounds globally settled; mandatory per-ID500ms ALL-owner audit follows"
 
 
-def audit_policy_evidence(directory):
-    """Always save failed/missing evidence; never treat a pending-table drain as ACK proof."""
+def policy_capture_paths(directory):
+    """Only the documented primary capture layouts, not arbitrary recursive logs."""
+    directory=Path(directory)
+    paths={path.resolve() for path in directory.glob("bay-*/groundstation-host.log")
+           if re.fullmatch(r"bay-\d+",path.parent.name) and path.is_file()}
+    direct=directory/"groundstation-host.log"
+    if direct.is_file():paths.add(direct.resolve())
+    return paths
+
+
+def select_policy_capture(directory, previous_captures=None):
+    candidates=policy_capture_paths(directory)
+    if previous_captures is not None:candidates-=set(previous_captures)
+    if len(candidates)!=1:
+        raise ValueError(f"Expected exactly one current-stage primary capture, found {len(candidates)}: {sorted(map(str,candidates))}")
+    return next(iter(candidates))
+
+
+def audit_policy_evidence(directory, previous_captures=None):
+    """Save each stage beside its exact capture; never overwrite prior audit evidence."""
     spec=importlib.util.spec_from_file_location("obligation_audit",Path(__file__).with_name("audit_obligations.py"))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
+    output=directory/"policy-all-owner-audit.json"
     try:
-        result=module.audit((directory/"groundstation-host.log").read_text().splitlines(),500,3)
+        capture=select_policy_capture(directory,previous_captures)
+        output=capture.parent/"policy-all-owner-audit.json"
+        if output.exists():raise ValueError(f"Current capture already has audit evidence: {output}")
+        result=module.audit(capture.read_text().splitlines(),500,3)
+        result["capture_path"]=str(capture)
     except Exception as error:
         result={"passed":False,"limit_ms":500,"errors":["Missing/invalid primary API+SDK trace: "+str(error)]}
-    (directory/"policy-all-owner-audit.json").write_text(json.dumps(result,indent=2)+"\n")
+        output=directory/"policy-all-owner-audit.json"
+    if output.exists():output=directory/f"policy-all-owner-audit-failure-{time.time_ns()}.json"
+    result["audit_path"]=str(output.resolve())
+    with output.open("x") as file:file.write(json.dumps(result,indent=2)+"\n")
     return result
 
 
-def policy_validation_failure(directory, original_failure):
+def policy_validation_failure(directory, original_failure, previous_captures=None):
     try:
-        audit=audit_policy_evidence(directory)
+        audit=audit_policy_evidence(directory,previous_captures)
+        print("[SIM] managed policy audit: "+audit.get("audit_path","policy-all-owner-audit.json"),flush=True)
         if audit["passed"]:return original_failure
         print("FAIL: policy per-ID500ms ALL-owner audit; see policy-all-owner-audit.json",flush=True)
         return original_failure if original_failure is not None else RuntimeError(
@@ -618,6 +645,7 @@ def main():
                 "FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS=" + str(args.radio_trace_until_ms)]
         command[2:2] = ["--name", container]
         started = time.monotonic()
+        prior_policy_captures = policy_capture_paths(args.evidence_dir) if args.policy_qualified_controls else None
         process = subprocess.Popen(command)
         failure = None
         try:
@@ -641,7 +669,7 @@ def main():
                 subprocess.run([command[0], "stop", "--time", "5", container], check=False)
                 process.wait(timeout=20)
         if args.policy_qualified_controls:
-            failure = policy_validation_failure(args.evidence_dir, failure)
+            failure = policy_validation_failure(args.evidence_dir, failure, prior_policy_captures)
         if failure is not None:
             raise failure
     suite.run_live = run

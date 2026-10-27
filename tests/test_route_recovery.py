@@ -30,6 +30,40 @@ class RouteRecoveryTests(unittest.TestCase):
             self.assertFalse(result["passed"])
             self.assertEqual(json.loads((Path(directory)/"policy-all-owner-audit.json").read_text())["passed"],False)
 
+    def test_policy_uses_actual_nested_capture_layout_and_retains_each_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            previous=root/"policy-all-owner-audit.json"
+            previous.write_text('{"passed":false,"errors":["original preserved"]}')
+            before=recovery.policy_capture_paths(root)
+            first=root/"bay-123"/"groundstation-host.log"
+            first.parent.mkdir();first.write_text("first actual primary trace")
+            result=recovery.audit_policy_evidence(root,before)
+            self.assertEqual(result["capture_path"],str(first.resolve()))
+            self.assertFalse(result["passed"])
+            first_audit=first.parent/"policy-all-owner-audit.json"
+            original_bytes=first_audit.read_bytes()
+            before=recovery.policy_capture_paths(root)
+            second=root/"bay-456"/"groundstation-host.log"
+            second.parent.mkdir();second.write_text("second actual primary trace")
+            result=recovery.audit_policy_evidence(root,before)
+            self.assertEqual(result["capture_path"],str(second.resolve()))
+            self.assertEqual(first_audit.read_bytes(),original_bytes)
+            self.assertEqual(json.loads(previous.read_text())["errors"],["original preserved"])
+
+    def test_policy_capture_missing_multiple_and_old_only_fail_deterministically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            with self.assertRaises(ValueError):recovery.select_policy_capture(root,set())
+            for name in ["bay-100","bay-200"]:
+                path=root/name/"groundstation-host.log";path.parent.mkdir();path.write_text("trace")
+            with self.assertRaises(ValueError):recovery.select_policy_capture(root,set())
+            before=recovery.policy_capture_paths(root)
+            with self.assertRaises(ValueError):recovery.select_policy_capture(root,before)
+            result=recovery.audit_policy_evidence(root,set())
+            self.assertFalse(result["passed"])
+            self.assertIn("found 2",result["errors"][0])
+
     def test_policy_audit_required_before_pass_preserves_original_failure(self):
         import subprocess
         failed=subprocess.CalledProcessError(7,["simulation"])
