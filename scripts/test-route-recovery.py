@@ -186,14 +186,15 @@ def select_policy_capture(directory, previous_captures=None):
 
 
 def audit_policy_evidence(directory, previous_captures=None):
-    """Save each stage beside its exact capture; never overwrite prior audit evidence."""
+    """Read the exact stage capture; exclusively write audits in the host-owned root."""
     spec=importlib.util.spec_from_file_location("obligation_audit",Path(__file__).with_name("audit_obligations.py"))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
     output=directory/"policy-all-owner-audit.json"
     try:
         capture=select_policy_capture(directory,previous_captures)
-        output=capture.parent/"policy-all-owner-audit.json"
+        suffix=capture.parent.name if capture.parent!=directory.resolve() else "direct"
+        output=directory/f"policy-all-owner-audit-{suffix}.json"
         if output.exists():raise ValueError(f"Current capture already has audit evidence: {output}")
         result=module.audit(capture.read_text().splitlines(),500,3)
         result["capture_path"]=str(capture)

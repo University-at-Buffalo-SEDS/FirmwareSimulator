@@ -41,7 +41,8 @@ class RouteRecoveryTests(unittest.TestCase):
             result=recovery.audit_policy_evidence(root,before)
             self.assertEqual(result["capture_path"],str(first.resolve()))
             self.assertFalse(result["passed"])
-            first_audit=first.parent/"policy-all-owner-audit.json"
+            first_audit=root/"policy-all-owner-audit-bay-123.json"
+            self.assertEqual(Path(result["audit_path"]).parent,root.resolve())
             original_bytes=first_audit.read_bytes()
             before=recovery.policy_capture_paths(root)
             second=root/"bay-456"/"groundstation-host.log"
@@ -50,6 +51,23 @@ class RouteRecoveryTests(unittest.TestCase):
             self.assertEqual(result["capture_path"],str(second.resolve()))
             self.assertEqual(first_audit.read_bytes(),original_bytes)
             self.assertEqual(json.loads(previous.read_text())["errors"],["original preserved"])
+
+    def test_policy_readonly_simulator_capture_writes_only_host_owned_root(self):
+        import stat
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);capture=root/"bay-123"/"groundstation-host.log"
+            capture.parent.mkdir();capture.write_text("read-only primary evidence")
+            capture.chmod(0o444);capture.parent.chmod(0o555)
+            try:
+                result=recovery.audit_policy_evidence(root,set())
+                self.assertEqual(Path(result["audit_path"]).parent,root.resolve())
+                self.assertEqual(Path(result["audit_path"]).name,"policy-all-owner-audit-bay-123.json")
+                self.assertEqual(capture.read_text(),"read-only primary evidence")
+                self.assertEqual(stat.S_IMODE(capture.stat().st_mode),0o444)
+                self.assertEqual(stat.S_IMODE(capture.parent.stat().st_mode),0o555)
+                self.assertEqual(list(capture.parent.iterdir()),[capture])
+            finally:
+                capture.parent.chmod(0o755);capture.chmod(0o644)
 
     def test_policy_capture_missing_multiple_and_old_only_fail_deterministically(self):
         with tempfile.TemporaryDirectory() as temporary:
