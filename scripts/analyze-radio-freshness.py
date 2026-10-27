@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Measure source and received telemetry gaps in actual SDK-decoded wire evidence."""
 import argparse
+from bisect import bisect_left
 import json
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def analyze(report, start_ms, end_ms):
                 scope='Original trace byte order and timestamps retained. Packet identities deduplicated per source/type. Gaps measure wire arrivals, not private UI state. Leading/trailing intervals are censored observation bounds, not inferred missing packets. GPS_SATELLITE_NUMBER is satellite-count telemetry only, not coordinate or lock evidence.')
 
 
-def delivery_coverage(report, start_ms, end_ms):
+def delivery_coverage(report, start_ms, end_ms, allow_empty=False):
     """Match exact source packet identities to eligible primary DOWN_DATA arrivals."""
     if not 0 <= start_ms < end_ms:
         raise ValueError('invalid source coverage window')
@@ -83,7 +84,7 @@ def delivery_coverage(report, start_ms, end_ms):
             item.update(gs_down_data_ms=arrival['at_us']/1000,
                         source_to_gs_ms=(arrival['at_us']-packet['at_us'])/1000)
             delivered.append(item)
-    if not source:
+    if not source and not allow_empty:
         raise ValueError('no source reports in coverage window')
     return dict(result='PASS' if not missing else 'MISSING_SOURCE_REPORTS',
                 start_ms=start_ms,end_ms=end_ms,source_reports=len(source),
@@ -91,6 +92,47 @@ def delivery_coverage(report, start_ms, end_ms):
                 maximum_source_to_gs_ms=max((row['source_to_gs_ms'] for row in delivered),default=None),
                 delivered=delivered,
                 scope='Exact SDK source/type/packet-ID match to primary DOWN_DATA; no direct-arrival substitution, loss imputation or threshold relaxation.')
+
+
+def required_stream_coverage(report, start_ms, end_ms, required):
+    """Require actual sensor emissions and matching arrivals for each named stream."""
+    if not 0 <= start_ms < end_ms:
+        raise ValueError('invalid required-stream window')
+    streams = {(s['station'],s['direction']):s['packets'] for s in report['streams']}
+    emitted = unique([p for p in streams[0,0]
+                      if start_ms*1000 <= p['at_us'] <= end_ms*1000])
+    arrivals = {}
+    for p in streams[1,1]:
+        if p.get('relay_kind') in (None,1) and p['at_us'] <= end_ms*1000:
+            arrivals.setdefault((p['source_address'],p['type'],p['packet_id']),[]).append(p['at_us'])
+    for times in arrivals.values():
+        times.sort()
+    rows = []
+    for name, kind in dict.fromkeys(required):
+        address = report['known_source_addresses'].get(name)
+        source = [p for p in emitted if address is not None
+                  and (p['source_address'],p['type']) == (address,kind)]
+        delivered = []
+        for p in source:
+            times = arrivals.get((address,kind,p['packet_id']),[])
+            if bisect_left(times,p['at_us']) < len(times):
+                delivered.append(p)
+        status = ('UNKNOWN_SOURCE' if address is None else
+                  'NO_SOURCE_REPORTS' if not source else
+                  'NO_MATCHING_GS_REPORTS' if not delivered else 'PASS')
+        rows.append(dict(source=name,source_address=address,type=kind,
+                         source_reports=len(source),delivered_reports=len(delivered),result=status))
+    missing = [row for row in rows if row['result'] != 'PASS']
+    return dict(result='MISSING_REQUIRED_STREAMS' if missing else 'PASS',
+                start_ms=start_ms,end_ms=end_ms,rows=rows,missing=missing,
+                scope='Each requested source/type must emit and reach GS within the observation window, matched by SDK source address and exact packet identity. Heartbeats and other sensor types cannot substitute. This presence gate does not assert sampling cadence; exact DOWN_DATA delivery and latency remain separate gates.')
+
+
+def stream_spec(value):
+    parts = value.split(':')
+    if len(parts) != 2 or not parts[0] or parts[1] not in TYPES:
+        raise argparse.ArgumentTypeError('expected SOURCE:TYPE with a supported sensor/report type')
+    return tuple(parts)
 
 
 
@@ -146,6 +188,7 @@ def main():
     parser.add_argument('--end-ms',type=float,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--require-source-reports',action='store_true',help='Require every observed selected source report in this window to arrive through DOWN_DATA')
+    parser.add_argument('--require-stream',action='append',type=stream_spec,default=[],metavar='SOURCE:TYPE',help='Require this SDK-named source/type to emit and reach GS in the window (repeatable)')
     parser.add_argument('--require-canonical-metadata',action='store_true',help='Require every received canonical DiscoveryAddress occurrence to be forwarded')
     parser.add_argument('--max-source-latency-ms',type=float,help='Fail if any matched source report exceeds this measured wire-latency bound')
     parser.add_argument('--max-canonical-latency-ms',type=float,help='Fail if any matched canonical discovery exceeds this forwarding bound')
@@ -160,8 +203,10 @@ def main():
         parser.error('decoded evidence exceeds64MiB')
     report=json.loads(data)
     result=analyze(report,args.start_ms,args.end_ms)
+    if args.require_stream:
+        result['required_streams']=required_stream_coverage(report,args.start_ms,args.end_ms,args.require_stream)
     if args.require_source_reports:
-        result['exact_source_delivery']=delivery_coverage(report,args.start_ms,args.end_ms)
+        result['exact_source_delivery']=delivery_coverage(report,args.start_ms,args.end_ms,allow_empty=bool(args.require_stream))
     if args.require_canonical_metadata:
         result['exact_canonical_metadata']=metadata_coverage(report,args.start_ms,args.end_ms)
     if args.max_source_latency_ms is not None:
@@ -171,6 +216,8 @@ def main():
     args.output.write_text(json.dumps(result,indent=2)+'\n')
     for row in result['rows']:
         print(json.dumps(row,sort_keys=True))
+    if args.require_stream and result['required_streams']['missing']:
+        parser.exit(1,'Required source/type streams are absent from source emission or GS arrival evidence.\n')
     if any(not result[key]['passed'] for key in ('source_latency_gate','canonical_latency_gate') if key in result):
         parser.exit(1,'Observed relay forwarding exceeded the requested latency bound.\n')
     if args.require_canonical_metadata and result['exact_canonical_metadata']['missing']:
