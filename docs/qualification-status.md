@@ -190,7 +190,7 @@ its major-version4 dependency.
 
 Cargo initially retained registry SDK4.2.3 in the hosted backend despite a declared
 candidate path patch. That passing firmware4.2.4/host4.2.3 run is preserved in
-[separate evidence](https://github.com/Rylan-Meilutis/SEDSnet/blob/main/docs/qualification-4.2.4-mixed-host423-2026-10-19.json).
+separate archived SDK evidence (`qualification-4.2.4-mixed-host423-2026-10-19.json`).
 It was not used as the all-current release gate. The current record above uses
 verified SDK4.2.4 source in both hosted and embedded builds.
 
