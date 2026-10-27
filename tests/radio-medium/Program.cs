@@ -22,8 +22,45 @@ class Program
     static void Fresh() { Clock.NowUs=0; LimitTimer.All.Clear(); }
     static SedsRadioMedium Medium(uint rate=64000,uint baud=115200,int tx=4096,int rx=4096,int burst=16,ulong idle=200,uint overhead=0,ulong turn=0)
         { return new SedsRadioMedium(rate,baud,tx,rx,burst,idle,overhead,turn); }
+    static void PacketizationLatency(string scheduleFile)
+    {
+        var times=JsonSerializer.Deserialize<ulong[]>(File.ReadAllText(scheduleFile));
+        Assert(times.Length>100 && times.Length<1000,"bounded production schedule required");
+        foreach(var setting in new[]{(Burst:256,Idle:2000UL),(Burst:3968,Idle:50000UL)})
+        {
+            Fresh();var machine=new Machine();var gs=new SedsRadioHostPort(machine);
+            var receiver=new SedsRadioHostPort(machine);
+            var medium=Medium(tx:8192,rx:8192,burst:setting.Burst,idle:setting.Idle,overhead:160,turn:2000);
+            medium.AttachHost(0,gs);medium.AttachHost(1,receiver);
+            var received=new List<byte>();var deliveredAt=new List<ulong>();
+            receiver.CharReceived += value => {received.Add(value);if(received.Count%42==0)deliveredAt.Add(Clock.NowUs);};
+            var next=0;
+            var end=times[times.Length-1]*1000+2000000;
+            while(Clock.NowUs<end)
+            {
+                while(next<times.Length && times[next]*1000<=Clock.NowUs)
+                {
+                    // Raw transport probe, sized to the 42-byte writes in the
+                    // Pi capture. No SDK/frame parser exists inside the modem.
+                    for(var b=0;b<42;b++)gs.WriteChar((byte)((next+b)%251));
+                    next++;
+                }
+                Advance(Clock.NowUs+100);
+            }
+            Assert(deliveredAt.Count==times.Length,"transport dropped a latency probe");
+            Assert(received.Select((v,i)=>v==(byte)(((i/42)+(i%42))%251)).All(v=>v),"raw byte order changed");
+            ulong worst=0;
+            for(var i=0;i<times.Length;i++)worst=Math.Max(worst,deliveredAt[i]-times[i]*1000);
+            Console.WriteLine($"RADIO_PACKETIZATION_MEASURED burst={setting.Burst} idle_us={setting.Idle} probes={times.Length} worst_us={worst} peak_tx={medium.ReadCounter(0,2)}");
+            Assert(worst<500000,"small-command transport latency exceeded500ms: "+worst+"us");
+            Assert(medium.ReadCounter(0,4)==0 && medium.ReadCounter(1,5)==0,"latency fix must not hide drops");
+        }
+        Console.WriteLine("RADIO_PRODUCTION_PACKETIZATION_LATENCY_PASS");
+    }
     static void Main()
     {
+        var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");
+        if(schedule!=null){PacketizationLatency(schedule);return;}
         Fresh();
         var medium=Medium(burst:4);var machine=new Machine();var guest=new FakeUart(machine);
         var gs=new SedsRadioHostPort(machine);var rrls=new SedsRadioHostPort(machine);

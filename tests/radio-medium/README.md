@@ -127,3 +127,34 @@ UART trace using the actual SDK transmitter, runs the same manifest/decoder
 pipeline, verifies two reconstructed packets, and removes its fixtures. One
 missing argument or any malformed explicit capture fails; it never silently
 skips requested input.
+
+## Packetization latency regression
+
+`tests/test_radio_packetization_latency.py` compiles the production GS UART
+capacity module and feeds its timestamps to this actual model. The raw probes
+are 42 bytes, matching small GS writes in the Pi capture. At 64 kbit/s, the older
+256-byte / 2 ms packetization profile concealed a 5.11-second stall exposed by
+the 3,968-byte / 50 ms idle envelope. The test enforces the same 500 ms deadline,
+complete byte order and zero loss in both profiles. Disabling only the new host
+packet boundary must still fail at 5.11 seconds. It also runs the existing modem
+contracts unchanged.
+
+Set `CSHARP_TEST_DOTNET_IMAGE` to a local .NET 8 SDK image, optionally set `GS_REPO`
+if the GS checkout is not a sibling, and run:
+
+```
+python3 -m unittest discover -s tests -p test_radio_packetization_latency.py
+```
+
+Also set `FIRMWARE_SIM_RENODE_TEST_IMAGE` to run the same production schedule on
+Renode's real clock with named host UARTs. That test enforces the deadline during
+the stream, then checks every delivered byte; console exit status alone is not
+accepted as a pass. The CPU is halted, so this is a modem/host-pacing regression,
+not a complete application-firmware run.
+
+`examples/radio/async-64k-50ms-envelope.json` makes this configuration envelope
+available to the full linked-firmware controller. Its FIFO sizes and idle behavior
+are explicit test assumptions, not verified register values from the active
+three-modem installation. Vendor retries, RF propagation and collision behavior
+remain outside this deterministic model. Keep the original reliable-command and
+receipt gates when using this profile; do not increase deadlines to accept it.
