@@ -1,5 +1,7 @@
 # Linked operational GSE acceptance
 
+Machine-readable run records are kept in the external artifact archive described in [qualification status](qualification-status.md).
+
 Use `Dockerfile.operational-sequences` with a source-only `gs`, `sdk` and `sim`
 context and the SDK verifier/provenance files. The backend is explicitly compiled
 with `test_fire_mode,firmware_sim`, without `hitl_mode` or `testing`. The recipe
@@ -43,7 +45,7 @@ Interrupted or incomplete attempts remain failures, and neither helper tests nor
 an image build alone count as completed linked acceptance.
 
 The source-qualified 2026-10-25 positive run is recorded in
-[`qualification/operational-gse-linked-2026-10-25.json`](qualification/operational-gse-linked-2026-10-25.json).
+`operational-gse-linked-2026-10-25.json` (external archive).
 It runs ordinary policy, reaches Armed using the actual quantized mass cutoff,
 and observes the actual valve-board pilot pulse and actuator GPIO pulse before
 completing all 60 virtual seconds. The controller reads qualification and checklist

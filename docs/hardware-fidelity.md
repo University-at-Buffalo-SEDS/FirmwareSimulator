@@ -1,5 +1,7 @@
 # Hardware fidelity
 
+Machine-readable run records are kept in the external artifact archive described in [qualification status](qualification-status.md).
+
 FirmwareSimulator is a deterministic virtual platform, not a cycle-accurate electrical model. Each run emits a `fidelity` object so CI cannot confuse modeled behavior with hardware certification.
 
 ### Flight Computer sensor acquisition
@@ -181,7 +183,7 @@ control are not modeled. Current board firmware does not enable those modes.
 
 ## Gateway field regression (2026-10-20)
 
-The [hardware baseline](qualification/gateway-hardware-baseline-2026-10-20.json)
+The hardware baseline (`gateway-hardware-baseline-2026-10-20.json`, external archive)
 retains three read-only samples from the exact matched gateway ELF, after the
 DAQ/Pico updates and GroundStation restart. During the 7.18-second interval,
 DAQ CAN ingress advances by 3,688 frames and its ring-drop count by 1,179

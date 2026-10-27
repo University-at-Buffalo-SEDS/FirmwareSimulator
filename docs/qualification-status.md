@@ -1,5 +1,7 @@
 # Qualification status
 
+Generated JSON run records are archived outside the source repositories. The 2026-10-27 workspace archive is `.workspace-progress/qualification-artifact-archive-20261027/FirmwareSimulator/`; `source-manifest.json` records retrieval commits, byte counts and SHA-256 hashes. Record names below identify those archived files, not versioned test inputs.
+
 ## Current checkpoint (2026-10-25)
 
 The working tree in this repository contains the migrated ADC/DMA, bounded
@@ -25,7 +27,7 @@ scheduler is enabled in the RFD firmware.
 ## Earlier field-failure candidate (2026-10-21; historical evidence)
 
 Cohort13 passes the strict 120-second, seven-board real-firmware simulation with
-current GroundStation and SDK sources. The [qualification record](qualification/gateway-cohort13-qualification-2026-10-21.json)
+current GroundStation and SDK sources. The qualification record (`gateway-cohort13-qualification-2026-10-21.json`, external archive)
 retains exact image/source hashes, every measured delivery window and receiver
 states. All gateway CAN-ring samples are zero. Minimum ten-second loadcell
 preservation is99.9585% /99.9568% of actual publications; maximum loadcell gaps are
@@ -44,7 +46,7 @@ relaxed to obtain this result.
 SDK618 hosted tests,49 pressure cases in each packet store,eight no_std cases
 and strict Clippy pass. All seven macOS production factory images fit; the
 macOS backend passes356 tests (one existing ignored). The same frozen firmware and simulator image also pass the 600-second sustained
-gate. Its [complete evidence](qualification/gateway-cohort13-sustained-2026-10-21.json)
+gate. Its complete evidence (`gateway-cohort13-sustained-2026-10-21.json`, external archive)
 shows zero CAN-ring drops, at least 99.9565% actual publication preservation in
 every window, loadcell gaps no longer than 30 ms, and 59 sustained RF rounds at
 40–100 ms. Including startup checks, managed receipts peak at 240 ms. Actual
@@ -73,8 +75,8 @@ address inspection and cheaper bounded scheduling hints. Its full120-second run
 has zero CAN-ring drops, zero allocator/panic faults and loadcell gaps no longer
 than90 ms. It still fails: two of ten source-aware windows fall just below99.5%
 (minimum99.4353%), and the unchanged DAQ image reports13 auxiliary publication
-refusals. [Raw candidate5 evidence](qualification/gateway-receive-candidate5-2026-10-20.json)
-and its [source-aware analysis](qualification/gateway-receive5-source-aware-2026-10-20.json)
+refusals. Raw candidate5 evidence (`gateway-receive-candidate5-2026-10-20.json`, external archive)
+and its source-aware analysis (`gateway-receive5-source-aware-2026-10-20.json`, external archive)
 are retained. No assertion or source rate was relaxed to call this a pass.
 
 The next cohort builds all seven boards and current GroundStation dev with the
@@ -102,8 +104,8 @@ valve voltage/current do not reach the observer, and pressure's gap reaches
 allocator, panic or SD errors. Valve firmware continues accepting1 Hz voltage
 and current publications; gateway network admission failures stop growing after
 startup. This distinguishes the repaired DAQ admission issue from remaining
-forwarding/processing loss. The [raw capture](qualification/gateway-cohort8-capture-2026-10-21.json)
-and [strict analysis](qualification/gateway-cohort8-source-aware-2026-10-21.json)
+forwarding/processing loss. The raw capture (`gateway-cohort8-capture-2026-10-21.json`, external archive)
+and strict analysis (`gateway-cohort8-source-aware-2026-10-21.json`, external archive)
 remain failed evidence.
 
 A separate bounded20 ms PC trace of the unchanged failing cohort samples
@@ -125,7 +127,7 @@ queue uses12,133 of12,288 bytes (TX7,646), with zero allocator-admission refusal
 and about96 KiB free. Candidate10 raises only DAQ's logical queue ceiling to
 16 KiB; the allocator pool, source cadence and zero-refusal gate are unchanged.
 
-A [negative-control RX regression](qualification/gateway-rx-fairness-regression-2026-10-21.json)
+A negative-control RX regression (`gateway-rx-fairness-regression-2026-10-21.json`, external archive)
 also shows that admission fairness alone can retain a slow valve report forever
 while priority16 data keeps priority0 RX work from dispatching. Router and relay
 both fail before the repair. Bounded bulk RX fairness passes on both stores,
@@ -169,7 +171,7 @@ below are retained evidence, not proof these field failures are fixed.
 
 ## SEDSnet 4.2.4 / simulator 0.4.14 (qualified and published, 2026-10-19)
 
-The [network record](qualification/sedsnet-4.2.4-network.json) documents the
+The network record (`sedsnet-4.2.4-network.json`, external archive) documents the
 passing three strict starts, 120-second restart and 600-second mixed-restart
 seven-board run. All 203 printed checks pass. The record includes measured acknowledgement and
 managed-variable delays, stale events, allocation failures and admission refusals. DAQ and FC SD CSV counts, sequences and clocks
@@ -177,7 +179,7 @@ reconcile; accepted-but-buffered rows remain explicit. Physical 12 kHz card
 throughput and power-loss durability are hardware follow-up.
 
 Simulator 0.4.14 passes 103 Rust tests, 31 Python tests and strict lint/formatting.
-The [manual image record](qualification/sedsnet-4.2.4-manual-image.json) records
+The manual image record (`sedsnet-4.2.4-manual-image.json`, external archive) records
 passing native AMD64/ARM64 packaged checks, public publication and anonymous
 pull/run checks. Version0.4.14, its source commit, latest and all four STM32 aliases
 share the same two-platform manifest. The bundled backend uses registry SDK4.2.4
@@ -199,7 +201,7 @@ proofs document the passing startup/restart and 600-second seven-board Ethernet
 run: all20 command ACKs,9 managed updates and no power-freshness or sampled
 allocator/panic/stack/UART-drop faults. I2C transport is excluded by user request.
 
-The [manual container report](qualification/sedsnet-4.2.3-manual-image.json)
+The manual container report (`sedsnet-4.2.3-manual-image.json`, external archive)
 records native AMD64/ARM64 image builds and full packaged test passes, plus
 anonymous registry pull and CLI checks on both hosts. Version0.4.13, latest and
 all STM32 aliases are public and share the same two-platform manifest. No
@@ -1752,12 +1754,12 @@ Cohort12 completes and also fails: 7,232 CAN software drops, with minimum
 loadcell preservation 52.3909% and 30.6823%; valve battery/current gaps reach
 4,250/3,550 ms. Admission refusals stop growing after startup, but the CPU remains
 saturated. First software loss occurs at 1,932 ms during network queue service.
-The [cohort11/12 analyses](qualification/gateway-cohort11-12-source-aware-2026-10-21.json)
+The cohort11/12 analyses (`gateway-cohort11-12-source-aware-2026-10-21.json`, external archive)
 retain both failed runs. No source rate, MCU clock, allocator area or loss gate
 was relaxed.
 
 Cohort13 tests scoped routing-view reuse, direct reserved-type lookup and small
-scheduling-field reads. The [allocation negative control](qualification/gateway-metadata-allocation-regression-2026-10-21.json)
+scheduling-field reads. The allocation negative control (`gateway-metadata-allocation-regression-2026-10-21.json`, external archive)
 records 576 allocations before the field-query fix and zero afterward. Its source
 passes 618 hosted SDK tests,49 pressure tests per store,8 no_std tests, strict
 Clippy, all seven macOS factory builds and356 macOS backend tests (one existing

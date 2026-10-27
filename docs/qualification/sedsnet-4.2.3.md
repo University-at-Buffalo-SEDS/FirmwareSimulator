@@ -1,9 +1,11 @@
 # SEDSnet 4.2.3 linked qualification
 
+Machine-readable run records are kept in the external artifact archive described in [qualification status](../qualification-status.md).
+
 Status: **qualified in the simulator**. SDK `7f1a2ad`, all seven
 `ReleaseBorrowedTopology` MCU images and automatic Ethernet discovery passed
 startup25, service-restart30 and the full 600-second mixed-restart soak.
-The [final summary](sedsnet-4.2.3-borrowed-topology600.json) records all 20 command
+The final summary (`sedsnet-4.2.3-borrowed-topology600.json`, external archive) records all 20 command
 ACKs (maximum 230 ms valve / 60 ms actuator), all nine managed updates within
 260 ms, no power-freshness violations and no sampled allocator, panic, stack or
 UART-drop faults. It includes immutable image/source/ELF and capture hashes.
@@ -26,7 +28,7 @@ The following history records rejected candidates and comparisons; their failure
 are not counted as passes for the final candidate.
 
 Status: the original SDK `986ca72` / `ReleaseCompactFair` TCP cohort passed the
-complete 600-second run. Its [summary](sedsnet-4.2.3-original-tcp600.json) records
+complete 600-second run. Its summary (`sedsnet-4.2.3-original-tcp600.json`, external archive) records
 20 command ACKs (maximum 160 ms VB / 20 ms AB), managed receipts up to 300 ms,
 and no sampled fault/overflow/allocator failures. This used manual Ethernet TCP
 and the earlier gateway UART implementation; it does not qualify later changes.
@@ -308,7 +310,7 @@ unchanged. Inputs are frozen in
 
 ## Sensor-only comparison completion
 
-The [sensor comparison summary](sedsnet-4.2.3-sensor-comparison600.json) records
+The sensor comparison summary (`sedsnet-4.2.3-sensor-comparison600.json`, external archive) records
 a separate600-second pass with SDK986, packed-UART gateway and the transient
 LTC2990 repair:20 command ACKs (VB/AB maximum20ms),9 managed updates maximum250ms,
 no power-freshness errors and no sampled allocation/panic/stack/FIFO faults. It
@@ -337,7 +339,7 @@ Manual container publication completed on2026-10-17 after the user requested
 a manual build because organization Actions is unavailable. No Actions setting
 was changed. Native AMD64 on Jupiter and resource-limited native ARM64 on Ubuntu
 Pi both passed the image-build tests and full packaged MCU/peripheral/watchdog
-suite. The [manual image report](sedsnet-4.2.3-manual-image.json) records source
+suite. The manual image report (`sedsnet-4.2.3-manual-image.json`, external archive) records source
 revisions, image digests, build/test log hashes and anonymous native pull/run checks.
 
 `ghcr.io/university-at-buffalo-seds/firmwaresimulator:v0.4.13`, `latest` and all
