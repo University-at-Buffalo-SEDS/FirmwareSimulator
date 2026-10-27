@@ -240,8 +240,22 @@ def main():
     subprocess.run([sys.executable, str(ROOT / 'scripts/decode-radio-trace.py'), str(evidence / 'radio-trace'),
                     '--output', str(decoded), '--max-clock-backstep-us', '100'], check=True)
     result['wire'] = validate_wire(json.loads(decoded.read_text()), scenario_config['heartbeat_period_ms'])
+    # A live heartbeat does not prove that FC/PB acquisition is reaching GS.
+    # Keep exact source delivery and canonical forwarding as separate gates.
+    freshness = evidence / 'source-freshness.json'
+    subprocess.run([sys.executable, str(ROOT / 'scripts/analyze-radio-freshness.py'),
+                    str(decoded), '--start-ms', '26000', '--end-ms', '39000',
+                    '--output', str(freshness), '--require-source-reports',
+                    '--require-canonical-metadata', '--max-source-latency-ms', '1500',
+                    '--max-canonical-latency-ms', '3000',
+                    '--require-stream', 'FC:IMU_DATA',
+                    '--require-stream', 'FC:BAROMETER_DATA',
+                    '--require-stream', 'PB:BATTERY_VOLTAGE',
+                    '--require-stream', 'PB:BATTERY_CURRENT'], check=True)
+    result['source_freshness'] = str(freshness)
     (evidence / 'fallback-validation.json').write_text(json.dumps(result, indent=2) + '\n')
-    print('PASS: actual radio outage, paired relay fallback and direct restoration; steady commands <=500ms')
+    print('PASS: actual radio outage, paired relay fallback and direct restoration; '
+          'steady commands <=500ms; exact FC/PB source delivery <=1500ms')
 
 
 if __name__ == '__main__':
