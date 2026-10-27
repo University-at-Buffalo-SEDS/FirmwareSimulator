@@ -11,6 +11,36 @@ recovery = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recovery)
 
 class RouteRecoveryTests(unittest.TestCase):
+    def test_policy_qualified_primary_only_keeps_original_bounds(self):
+        topology={"host_nodes":[{"name":"groundstation","env":{"GS_SIM_FLIGHT_STATE_SEQUENCE":"1,0,1","GS_SIM_UNDERGLOW_SEQUENCE":"1,0,1","GS_SIM_FLIGHT_BUZZER_SEQUENCE":"1,0,1"}},{"name":"rrls","env":{"unchanged":"yes"}}],"host_log_assertions":[{"node":"groundstation","contains":"full-bay managed-variable latency within bound","minimum_occurrences":3},{"node":"groundstation","contains":"other gate","minimum_occurrences":1}]}
+        recovery.configure_policy_qualified_controls(topology)
+        env=topology["host_nodes"][0]["env"]
+        for name in ["GS_SIM_POLICY_CORRECT_CONTROLS","GS_SIM_TRACE_API_REQUESTS","SEDSNET_TRACE_RELIABLE"]:self.assertEqual(env[name],"1")
+        self.assertEqual(env["GS_FLIGHT_STATE_DEFAULT"],"0")
+        self.assertEqual(env["GS_SIM_MANAGED_VARIABLE_MAX_LATENCY_MS"],"500")
+        self.assertEqual(env["GS_SIM_FLIGHT_STATE_SEQUENCE"],"1,0,1")
+        self.assertEqual(topology["host_nodes"][1]["env"],{"unchanged":"yes"})
+        self.assertEqual(topology["host_log_assertions"][0]["minimum_occurrences"],3)
+        self.assertEqual(topology["host_log_assertions"][1]["contains"],"other gate")
+        with self.assertRaises(ValueError):recovery.configure_policy_qualified_controls({})
+
+    def test_policy_failed_missing_trace_still_writes_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result=recovery.audit_policy_evidence(directory)
+            self.assertFalse(result["passed"])
+            self.assertEqual(json.loads((Path(directory)/"policy-all-owner-audit.json").read_text())["passed"],False)
+
+    def test_policy_audit_required_before_pass_preserves_original_failure(self):
+        import subprocess
+        failed=subprocess.CalledProcessError(7,["simulation"])
+        for result in [{"passed":True},{"passed":False}]:
+            with mock.patch.object(recovery,"audit_policy_evidence",return_value=result):
+                self.assertIs(recovery.policy_validation_failure("unused",failed),failed)
+                self.assertEqual(recovery.policy_validation_failure("unused",None) is None,result["passed"])
+        with mock.patch.object(recovery,"audit_policy_evidence",side_effect=OSError("trace unreadable")):
+            self.assertIs(recovery.policy_validation_failure("unused",failed),failed)
+            self.assertIsInstance(recovery.policy_validation_failure("unused",None),OSError)
+
     def test_pressure_sd_gate_requires_full_rate_and_no_drops(self):
         for board,probe in [("ValveBoard26","pressure_sd_publish_drops"),("DAQ-Board","pressure_sd_dropped")]:
             layout={}

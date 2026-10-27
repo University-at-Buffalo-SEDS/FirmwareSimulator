@@ -154,6 +154,44 @@ def validate_fill_evidence(directory, duration_ms):
         raise RuntimeError('Source-aware fill delivery failed; see source-aware-delivery.json')
     return result
 
+def configure_policy_qualified_controls(topology):
+    """Policy-correct controls; per-ID ALL-owner audit remains mandatory."""
+    primary=[h for h in topology.get("host_nodes",[]) if h["name"]=="groundstation"]
+    if len(primary)!=1:raise ValueError("policy qualification requires exactly one primary GroundStation")
+    primary[0].setdefault("env",{}).update(GS_SIM_POLICY_CORRECT_CONTROLS="1",
+        GS_SIM_TRACE_API_REQUESTS="1",SEDSNET_TRACE_RELIABLE="1",
+        GS_FLIGHT_STATE_DEFAULT="0",GS_SIM_MANAGED_VARIABLE_MAX_LATENCY_MS="500")
+    for check in topology.get("host_log_assertions",[]):
+        if check.get("node")=="groundstation" and check.get("contains")=="full-bay managed-variable latency within bound":
+            check["contains"]="full-bay qualified round "
+            check["name"]="Controlled rounds globally settled; mandatory per-ID500ms ALL-owner audit follows"
+
+
+def audit_policy_evidence(directory):
+    """Always save failed/missing evidence; never treat a pending-table drain as ACK proof."""
+    spec=importlib.util.spec_from_file_location("obligation_audit",Path(__file__).with_name("audit_obligations.py"))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
+    try:
+        result=module.audit((directory/"groundstation-host.log").read_text().splitlines(),500,3)
+    except Exception as error:
+        result={"passed":False,"limit_ms":500,"errors":["Missing/invalid primary API+SDK trace: "+str(error)]}
+    (directory/"policy-all-owner-audit.json").write_text(json.dumps(result,indent=2)+"\n")
+    return result
+
+
+def policy_validation_failure(directory, original_failure):
+    try:
+        audit=audit_policy_evidence(directory)
+        if audit["passed"]:return original_failure
+        print("FAIL: policy per-ID500ms ALL-owner audit; see policy-all-owner-audit.json",flush=True)
+        return original_failure if original_failure is not None else RuntimeError(
+            "Policy-qualified controls lack complete within500ms ALL-owner receipts")
+    except Exception as error:
+        # Never replace a failed/timeout simulation with an audit implementation error.
+        return original_failure if original_failure is not None else error
+
+
 RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
 
 def configure_evidence_capture(command, directory):
@@ -450,7 +488,11 @@ def main():
         help="retain bounded passive UART traces through this virtual time; requires profile/evidence-dir")
     parser.add_argument("--host-heartbeat-period-ms", type=int,
         help="explicit hosted heartbeat period for finite-radio traffic qualification;100..60000ms")
+    parser.add_argument("--policy-qualified-controls",action="store_true",
+        help="policy-correct normal/HITL controls with mandatory per-ID500ms ALL-owner receipt audit; requires --evidence-dir")
     args = parser.parse_args()
+    if args.policy_qualified_controls and args.evidence_dir is None:
+        parser.error("--policy-qualified-controls requires --evidence-dir")
     if args.radio_rrls and not args.radio_profile:
         parser.error("--radio-rrls requires --radio-profile")
     if args.host_heartbeat_period_ms is not None and (
@@ -544,6 +586,8 @@ def main():
         if args.host_heartbeat_period_ms is not None:
             from radio_profile import configure_host_heartbeat
             configure_host_heartbeat(topology, args.host_heartbeat_period_ms)
+        if args.policy_qualified_controls:
+            configure_policy_qualified_controls(topology)
         topology_path.write_text(json.dumps(topology, indent=2))
         if args.disconnect_node:
             configure_fault(directory, args.disconnect_node)
@@ -575,6 +619,7 @@ def main():
         command[2:2] = ["--name", container]
         started = time.monotonic()
         process = subprocess.Popen(command)
+        failure = None
         try:
             while True:
                 try:
@@ -589,10 +634,16 @@ def main():
                     print(f"[SIM] {label}: {elapsed:.0f}s elapsed", flush=True)
                     if elapsed >= args.timeout:
                         raise TimeoutError("Simulation deadline exceeded; NOT a pass")
+        except BaseException as error:
+            failure = error
         finally:
             if process.poll() is None:
                 subprocess.run([command[0], "stop", "--time", "5", container], check=False)
                 process.wait(timeout=20)
+        if args.policy_qualified_controls:
+            failure = policy_validation_failure(args.evidence_dir, failure)
+        if failure is not None:
+            raise failure
     suite.run_live = run
     class UI:
         @staticmethod
