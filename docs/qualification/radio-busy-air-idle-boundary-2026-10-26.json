@@ -1,0 +1,38 @@
+{
+  "status": "emulator_contract_fixed_hardware_unqualified",
+  "scope": "Per-sender UART idle-cutoff envelope semantics, independent of shared airtime arbitration. No proprietary RFD/SiK packetizer claim; installed modem firmware/configuration unread.",
+  "model_sha256": "18ef7d1036e70e3772ed2eef74073d5fbed6d58d33ac6e6700c7a2a8cf29cf5b",
+  "failure": "Tick previously checked idle completion only when shared air became available. A later UART write while another sender owned air erased the earlier completed idle boundary.",
+  "fix": "Bounded per-ingress packet length/time descriptors preserve max-burst and idle boundaries while payload retains one existing FIFO owner. Every descriptor owns at least one accepted byte, so descriptor count is bounded by TX FIFO capacity; active bytes remain charged until air completion.",
+  "negative": {
+    "test": "Two senders: A owns long airtime; B sends4bytes, idles, then sends4more before A finishes. First B packet must complete without merging later bytes.",
+    "old_result": "FAIL: busy air erased an already completed UART idle packet boundary",
+    "log": "/tmp/radio-idle-latch-before-20261026.log"
+  },
+  "validation": {
+    "two_sender_cutoffs_us": [
+      10000,
+      50000
+    ],
+    "existing_modem_contracts": "PASS: finite active TX ownership, RX overflow, byte ordering, detach/reconnect identities, airtime/fairness and trace bounds",
+    "production_packetization": "PASS192 short probes; worst17.2ms at2ms idle and173.7ms at50ms idle",
+    "actual_renode_clock": "PASS existing production host-pacing contract",
+    "disabled_host_boundary_negative": "PASS expected failure5110ms remains",
+    "log": "/tmp/radio-idle-latch-packetization-20261026.log"
+  },
+  "unchanged": [
+    "air rate",
+    "UART rate",
+    "maxBurst",
+    "FIFO budgets and refusal/drop accounting",
+    "source rates",
+    "host pacing",
+    "500ms command gate",
+    "1500ms source gate",
+    "3000ms canonical gate"
+  ],
+  "limitations": [
+    "Full integrated campaign remains separate and must retain unchanged gates.",
+    "This model correction does not establish that physical modem configuration or hardware latency is fixed."
+  ]
+}

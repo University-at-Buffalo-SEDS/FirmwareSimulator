@@ -263,7 +263,21 @@ namespace Antmicro.Renode.Peripherals.UART
                 // 8N1 before air admission. Guest UARTs are already paced; this
                 // adds at most one character of pipeline latency, not a second
                 // serialization rate or an unbounded staging allocation.
-                n.InputReady = Math.Max(now, n.InputReady) + UartByteUs;
+                var inputStart = Math.Max(now, n.InputReady);
+                n.InputReady = inputStart + UartByteUs;
+                // UART packet boundaries belong to each modem's ingress,
+                // independently of which modem currently owns airtime. Retain
+                // a completed idle gap even if a later write arrives before
+                // this station gets its next turn. Only lengths/times are
+                // staged here; payload bytes retain their single FIFO owner.
+                if(n.PacketTail == null || n.PacketTail.Count == maxBurst
+                    || inputStart >= n.PacketTail.LastReadyUs + idleUs)
+                {
+                    n.PacketTail = new TxPacket();
+                    n.Packets.Enqueue(n.PacketTail);
+                }
+                n.PacketTail.Count++;
+                n.PacketTail.LastReadyUs = n.InputReady;
                 n.Tx.Enqueue(new TimedByte(value, n.InputReady));
                 n.PendingTx++;
                 n.PeakTx = Math.Max(n.PeakTx, (ulong)n.PendingTx);
@@ -314,14 +328,13 @@ namespace Antmicro.Renode.Peripherals.UART
                     {
                         var i = (cursor + step) % MaxNodes;
                         var n = nodes[i];
-                        if(n == null || n.Tx.Count == 0) continue;
-                        var ready = 0;
-                        foreach(var value in n.Tx)
-                        {
-                            if(value.ReadyUs > now || ready == maxBurst) break;
-                            ready++;
-                        }
-                        if(ready == 0 || (ready < maxBurst && now < n.InputReady + idleUs)) continue;
+                        if(n == null || n.Packets.Count == 0) continue;
+                        var packet = n.Packets.Peek();
+                        if(now < packet.LastReadyUs
+                            || (packet.Count < maxBurst && now < packet.LastReadyUs + idleUs)) continue;
+                        n.Packets.Dequeue();
+                        if(n.PacketTail == packet) n.PacketTail = null;
+                        var ready = packet.Count;
                         var bytes = new byte[ready];
                         for(var j = 0; j < ready; j++) bytes[j] = n.Tx.Dequeue().Value;
                         var bits = (ulong)ready * 8 + overheadBits;
@@ -368,10 +381,15 @@ namespace Antmicro.Renode.Peripherals.UART
             public TracePair Trace;
             public bool Host;
             public readonly Queue<TimedByte> Tx = new Queue<TimedByte>();
+            // At least one accepted FIFO byte owns every descriptor; the TX
+            // FIFO limit also bounds this metadata, including while air busy.
+            public readonly Queue<TxPacket> Packets = new Queue<TxPacket>();
+            public TxPacket PacketTail;
             public readonly Queue<TimedByte> Rx = new Queue<TimedByte>();
             public int PendingTx;
             public ulong InputReady, OutputReady, PeakTx, PeakRx, RefusedTx, DroppedRx, LostLink, AirTx, Delivered;
         }
+        private sealed class TxPacket { public int Count; public ulong LastReadyUs; }
         private sealed class Burst { public int Sender; public byte[] Bytes; public ulong Bits, EndUs; public Node[] Recipients; }
         private struct Delivery
         {

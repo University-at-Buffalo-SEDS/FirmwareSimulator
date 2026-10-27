@@ -8,6 +8,16 @@ observable receive overflow, saturated aggregate airtime and sender fairness.
 It contains no SDT decoder, so it cannot accidentally grant application frames
 atomic delivery across radio bursts.
 
+The declared idle-cutoff envelope seals each sender's serialized UART packet
+independently of airtime arbitration. A later write after an idle gap cannot
+reopen an earlier packet while another sender owns the air. The two-sender
+regression checks both 10 ms and 50 ms cutoffs, ordered delivery and retained
+FIFO ownership. Packet descriptors contain lengths/times only and are bounded
+by accepted FIFO bytes; payload bytes are not copied into another queue.
+This is a contract of this emulator envelope, not evidence that the active
+RFD firmware uses idle-delimited packetization. Hardware configuration and
+proprietary framing remain unqualified.
+
 
 Delayed target-time-domain delivery is explicitly deferred by the .NET fixture.
 The detach cases cover replacement UARTs at the same index, reattaching the same

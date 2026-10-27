@@ -61,6 +61,34 @@ class Program
     {
         var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");
         if(schedule!=null){PacketizationLatency(schedule);return;}
+        // An idle-delimited UART packet stays complete while another modem
+        // owns the air. A later UART write cannot reopen that packet.
+        foreach(var packetIdle in new ulong[]{10000,50000})
+        {
+            Fresh();
+            var occupiedMachine=new Machine();
+            var senderA=new SedsRadioHostPort(occupiedMachine);
+            var senderB=new SedsRadioHostPort(occupiedMachine);
+            var idleMedium=Medium(rate:1000,tx:32,rx:32,burst:32,idle:packetIdle);
+            idleMedium.AttachHost(0,senderA);idleMedium.AttachHost(1,senderB);
+            var receivedB=new List<byte>();senderA.CharReceived+=receivedB.Add;
+            for(byte b=0;b<20;b++)senderA.WriteChar(b);
+            Advance(packetIdle+10000); // A owns air for160ms after its packet seals.
+            foreach(var b in new byte[]{101,102,103,104})senderB.WriteChar(b);
+            Advance(packetIdle+90000); // B completed its idle gap while A still owns air.
+            foreach(var b in new byte[]{105,106,107,108})senderB.WriteChar(b);
+            Advance(packetIdle+200000);
+            Assert(receivedB.SequenceEqual(new byte[]{101,102,103,104}),
+                "busy air erased an already completed UART idle packet boundary");
+            Assert(idleMedium.ReadCounter(1,0)==4 && idleMedium.ReadCounter(1,7)==4,
+                "latched idle packet lost finite ownership of later bytes");
+            Advance(packetIdle+250000);
+            Assert(receivedB.SequenceEqual(new byte[]{101,102,103,104,105,106,107,108}),
+                "latched idle packets changed byte order or dropped payload");
+            Assert(idleMedium.ReadCounter(1,0)==0 && idleMedium.ReadCounter(1,4)==0,
+                "latched idle packets changed FIFO admission accounting");
+            Console.WriteLine("RADIO_BUSY_AIR_IDLE_BOUNDARY_PASS");
+        }
         Fresh();
         var medium=Medium(burst:4);var machine=new Machine();var guest=new FakeUart(machine);
         var gs=new SedsRadioHostPort(machine);var rrls=new SedsRadioHostPort(machine);
