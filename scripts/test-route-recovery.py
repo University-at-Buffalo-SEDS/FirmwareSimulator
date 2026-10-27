@@ -83,9 +83,12 @@ def configure_hardware_fill_profile(directory, topology):
 def configure_hardware_fill_probes(layout, board):
     if board == 'DAQ-Board':
         probes=layout.setdefault('execution',{}).setdefault('memory_probes',[])
-        probes.append(dict(name='publication_failure_snapshot_words',symbol='g_telemetry_alloc_failure_stack_words'))
+        existing={p['name'] for p in probes}
+        if 'publication_failure_snapshot_words' not in existing:
+            probes.append(dict(name='publication_failure_snapshot_words',symbol='g_telemetry_alloc_failure_stack_words'))
         for index,name in [(1,'queue_budget'),(2,'shared_bytes'),(3,'rx_bytes'),(4,'tx_bytes'),(5,'queue_storage_bytes'),(7,'discovery_bytes'),(8,'schema_bytes'),(16,'result'),(17,'type'),(18,'tick'),(19,'element_count'),(20,'admission_rejections')]:
-            probes.append(dict(name='publication_failure_'+name,symbol='g_telemetry_alloc_failure_stack',byte_offset=4*index))
+            if 'publication_failure_'+name not in existing:
+                probes.append(dict(name='publication_failure_'+name,symbol='g_telemetry_alloc_failure_stack',byte_offset=4*index))
         return
     if board not in ('gateway-board26','gateway-board'):
         return

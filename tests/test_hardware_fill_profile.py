@@ -67,6 +67,18 @@ class HardwareFillProfileTests(unittest.TestCase):
   self.assertEqual(probes['publication_failure_admission_rejections']['byte_offset'],80)
   self.assertNotIn('minimum',probes['publication_failure_snapshot_words'])
 
+ def test_existing_daq_diagnostics_are_not_sampled_twice(self):
+  original=dict(name='publication_failure_snapshot_words',symbol='g_telemetry_alloc_failure_stack_words')
+  layout={'execution':{'memory_probes':[original,dict(name='analog_publish_failures',symbol='g_sim_analog_publish_failures',maximum=0)]}}
+  recovery.configure_hardware_fill_probes(layout,'DAQ-Board')
+  once=json.loads(json.dumps(layout))
+  recovery.configure_hardware_fill_probes(layout,'DAQ-Board')
+  self.assertEqual(layout,once)
+  names=[p['name'] for p in layout['execution']['memory_probes']]
+  self.assertEqual(len(names),len(set(names)))
+  self.assertIn(original,layout['execution']['memory_probes'])
+  self.assertEqual(layout['execution']['memory_probes'][1]['maximum'],0)
+
  def test_radio_control_probe_spans_entire_soak_and_rejects_missing_late_receipts(self):
   with tempfile.TemporaryDirectory() as tmp:
    for duration in [120000,600000]:
