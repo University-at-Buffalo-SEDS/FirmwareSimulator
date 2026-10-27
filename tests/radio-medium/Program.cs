@@ -54,6 +54,12 @@ class Program
             Console.WriteLine($"RADIO_PACKETIZATION_MEASURED burst={setting.Burst} idle_us={setting.Idle} probes={times.Length} worst_us={worst} peak_tx={medium.ReadCounter(0,2)}");
             Assert(worst<500000,"small-command transport latency exceeded500ms: "+worst+"us");
             Assert(medium.ReadCounter(0,4)==0 && medium.ReadCounter(1,5)==0,"latency fix must not hide drops");
+            if(Environment.GetEnvironmentVariable("RADIO_INTERACTIVE_PACKETIZATION") == "1")
+            {
+                var interactiveLatency=deliveredAt[3]-times[3]*1000;
+                Console.WriteLine($"RADIO_INTERACTIVE_PACKETIZATION idle_us={setting.Idle} sent_us={times[3]*1000} received_us={deliveredAt[3]} latency_us={interactiveLatency}");
+                Assert(interactiveLatency<=100000,"critical per-hop packetization exceeded100ms: "+interactiveLatency+"us");
+            }
         }
         Console.WriteLine("RADIO_PRODUCTION_PACKETIZATION_LATENCY_PASS");
     }
