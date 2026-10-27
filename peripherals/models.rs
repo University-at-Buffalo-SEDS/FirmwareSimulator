@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
 /// Geographic fix emitted by an instruction-coupled GPS model.

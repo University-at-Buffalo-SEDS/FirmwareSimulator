@@ -1,0 +1,58 @@
+{
+  "scope": "Simulator source checks and formatting normalization only; no radio model/rate change",
+  "base_commit": "4061143",
+  "rust_tests": {
+    "command": "cargo test --locked --all-targets",
+    "summaries": [
+      {
+        "passed": 102,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "log_sha256": "2b38274e255aadc0b3edbe734c021ad9080de7f56ac3b3cad411db78f7f73c03"
+  },
+  "format": "cargo fmt and cargo fmt --check PASS; three existing files normalized for edition2021 import/assert formatting, no executable behavior change",
+  "clippy": {
+    "command": "cargo clippy --locked --all-targets -- -D warnings",
+    "result": "PASS",
+    "log_sha256": "da6ba1022a92d0a283965acb673f8a94f99db64cd4a10bdf72fc8a671de6355b"
+  },
+  "clock_regression": "Production SedsSimulationClock tested with actual Renode:3ms snapshot,pause,board reset+2ms=>5. Clock source unchanged by formatting.",
+  "source_publication": "Publish source on a fix branch only; main/dev push triggers automatic GHCR image publication, so do not update those refs or tags without separate release scope."
+}

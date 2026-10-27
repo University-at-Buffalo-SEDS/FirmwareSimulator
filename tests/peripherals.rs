@@ -1,4 +1,4 @@
-use firmware_sim::peripherals::{PeripheralSpec, exercise_all};
+use firmware_sim::peripherals::{exercise_all, PeripheralSpec};
 
 #[test]
 fn devices_survive_fault_and_disconnect_behaviors() {

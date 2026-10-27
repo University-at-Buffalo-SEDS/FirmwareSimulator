@@ -1,5 +1,5 @@
 use crate::{core::ArchitectureKind, layout::BoardLayout};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::{
     env, fs,
@@ -1490,10 +1490,10 @@ fn tail(value: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionArtifacts, ExecutionScenario, marker_csv, marker_u64, materialize_platform,
-        observed_marker_after, parse_memory_profile, render_board_initialization_script,
-        render_ota_script, render_peripheral_overlay, render_script, render_security_script,
-        sustained_end_drop,
+        marker_csv, marker_u64, materialize_platform, observed_marker_after, parse_memory_profile,
+        render_board_initialization_script, render_ota_script, render_peripheral_overlay,
+        render_script, render_security_script, sustained_end_drop, ExecutionArtifacts,
+        ExecutionScenario,
     };
     use crate::{
         core::ArchitectureKind,
@@ -1564,10 +1564,8 @@ mod tests {
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("flashBacking: Memory.MappedMemory @ sysbus 0x08000000"));
         assert!(overlay.contains("physicalFlash: MTD.SedsStm32FlashController"));
-        assert!(
-            include_str!("../renode/peripherals/SedsStm32Flash.cs")
-                .contains("mcu == \"stm32g4\" && flash.Size / eraseSize > 128")
-        );
+        assert!(include_str!("../renode/peripherals/SedsStm32Flash.cs")
+            .contains("mcu == \"stm32g4\" && flash.Size / eraseSize > 128"));
         assert!(overlay.contains("physicalRam0: Memory.MappedMemory @ sysbus 0x20000000"));
         assert!(overlay.contains("size: 0x1c000"));
         assert!(overlay.contains("SedsNeoM9N @ spi1"));
@@ -1625,10 +1623,8 @@ mod tests {
         assert!(overlay.contains("SedsMcp3564r @ spi2"));
         assert!(overlay.contains("externalChipSelect: true"));
         assert!(overlay.contains("28 -> layoutDevice0@0"));
-        assert!(
-            include_str!("../renode/peripherals/SedsSpiSensors.cs")
-                .contains("public sealed class SedsMcp3564r")
-        );
+        assert!(include_str!("../renode/peripherals/SedsSpiSensors.cs")
+            .contains("public sealed class SedsMcp3564r"));
         assert!(
             include_str!("../renode/peripherals/SedsStm32Adc.cs").contains("value &= ~(1u << 2)")
         );
@@ -1671,17 +1667,13 @@ mod tests {
             "stm32g4",
             r#"[{"type":"gps","name":"gps","model":"neo_m9n","bus":"spi1"}]"#,
         );
-        assert!(
-            !render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath:")
-        );
+        assert!(!render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath:"));
         board.peripherals[0].stimulus_path = Some("/diagnostics/gps.fix".into());
-        assert!(
-            render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath: \"/diagnostics/gps.fix\"")
-        );
+        assert!(render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath: \"/diagnostics/gps.fix\""));
         board.peripherals[0].stimulus_path = Some("/etc/gps.fix".into());
         assert!(render_peripheral_overlay(&board).is_err());
     }
@@ -1701,17 +1693,13 @@ mod tests {
             "stm32u5",
             r#"[{"type":"adc","name":"loadcell","model":"mcp3564r","bus":"spi2","bits":24}]"#,
         );
-        assert!(
-            !render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath:")
-        );
+        assert!(!render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath:"));
         board.peripherals[0].stimulus_path = Some("/diagnostics/sequence/loadcell.raw".into());
-        assert!(
-            render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath: \"/diagnostics/sequence/loadcell.raw\"")
-        );
+        assert!(render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath: \"/diagnostics/sequence/loadcell.raw\""));
     }
 
     #[test]
@@ -1720,17 +1708,13 @@ mod tests {
             "stm32g4",
             r#"[{"type":"adc","name":"pressure","model":"stm32_adc","bus":"adc3","bits":12,"channels":1,"channel_samples":[0]}]"#,
         );
-        assert!(
-            !render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath:")
-        );
+        assert!(!render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath:"));
         board.peripherals[0].stimulus_path = Some("/diagnostics/sequence/pressure.raw".into());
-        assert!(
-            render_peripheral_overlay(&board)
-                .unwrap()
-                .contains("stimulusPath: \"/diagnostics/sequence/pressure.raw\"")
-        );
+        assert!(render_peripheral_overlay(&board)
+            .unwrap()
+            .contains("stimulusPath: \"/diagnostics/sequence/pressure.raw\""));
         for path in [
             "/etc/private",
             "relative.raw",
@@ -1842,10 +1826,8 @@ mod tests {
         assert!(firmware.contains("cpu SetRegister 13 0x2001bff0"));
         assert!(firmware.contains("cpu PC 0x08004001"));
         assert!(firmware.contains("cpu VectorTableOffset 0x08004200"));
-        assert!(
-            firmware
-                .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true")
-        );
+        assert!(firmware
+            .contains("cpu CreateExecutionTracing \"seds-execution\" \"trace.bin\" PC true"));
         assert!(firmware.contains("cpu LogFunctionNames true true"));
         assert!(script.contains("cpu GetRegister 14\nmach clear\nmach create \"test_factory\""));
         let factory = script.split("_factory\"").nth(1).unwrap();
