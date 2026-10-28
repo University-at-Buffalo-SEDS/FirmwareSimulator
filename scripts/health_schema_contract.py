@@ -19,6 +19,8 @@ def validate_schemas(paths):
                 raise ValueError(f"{path}: missing {name}")
             if definition.get("reliable") != "Unordered":
                 raise ValueError(f"{path}: {name} must use Unordered on every peer; mixed metadata can revert delivery policy during discovery")
+            if definition.get("priority", 0) != 0:
+                raise ValueError(f"{path}: {name} must retain telemetry priority 0 on every peer")
             if definition.get("element") != {"kind": "Static", "data_type": "Float32", "count": 1}:
                 raise ValueError(f"{path}: {name} must remain one Float32 sample")
     return {"passed": True, "schemas": len(paths), "health_types": list(HEALTH_TYPES)}

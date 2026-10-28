@@ -39,3 +39,7 @@ class HealthSchemaContractTests(unittest.TestCase):
             self.check(lambda schema: schema['types'].pop())
         with self.assertRaisesRegex(ValueError, 'one Float32'):
             self.check(lambda schema: schema['types'][0]['element'].update(count=4))
+
+    def test_peer_cannot_promote_health_reports_into_interactive_control_band(self):
+        with self.assertRaisesRegex(ValueError, 'telemetry priority 0'):
+            self.check(lambda schema: schema['types'][0].update(priority=254))
