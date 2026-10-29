@@ -175,6 +175,32 @@ class RouteRecoveryTests(unittest.TestCase):
                 else:
                     self.assertEqual(actual["assertions"], checks)
 
+    def test_rrls_restart_without_paired_radio_fails_before_launch(self):
+        import contextlib
+        import io
+        import sys
+        args = ["test-route-recovery.py", "--workspace", "/unused", "--image", "unused",
+                "--restart-regression", "--restart-nodes", "rrls"]
+        with mock.patch.object(sys, "argv", args), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaises(SystemExit) as failure:
+                recovery.main()
+        self.assertEqual(failure.exception.code, 2)
+        self.assertIn("RRLS restart requires --radio-rrls", stderr.getvalue())
+
+    def test_rrls_process_restart_preserves_primary_and_all_command_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checks = [dict(name="Every command returns state", minimum_occurrences=20),
+                      dict(name="GroundStation discovered every board by autonomous name", minimum_occurrences=1)]
+            original = dict(sample_count=12, host_log_assertions=checks,
+                            assertions=[dict(name="unchanged latency", maximum=500)])
+            (root / "topology.json").write_text(json.dumps(original))
+            recovery.configure_restarts(root, ["rrls"], [4, 8])
+            actual = json.loads((root / "topology.json").read_text())
+            self.assertEqual(actual["reboots"], [dict(node="rrls", after_sample=s) for s in (4, 8)])
+            self.assertEqual(actual["host_log_assertions"], checks)
+            self.assertEqual(actual["assertions"], original["assertions"])
+
     def test_host_only_restarts_keep_boards_powered_and_require_each_rediscovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

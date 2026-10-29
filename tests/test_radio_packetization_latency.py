@@ -22,13 +22,11 @@ class RadioPacketizationLatency(unittest.TestCase):
     def test_production_host_pacing_bounds_small_command_packetization(self):
         capacity = GS_ROOT / 'backend/src/comms/rfd_capacity.rs'
         self.assertTrue(capacity.is_file(), 'GS_REPO must point to the production backend')
-        wire_limit = re.search(
-            r'pub\(crate\) const RADIO_COMMAND_BATCH_MAX_BYTES: usize = [^;]+;',
-            (GS_ROOT / 'backend/src/comms.rs').read_text())
-        self.assertIsNotNone(wire_limit, 'production radio batch limit is required')
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
-            rust = wire_limit.group() + '\n#[path = ' + json.dumps(str(capacity)) + '] mod capacity;\n' + r'''
+            declaration = re.search(r'pub\(crate\) const RADIO_COMMAND_BATCH_MAX_BYTES: usize = \d+;', (GS_ROOT / 'backend/src/comms.rs').read_text())
+            self.assertIsNotNone(declaration, 'Load the actual production parent packet limit')
+            rust = declaration.group(0) + '\n#[path = ' + json.dumps(str(capacity)) + '] mod capacity;\n' + r'''
 fn main() {
     let mut gate = capacity::Capacity::from_env(115_200);
     let wall = std::time::Instant::now();
@@ -43,8 +41,9 @@ fn main() {
 }
 '''
             (fixture / 'schedule.rs').write_text(rust)
-            subprocess.run(['rustc', '--edition=2024', str(fixture / 'schedule.rs'),
-                            '-o', str(fixture / 'schedule')], check=True, capture_output=True)
+            compiled = subprocess.run(['rustc', '--edition=2024', str(fixture / 'schedule.rs'),
+                            '-o', str(fixture / 'schedule')], text=True, capture_output=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
             # Child-only environment: no shared process/global configuration races.
             env = {key: value for key, value in os.environ.items()
                    if not key.startswith('GS_RADIO_') and not key.startswith('GS_RRLS_')}

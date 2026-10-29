@@ -1,11 +1,12 @@
 """Exercise the real G4 SPI model with Cube's packed five-byte transfer."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
-@unittest.skipUnless(shutil.which('mcs') and shutil.which('mono'),'Mono compiler/runtime required')
+@unittest.skipUnless((shutil.which('mcs') and shutil.which('mono')) or os.environ.get('CSHARP_TEST_DOTNET_IMAGE'),'Mono or explicitly selected local .NET image required')
 class G4SpiPackingTests(unittest.TestCase):
     def test_hal_halfword_fifo_threshold_and_odd_tail(self):
         source=(ROOT/'renode/peripherals/SedsStm32G4Spi.cs').read_text()
@@ -59,5 +60,11 @@ class Program {
         with tempfile.TemporaryDirectory() as tmp:
             # Keep model using directives before the stub type declarations.
             path=Path(tmp)/'spi.cs';path.write_text('using System;\n'+source+stubs.replace('using System;','',1));exe=Path(tmp)/'spi.exe'
-            subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True)
-            subprocess.run(['mono',str(exe)],check=True)
+            image=os.environ.get('CSHARP_TEST_DOTNET_IMAGE')
+            if image:
+                (Path(tmp)/'contract.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup><ItemGroup><Compile Include="spi.cs"/></ItemGroup></Project>')
+                result=subprocess.run(['docker','run','--rm','--network=none','--user',str(os.getuid())+':'+str(os.getgid()),'--env','HOME=/tmp','--env','DOTNET_CLI_HOME=/tmp','--mount','type=bind,source='+tmp+',target=/fixture','--workdir','/fixture','--entrypoint','dotnet',image,'run','--project','contract.csproj'],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            else:
+                subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True)
+                subprocess.run(['mono',str(exe)],check=True)

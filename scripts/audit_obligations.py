@@ -59,7 +59,7 @@ def verified_bootstrap(events, requests, bindings, results, returned, errors):
             errors.append('bootstrap cache binding lacks matching successful real API submission')
     return set(by_id) if len(errors)==initial_errors else set()
 
-def audit(lines,limit=500,expect_rounds=0):
+def _audit_one_process(lines,limit=500,expect_rounds=0):
     requests={};bindings={};accepted={};errors=[];results={};returned={};settles=[];scope=None;bootstrap=[]
     for index,line in enumerate(lines):
         if BOOT in line:
@@ -151,5 +151,49 @@ def audit(lines,limit=500,expect_rounds=0):
         if any(row.get('controlled_round') is not None and not 1<=row['controlled_round']<=expect_rounds for row in covered_rows.values()):errors.append('unexpected controlled round')
     if not covered_rows:errors.append('no accepted managed obligations observed')
     return {'passed':not errors,'limit_ms':limit,'obligations':list(covered_rows.values()),'excluded_obligations':excluded_rows,'bootstrap_cache_initializations':[{'packet_id':pid,'meaning':'LOCAL_CACHE_PRIMED; remote delivery not proven'}for pid in sorted(boot_ids) if pid not in covered_rows],'bootstrap_lifecycle':bootstrap,'runtime_type_scope':scope,'errors':errors,'global_settling_and_legacy_round_observations':settles,'scope':'Every accepted managed-family publication, including unexpected/background IDs: actual API clock to ALL owner receipts within500ms. Typed FLIGHT/VALVE/ACTUATOR commands explicitly retain original independent gates; no500ms per-packet claim for them. Unknown types or unbound managed IDs fail; no UART origin substitution.'}
+def audit(lines,limit=500,expect_rounds=0):
+    lines=list(lines)
+    scopes=[(i,json.loads(line.split(SCOPE,1)[1])) for i,line in enumerate(lines) if SCOPE in line]
+    if not scopes or (len(scopes)==1 and 'process_id' not in scopes[0][1]):
+        return _audit_one_process(lines,limit,expect_rounds)
+    starts=[0]+[i for i,_ in scopes[1:]]
+    ends=[i for i,_ in scopes[1:]]+[len(lines)]
+    results=[];errors=[];seen=set();previous_start=None;processes=[]
+    for index,((_,scope),begin,end) in enumerate(zip(scopes,starts,ends)):
+        pid=scope.get('process_id');started=scope.get('process_started_ms')
+        valid_pid=type(pid)is int and 0<pid<=0xffffffff
+        valid_start=type(started)is int and started>=0
+        if not valid_pid or not valid_start:
+            errors.append(f'process {index}: missing/invalid actual process identity and model start clock')
+        if valid_pid:
+            if pid in seen:errors.append(f'process {index}: duplicate process_id {pid}')
+            seen.add(pid)
+        if valid_start:
+            if previous_start is not None and started<previous_start:
+                errors.append(f'process {index}: process model clock reversed')
+            previous_start=started
+            for line in lines[begin:end]:
+                for marker in (REQ,BOOT):
+                    if marker not in line:continue
+                    event=json.loads(line.split(marker,1)[1])
+                    for key in ('request_ms','submit_ms','at_ms'):
+                        value=event.get(key)
+                        if type(value)is int and value<started:
+                            errors.append(f'process {index}: {key} precedes actual process start')
+        result=_audit_one_process(lines[begin:end],limit,expect_rounds)
+        errors.extend(f'process {index}: {error}' for error in result['errors'])
+        results.append(result);processes.append({'process_id':pid,'process_started_ms':started})
+    first=results[0]
+    schema_keys=('version','covered','excluded','managed_limit_ms','excluded_existing_gates')
+    for index,result in enumerate(results[1:],1):
+        if any(result['runtime_type_scope'].get(k)!=first['runtime_type_scope'].get(k)for k in schema_keys):
+            errors.append(f'process {index}: runtime contract changed across restarts')
+    combined={**first,'passed':not errors,'errors':errors,'processes':processes}
+    for key in ('obligations','excluded_obligations','bootstrap_cache_initializations','bootstrap_lifecycle'):
+        combined[key]=[{**row,**process} for result,process in zip(results,processes) for row in result[key]]
+    combined['global_settling_and_legacy_round_observations']=[row for result in results for row in result['global_settling_and_legacy_round_observations']]
+    combined['scope']='Every actual process boot audited separately with exact per-boot bootstrap boundaries and local request tokens; '+first['scope']
+    return combined
+
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--output',required=True,type=Path);p.add_argument('--expect-rounds',type=int,default=3);a=p.parse_args();result=audit(a.log.read_text().splitlines(),500,a.expect_rounds);a.output.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({'passed':result['passed'],'obligations':len(result['obligations']),'errors':result['errors']}));raise SystemExit(0 if result['passed'] else 1)

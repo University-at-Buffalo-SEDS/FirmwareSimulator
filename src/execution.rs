@@ -50,7 +50,113 @@ pub struct MemoryProbeReport {
     pub end_drop: i64,
 }
 
+fn unacknowledged_can_controllers(
+    architecture: ArchitectureKind,
+) -> Result<&'static [(&'static str, u64)]> {
+    match architecture {
+        ArchitectureKind::Stm32g4 => Ok(&[("fdcan1", 0x4000_6400), ("fdcan2", 0x4000_6800)]),
+        ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5 => Ok(&[("fdcan1", 0x4000_a400)]),
+        _ => bail!("missing-ACK verification requires a modeled FDCAN controller"),
+    }
+}
+
+/// Observe controller error state directly when missing ACKs are injected.
+/// Reading ECR/PSR in the fixed model preserves firmware and bus behavior.
+pub fn add_unacknowledged_can_probes(layout: &mut BoardLayout) -> Result<()> {
+    if layout.execution.can_acknowledged {
+        return Ok(());
+    }
+    for &(controller, base) in unacknowledged_can_controllers(layout.architecture)? {
+        for (field, offset) in [("tec", 0x40), ("psr", 0x44)] {
+            let name = format!("__sim_can_unack_{controller}_{field}");
+            let address = base + offset;
+            if let Some(probe) = layout
+                .execution
+                .memory_probes
+                .iter()
+                .find(|probe| probe.name == name)
+            {
+                ensure!(
+                    probe.address == Some(address)
+                        && probe.symbol.is_empty()
+                        && probe.byte_offset == 0,
+                    "conflicting missing-ACK register probe {name}"
+                );
+                continue;
+            }
+            layout
+                .execution
+                .memory_probes
+                .push(crate::layout::MemoryProbe {
+                    name,
+                    symbol: String::new(),
+                    address: Some(address),
+                    byte_offset: 0,
+                    minimum: None,
+                    maximum: None,
+                    max_end_drop: None,
+                    minimum_interval_gain: None,
+                    ignore_leading_zeroes: false,
+                });
+        }
+    }
+    Ok(())
+}
+
+fn validate_unacknowledged_can_fault(
+    layout: &BoardLayout,
+    reports: &[MemoryProbeReport],
+) -> Result<()> {
+    if layout.execution.can_acknowledged {
+        return Ok(());
+    }
+    let mut observed = false;
+    for &(controller, base) in unacknowledged_can_controllers(layout.architecture)? {
+        let find = |field: &str, offset| -> Result<&MemoryProbeReport> {
+            let name = format!("__sim_can_unack_{controller}_{field}");
+            let report = reports
+                .iter()
+                .find(|report| report.name == name)
+                .with_context(|| format!("missing controller ACK-fault observation {name}"))?;
+            ensure!(
+                report.address == Some(base + offset)
+                    && report.symbol.is_empty()
+                    && report.byte_offset == 0,
+                "invalid controller ACK-fault observation {name}"
+            );
+            Ok(report)
+        };
+        let tec = find("tec", 0x40)?;
+        let psr = find("psr", 0x44)?;
+        ensure!(
+            tec.samples.len() == psr.samples.len(),
+            "unpaired controller ACK-fault observations"
+        );
+        // The fixed controller increments TEC only after a TX request. Its
+        // ACK-error code must be present in the same observation. Include
+        // startup samples so successful recovery cannot erase fault evidence.
+        observed |= tec
+            .samples
+            .iter()
+            .zip(&psr.samples)
+            .any(|(&tec, &psr)| tec & 0xff != 0 && psr & 7 == 3);
+    }
+    ensure!(
+        observed,
+        "missing-ACK fault was not exercised: no controller TX error with ACK-error status"
+    );
+    Ok(())
+}
+
 pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
+    let observed_layout = if !layout.execution.can_acknowledged {
+        let mut observed = layout.clone();
+        add_unacknowledged_can_probes(&mut observed)?;
+        Some(observed)
+    } else {
+        None
+    };
+    let layout = observed_layout.as_ref().unwrap_or(layout);
     warn_if_native_executor();
     let elf = root.join(&layout.artifacts.elf);
     let bootloader_elf = root.join(&layout.artifacts.bootloader_elf);
@@ -189,6 +295,7 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     );
     let registers = marker_lines(&combined);
     let memory_profile = parse_memory_profile(layout, &combined)?;
+    validate_unacknowledged_can_fault(layout, &memory_profile)?;
     ensure!(
         observed_marker(&combined, "SEDS_FIRMWARE_BOOT_REACHED"),
         "firmware never reached {}; final registers: {}\n{}",
@@ -1528,6 +1635,46 @@ mod tests {
             }}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn missing_ack_proof_requires_joint_controller_error_and_rejects_zero_fault() {
+        let mut board = layout("stm32g4", "[]");
+        board.execution.can_acknowledged = false;
+        board.execution.sample_count = 2;
+        super::add_unacknowledged_can_probes(&mut board).unwrap();
+        let count = board.execution.memory_probes.len();
+        super::add_unacknowledged_can_probes(&mut board).unwrap();
+        assert_eq!(board.execution.memory_probes.len(), count);
+        for (tec, psr, expected) in [
+            ([0, 0], [3, 3], false),
+            ([8, 0], [0, 3], false),
+            ([8, 0], [3, 0], true),
+        ] {
+            let mut output = String::new();
+            for probe in &board.execution.memory_probes {
+                let values = if probe.name.ends_with("fdcan2_tec") {
+                    tec
+                } else if probe.name.ends_with("fdcan2_psr") {
+                    psr
+                } else {
+                    [0, 0]
+                };
+                for (sample, value) in values.iter().enumerate() {
+                    output.push_str(&format!(
+                        "SEDS_PROBE {} {}\n0x{:08x}\n",
+                        probe.name, sample, value
+                    ));
+                }
+            }
+            let reports = parse_memory_profile(&board, &output).unwrap();
+            assert_eq!(
+                super::validate_unacknowledged_can_fault(&board, &reports).is_ok(),
+                expected
+            );
+        }
+        board.execution.memory_probes[0].address = Some(0x2000_0000);
+        assert!(super::add_unacknowledged_can_probes(&mut board).is_err());
     }
 
     #[test]

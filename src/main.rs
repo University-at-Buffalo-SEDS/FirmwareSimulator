@@ -7,12 +7,16 @@ use firmware_sim::{
 };
 use std::path::PathBuf;
 
-fn configure_unacknowledged_can(layout: &mut BoardLayout) {
+fn configure_unacknowledged_can(layout: &mut BoardLayout) -> Result<()> {
     layout.execution.can_acknowledged = false;
     configure_unacknowledged_can_probes(
         &mut layout.execution.memory_probes,
-        layout.architecture == ArchitectureKind::Stm32u5,
+        matches!(
+            layout.architecture,
+            ArchitectureKind::Stm32g4 | ArchitectureKind::Stm32h5 | ArchitectureKind::Stm32u5
+        ),
     );
+    firmware_sim::execution::add_unacknowledged_can_probes(layout)
 }
 
 fn configure_unacknowledged_can_probes(probes: &mut [MemoryProbe], enqueue_before_ack: bool) {
@@ -21,9 +25,9 @@ fn configure_unacknowledged_can_probes(probes: &mut [MemoryProbe], enqueue_befor
             // The disconnected-controller model reports the missing ACK as
             // transport backpressure. Require at least one observed attempt
             // while allowing the counter to grow during the profile.
-            // U5's HAL reports enqueue success before the controller observes
-            // a missing ACK. Its enqueue counter proves attempted traffic;
-            // a synchronous HAL error is not required for this controller.
+            // Queued FDCAN HALs report acceptance before the bus ACK arrives.
+            // Controller TEC and ACK-error status separately prove the fault;
+            // retain enqueue activity and every fatal-fault bound.
             probe.minimum = if enqueue_before_ack { None } else { Some(1) };
             probe.maximum = None;
         }
@@ -82,6 +86,29 @@ mod tests {
         assert_eq!(probes[0].maximum, None);
         assert_eq!(probes[1].minimum, Some(1));
         assert_eq!(probes[2].maximum, Some(0));
+    }
+
+    #[test]
+    fn queued_can_controllers_do_not_require_a_synchronous_hal_error() {
+        let example = include_str!("../examples/stm32g4-board.json");
+        for architecture in [
+            firmware_sim::core::ArchitectureKind::Stm32g4,
+            firmware_sim::core::ArchitectureKind::Stm32h5,
+            firmware_sim::core::ArchitectureKind::Stm32u5,
+        ] {
+            let mut board: firmware_sim::layout::BoardLayout =
+                serde_json::from_str(example).unwrap();
+            board.architecture = architecture;
+            board.execution.memory_probes = vec![
+                probe("fdcan_tx_fail", Some(1), Some(0)),
+                probe("fdcan_tx_ok", None, None),
+                probe("allocator_failures", None, Some(0)),
+            ];
+            super::configure_unacknowledged_can(&mut board).unwrap();
+            assert_eq!(board.execution.memory_probes[0].minimum, None);
+            assert_eq!(board.execution.memory_probes[1].minimum, Some(1));
+            assert_eq!(board.execution.memory_probes[2].maximum, Some(0));
+        }
     }
 }
 
@@ -170,8 +197,8 @@ fn main() -> Result<()> {
             can_unacknowledged,
         } => {
             let mut layout = BoardLayout::load(&layout)?;
-            if can_unacknowledged {
-                configure_unacknowledged_can(&mut layout);
+            if can_unacknowledged || !layout.execution.can_acknowledged {
+                configure_unacknowledged_can(&mut layout)?;
             }
             match simulator::run(&layout, &firmware_root, seed) {
                 Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),
@@ -198,8 +225,8 @@ fn main() -> Result<()> {
             layout.execution.virtual_time_ms = virtual_time_ms;
             layout.execution.sample_count = sample_count;
             layout.traffic.iterations = traffic_iterations;
-            if can_unacknowledged {
-                configure_unacknowledged_can(&mut layout);
+            if can_unacknowledged || !layout.execution.can_acknowledged {
+                configure_unacknowledged_can(&mut layout)?;
             }
             match simulator::run(&layout, &firmware_root, seed) {
                 Ok(report) if cli.json => println!("{}", serde_json::to_string_pretty(&report)?),

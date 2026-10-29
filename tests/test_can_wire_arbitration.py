@@ -1,8 +1,8 @@
 """Execute the actual bounded CAN wire scheduler, including arbitration."""
 from pathlib import Path
-import shutil,subprocess,tempfile,unittest
+import os,shutil,subprocess,tempfile,unittest
 ROOT=Path(__file__).resolve().parents[1]
-@unittest.skipUnless(shutil.which('mcs') and shutil.which('mono'),'Mono compiler/runtime required')
+@unittest.skipUnless((shutil.which('mcs') and shutil.which('mono')) or os.environ.get('CSHARP_TEST_DOTNET_IMAGE'),'Mono or explicitly selected local .NET image required')
 class CanWireArbitrationTests(unittest.TestCase):
  def test_priority_controller_fifo_active_frame_and_bounded_refill(self):
   source=(ROOT/'renode/peripherals/SedsStm32H5Fdcan.cs').read_text();model=source[source.index('        private static uint WireArbitrationKey('):source.index('        private static readonly ConditionalWeakTable')]
@@ -55,4 +55,12 @@ class Program {
 }
 '''
   with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/'can.cs';path.write_text(code);exe=Path(tmp)/'can.exe';subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True);subprocess.run(['mono',str(exe)],check=True)
+   path=Path(tmp)/'can.cs';path.write_text(code);exe=Path(tmp)/'can.exe'
+   image=os.environ.get('CSHARP_TEST_DOTNET_IMAGE')
+   if image:
+       (Path(tmp)/'contract.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup><ItemGroup><Compile Include="can.cs"/></ItemGroup></Project>')
+       result=subprocess.run(['docker','run','--rm','--network=none','--user',str(os.getuid())+':'+str(os.getgid()),'--env','HOME=/tmp','--env','DOTNET_CLI_HOME=/tmp','--mount','type=bind,source='+tmp+',target=/fixture','--workdir','/fixture','--entrypoint','dotnet',image,'run','--project','contract.csproj'],capture_output=True,text=True)
+       self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+   else:
+       subprocess.run(['mcs','-out:'+str(exe),str(path)],check=True)
+       subprocess.run(['mono',str(exe)],check=True)

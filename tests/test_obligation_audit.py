@@ -31,7 +31,36 @@ def bootstrap_fixture():
 
 def delivered_operation(start=100,pid=1):return req(1,pid,start)+[reg(pid,start),ack(pid,10,start+20,'{20: 0}'),ack(pid,20,start+40,'{}')]
 
+def process_trace(pid,start,delay=40,missing_owner=False):
+ value=json.loads(scope().split(a.SCOPE,1)[1]);value.update(process_id=pid,process_started_ms=start)
+ boot,_=bootstrap_fixture();adjusted=[]
+ for line in boot:
+  prefix=a.BOOT if a.BOOT in line else a.REQ
+  value_row=json.loads(line.split(prefix,1)[1])
+  for key in ['at_ms','request_ms','submit_ms']:
+   if isinstance(value_row.get(key),int):value_row[key]+=start
+  adjusted.append(prefix+json.dumps(value_row))
+ operation=req(1,pid,start+100)+[reg(pid,start+100),ack(pid,10,start+120,'{20: 0}')]
+ if not missing_owner:operation.append(ack(pid,20,start+100+delay,'{}'))
+ return [a.SCOPE+json.dumps(value)]+adjusted+operation
+
 class Tests(unittest.TestCase):
+ def test_real_restart_process_scopes_keep_local_tokens_and_bootstrap_phases_separate(self):
+  result=a.audit(process_trace(101,0)+process_trace(102,1000)+process_trace(103,2000))
+  self.assertTrue(result['passed'],result)
+  self.assertEqual(len(result['obligations']),3)
+  self.assertEqual({row['process_id']for row in result['obligations']},{101,102,103})
+  self.assertEqual(len(result['bootstrap_cache_initializations']),27)
+ def test_restart_scope_never_borrows_another_process_owner_or_relaxes500(self):
+  for second in [process_trace(102,1000,missing_owner=True),process_trace(102,1000,delay=501)]:
+   result=a.audit(process_trace(101,0)+second+process_trace(103,2000))
+   self.assertFalse(result['passed'])
+ def test_restart_scopes_require_distinct_actual_process_identity(self):
+  self.assertFalse(a.audit(process_trace(101,0)+process_trace(101,1000))['passed'])
+  self.assertFalse(a.audit([scope()]+delivered_operation()+[scope()]+delivered_operation())['passed'])
+ def test_process_scope_cannot_claim_an_api_clock_before_process_start(self):
+  rows=process_trace(101,0);v=json.loads(rows[0].split(a.SCOPE,1)[1]);v['process_started_ms']=1000;rows[0]=a.SCOPE+json.dumps(v)
+  self.assertFalse(a.audit(rows)['passed'])
  def test_background_own_request_is_separate_and_fill_owner_required(self):
   lines=req(1,101,3251)+[reg(101,3252),ack(101,10,3492,'{20: 0}'),ack(101,20,3560,'{}')]+req(2,102,3500)+[reg(102,3501),ack(102,10,3838,'{20: 0}'),ack(102,20,3900,'{}')]
   result=check(lines);self.assertTrue(result['passed'],result);self.assertEqual([r['latency_ms'] for r in result['obligations']],[309,400]);self.assertGreater(3900-3251,500) # old global origin mislabels valid later obligation

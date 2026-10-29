@@ -220,7 +220,7 @@ def policy_validation_failure(directory, original_failure, previous_captures=Non
         return original_failure if original_failure is not None else error
 
 
-RESTART_NODES = ("groundstation", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
+RESTART_NODES = ("groundstation", "rrls", "rf", "power", "flight", "gateway", "valve", "actuator", "daq")
 
 def configure_evidence_capture(command, directory):
     """The output directory must be writable by the simulator container user."""
@@ -546,6 +546,8 @@ def main():
         parser.error("--soak-only requires --ultra-soak or --restart-regression")
     if args.restart_nodes and not (args.ultra_soak or args.restart_regression):
         parser.error("--restart-nodes requires --restart-regression or --ultra-soak")
+    if args.restart_nodes and "rrls" in args.restart_nodes and not args.radio_rrls:
+        parser.error("RRLS restart requires --radio-rrls")
     if args.restart_samples is not None and not args.restart_nodes:
         parser.error("--restart-samples requires --restart-nodes")
     if args.ultra_soak and args.restart_regression:
