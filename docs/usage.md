@@ -385,6 +385,12 @@ Existing checkouts must be clean. The launcher fetches and fast-forwards their
 `dev` branches and reuses completed clones and
 build caches on the next run.
 
+Firmware `dev` full-test runners use the simulator's `dev` image, built with the
+GroundStation `dev` observer. The DAQ observer expects the current 40 Hz per
+load-cell network stream; acquisition and SD logging run independently. Set
+`SEDS_FIRMWARE_SIM_DAQ_LOADCELL_HZ=250` when testing an older 250 Hz source, or
+`SEDS_FIRMWARE_SIM_IMAGE` to select a matching private image explicitly.
+
 ## CLI reference
 
 ```text
