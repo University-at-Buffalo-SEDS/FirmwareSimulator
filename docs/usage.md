@@ -382,7 +382,7 @@ python3 scripts/run-full-system.py --skip-unit-tests
 ```
 
 Existing checkouts must be clean. The launcher fetches and fast-forwards their
-`migration/sedlaunch-sedsnet-mainline` branches and reuses completed clones and
+`dev` branches and reuses completed clones and
 build caches on the next run.
 
 ## CLI reference

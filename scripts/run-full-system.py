@@ -12,7 +12,7 @@ import sys
 
 
 ORGANIZATION = "University-at-Buffalo-SEDS"
-FIRMWARE_BRANCH = "migration/sedlaunch-sedsnet-mainline"
+FIRMWARE_BRANCH = "dev"
 REPOSITORIES = (
     "RFBoard26",
     "PowerBoard26",
