@@ -168,3 +168,22 @@ are explicit test assumptions, not verified register values from the active
 three-modem installation. Vendor retries, RF propagation and collision behavior
 remain outside this deterministic model. Keep the original reliable-command and
 receipt gates when using this profile; do not increase deadlines to accept it.
+
+
+The captured-load congestion envelope runs with
+`CSHARP_TEST_DOTNET_IMAGE=mcr.microsoft.com/dotnet/sdk:8.0 python3 -m unittest discover -s tests -p test_radio_congestion_envelope.py`.
+It keeps RF telemetry at approximately 1093 bytes/s, ordinary GS traffic at
+281 bytes/s, and one 24-byte RRLS report per second. Four logical commands
+retain their 250 ms retry cadence and 18-attempt ceiling. All scenarios use
+identical offered source rates, 8192-byte FIFOs, 3968-byte maximum packets,
+and 50 ms packetization idle time.
+
+The scenario sweeps effective air service capacity from 64 kbit/s downward.
+This is a sensitivity envelope for contention/retransmission overhead, not
+an implementation of RFD ASYNC's proprietary MAC or proof of the number of
+physical retransmissions. The normal control requires every first receipt
+within 500 ms and no FIFO or record-checksum failures. The overloaded negative
+control must reproduce seconds of ACK buffering, redundant command traffic,
+FIFO overflow, and resulting stream-framing loss without injected bit flips.
+Checksums here protect opaque test records; they are not SEDSnet SDT CRCs.
+This fixture identifies a failure mechanism and does not qualify hardware.

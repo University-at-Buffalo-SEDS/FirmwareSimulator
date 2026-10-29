@@ -5,6 +5,7 @@ that the active hardware's uncollected register values have been verified.
 """
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,9 +22,13 @@ class RadioPacketizationLatency(unittest.TestCase):
     def test_production_host_pacing_bounds_small_command_packetization(self):
         capacity = GS_ROOT / 'backend/src/comms/rfd_capacity.rs'
         self.assertTrue(capacity.is_file(), 'GS_REPO must point to the production backend')
+        wire_limit = re.search(
+            r'pub\(crate\) const RADIO_COMMAND_BATCH_MAX_BYTES: usize = [^;]+;',
+            (GS_ROOT / 'backend/src/comms.rs').read_text())
+        self.assertIsNotNone(wire_limit, 'production radio batch limit is required')
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
-            rust = '#[path = ' + json.dumps(str(capacity)) + '] mod capacity;\n' + r'''
+            rust = wire_limit.group() + '\n#[path = ' + json.dumps(str(capacity)) + '] mod capacity;\n' + r'''
 fn main() {
     let mut gate = capacity::Capacity::from_env(115_200);
     let wall = std::time::Instant::now();
