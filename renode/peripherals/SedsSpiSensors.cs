@@ -373,8 +373,22 @@ namespace Antmicro.Renode.Peripherals.Sensors
     // conversion values through the STM32 SPI/DMA peripherals.
     public sealed class SedsMcp3564r : ISPIPeripheral, IGPIOReceiver
     {
-        public SedsMcp3564r(ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, bool externalChipSelect = false, string stimulusPath = "")
+        public SedsMcp3564r(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue, bool externalChipSelect = false, string stimulusPath = "")
         {
+            IRQ = new GPIO();
+            if(machine != null)
+            {
+                conversion = new LimitTimer(machine.ClockSource, 1000000, this,
+                    "adcConversion", limit: 1, enabled: false, eventEnabled: true,
+                    workMode: Antmicro.Renode.Time.WorkMode.OneShot,
+                    direction: Antmicro.Renode.Time.Direction.Ascending);
+                conversion.LimitReached += Convert;
+                readyRelease = new LimitTimer(machine.ClockSource, 1000000, this,
+                    "adcReadyRelease", limit: 1, enabled: false, eventEnabled: true,
+                    workMode: Antmicro.Renode.Time.WorkMode.OneShot,
+                    direction: Antmicro.Renode.Time.Direction.Ascending);
+                readyRelease.LimitReached += () => IRQ.Set(true);
+            }
             this.stimulusPath = stimulusPath ?? "";
             this.externalChipSelect = externalChipSelect;
             this.failureEvery = failureEvery;
@@ -394,21 +408,26 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 registerAddress = (value >> 2) & 0x0f;
                 registerByte = 0;
                 reading = (value & 0x03) == 0x01;
+                var dataReadyBeforeRead = dataReady;
                 if(reading && registerAddress == 0)
                 {
-                    PollStimulus();
-                    SelectChannel();
+                    if(conversion == null) ConvertSample();
+                    // ADCDATA is latched for the entire SPI transaction.
+                    dataReady = false;
+                    IRQ.Set(true);
                     var format = (Register(4) >> 4) & 3;
                     dataBytes = format == 0 ? 3 : 4;
-                    var code = samples[channel] & 0x00ffffffu;
+                    var code = latchedCode & 0x00ffffffu;
                     var signedCode = (code & 0x00800000u) != 0 ? code | 0xff000000u : code;
                     data = format == 0 ? code : format == 1 ? code << 8
-                        : format == 2 ? signedCode : ((ScanMask() != 0 ? (uint)channel : 0u) << 28) | (signedCode & 0x0fffffffu);
+                        : format == 2 ? signedCode : ((ScanMask() != 0 ? (uint)latchedChannel : 0u) << 28) | (signedCode & 0x0fffffffu);
                 }
+                var status = (byte)(0x1b | (dataReadyBeforeRead ? 0 : 4));
                 if(value == 0x78) ResetRegisters();
-                if(value == 0x68) channel = 15; // Restart SCAN at the highest enabled ID.
+                if(value == 0x68) StartConversion();
                 position++;
-                return faulted ? (byte)0xff : (byte)0;
+                // Legacy register-format tests explicitly use a null machine.
+                return faulted ? (byte)0xff : conversion == null ? (byte)0 : status;
             }
 
             if(faulted) return 0xff;
@@ -419,9 +438,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 position++;
                 if(position == dataBytes + 1)
                 {
-                    if(stimulusPath.Length == 0 && channel < 12) samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
-                    // Internal temperature/reference fixtures stay steady during long soaks.
-                    channel = (channel + 15) & 15;
+                    if(conversion == null) AdvanceChannel();
                 }
                 return result;
             }
@@ -431,7 +448,12 @@ namespace Antmicro.Renode.Peripherals.Sensors
             var key = (registerAddress << 2) + registerByte;
             byte output = 0;
             if(reading) registers.TryGetValue(key, out output);
-            else registers[key] = value;
+            else
+            {
+                registers[key] = value;
+                if(registerAddress == 1 && (value & 3) != 3) StopConversion();
+                else if(registerAddress == 1 && conversion != null && (value & 3) == 3) StartConversion();
+            }
             registerByte++;
             if(registerByte == RegisterWidth(registerAddress))
             {
@@ -440,6 +462,73 @@ namespace Antmicro.Renode.Peripherals.Sensors
             }
             position++;
             return output;
+        }
+
+        public GPIO IRQ { get; private set; }
+
+        private void ConvertSample()
+        {
+            PollStimulus();
+            SelectChannel();
+            latchedChannel = channel;
+            latchedCode = samples[channel];
+        }
+
+        private void AdvanceChannel()
+        {
+            if(stimulusPath.Length == 0 && channel < 12)
+                samples[channel] = (samples[channel] + 17u) & 0x00ffffffu;
+            channel = (channel + 15) & 15;
+        }
+
+        private void Convert()
+        {
+            if(!running) return;
+            ConvertSample();
+            AdvanceChannel();
+            dataReady = true;
+            if(transactions <= disconnectAfter) IRQ.Set(false);
+            ArmConversion();
+        }
+
+        private void StartConversion()
+        {
+            channel = 15;
+            dataReady = false;
+            IRQ.Set(true);
+            running = true;
+            ArmConversion();
+        }
+
+        private void StopConversion()
+        {
+            running = false;
+            dataReady = false;
+            IRQ.Set(true);
+            if(conversion != null) conversion.Enabled = false;
+            if(readyRelease != null) readyRelease.Enabled = false;
+        }
+
+        private void ArmConversion()
+        {
+            if(conversion == null) return;
+            // SCAN settles each channel; AZ_MUX takes both polarities.
+            // 16MHz board MCLK / PRE / 4 = DMCLK. No analog/noise model.
+            var config1 = Register(2);
+            var osr = OsrTable[(config1 >> 2) & 15];
+            var clocks = osr <= 512 ? 3 * osr : osr + 1024;
+            var az = (Register(3) & 4) != 0 ? 2UL : 1UL;
+            var prescaler = 1UL << (config1 >> 6);
+            conversion.Reset();
+            conversion.Limit = Math.Max(1UL, (clocks * az * prescaler + 3) / 4);
+            conversion.Value = 0;
+            conversion.Enabled = true;
+            // DR pin releases 16 DMCLK before the next conversion even if
+            // software never reads ADCDATA (DS20006391C section6.8.1).
+            readyRelease.Reset();
+            readyRelease.Limit = Math.Max(1UL, conversion.Limit - Math.Min(conversion.Limit - 1, 4 * prescaler));
+            readyRelease.Value = 0;
+            readyRelease.Enabled = true;
         }
 
         // Codes are the raw 24-bit two's-complement ADC representation, not calibrated units.
@@ -547,6 +636,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
         private void ResetRegisters()
         {
+            StopConversion();
             registers.Clear();
             for(var i = 0; i < samples.Length; i++) samples[i] = ((uint)(i + 1) * 0x100000u) & 0x00ffffffu;
             // IDs 8..11 are the four differential channel pairs. In
@@ -556,6 +646,11 @@ namespace Antmicro.Renode.Peripherals.Sensors
             channel = 15; // SCAN visits enabled inputs from MSb to LSb.
         }
 
+        private static readonly ulong[] OsrTable = {32,64,128,256,512,1024,2048,4096,8192,16384,20480,24576,40960,49152,81920,98304};
+        private readonly LimitTimer conversion, readyRelease;
+        private bool running, dataReady;
+        private int latchedChannel;
+        private uint latchedCode;
         private readonly string stimulusPath;
         private ulong stimulusReads;
         private readonly Dictionary<int, byte> registers = new Dictionary<int, byte>();

@@ -1,0 +1,7 @@
+adc: Sensors.SedsMcp3564r @ spi2
+    externalChipSelect: true
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs
+
+adc:
+    IRQ -> gpio@26 | exti@26

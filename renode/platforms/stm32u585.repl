@@ -80,3 +80,8 @@ dcache1: Memory.SedsStm32Cache @ sysbus 0x40031400
     dataCache: true
 syscfg: Miscellaneous.SedsStm32Syscfg @ sysbus 0x46020000
     variant: "u5"
+
+exti: IRQControllers.SedsStm32Exti @ sysbus 0x46022000
+    10 -> nvic@21
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Exti.cs

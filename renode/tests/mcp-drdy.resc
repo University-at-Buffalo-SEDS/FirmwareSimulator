@@ -1,0 +1,25 @@
+mach create
+machine LoadPlatformDescription @/opt/firmware-sim/renode/platforms/stm32u585.repl
+machine LoadPlatformDescription @/opt/firmware-sim/renode/tests/mcp-drdy.repl
+cpu IsHalted true
+# PB10 routed to EXTI10, falling-edge trigger, IMR1 enabled.
+sysbus WriteDoubleWord 0x46022068 0x00010000
+sysbus WriteDoubleWord 0x46022004 0x400
+sysbus WriteDoubleWord 0x46022080 0x400
+sysbus WriteDoubleWord 0xe000e100 0x200000
+python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); [a.Transmit(x) for x in [0x46,0x82,0x0c,0xcf,0xf0,0x06,0x08]]; a.OnGPIO(0,True); a.OnGPIO(0,False); [a.Transmit(x) for x in [0x5e,0,0,0x43]]; a.OnGPIO(0,True); a.OnGPIO(0,False); a.Transmit(0x68); a.OnGPIO(0,True)"
+python "b=monitor.Machine['sysbus']; print('INITIAL_PB10_PENDING',b.ReadDoubleWord(0x42020410),b.ReadDoubleWord(0x46022010),monitor.Machine['sysbus.spi2.adc'].IRQ.IsSet); assert b.ReadDoubleWord(0x42020410)&0x400; assert b.ReadDoubleWord(0x46022010)&0x400==0"
+emulation RunFor "0.0002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x46022010)&0x400==0; print('MCP_NO_EARLY_CONVERSION_PASS')"
+emulation RunFor "0.00019s"
+python "b=monitor.Machine['sysbus']; print('READY_PB10_EXTI_NVIC',b.ReadDoubleWord(0x42020410),b.ReadDoubleWord(0x46022010),b.ReadDoubleWord(0xe000e200)); assert b.ReadDoubleWord(0x42020410)&0x400==0; assert b.ReadDoubleWord(0x46022010)&0x400; assert b.ReadDoubleWord(0xe000e200)&(1<<21); print('MCP_DRDY_GPIO_EXTI_NVIC_PASS')"
+python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); assert a.Transmit(0x41)==0x1b; r=[a.Transmit(0) for _ in range(4)]; assert r[0]>>4==6; a.OnGPIO(0,True); assert monitor.Machine['sysbus'].ReadDoubleWord(0x42020410)&0x400; print('MCP_FIVE_BYTE_STATUS_DATA_PASS')"
+sysbus WriteDoubleWord 0x46022010 0x400
+python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); a.Transmit(0x41); a.OnGPIO(0,True)"
+emulation RunFor "0.00039s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x46022010)&0x400; print('MCP_NEXT_CONVERSION_IRQ_PASS')"
+python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); [a.Transmit(x) for x in [0x46,0x82]]; a.OnGPIO(0,True)"
+sysbus WriteDoubleWord 0x46022010 0x400
+emulation RunFor "0.002s"
+python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x46022010)&0x400==0; print('MCP_STANDBY_QUIESCENT_PASS')"
+quit

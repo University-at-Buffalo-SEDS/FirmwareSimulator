@@ -17,13 +17,21 @@ class Mcp3564rScanTests(unittest.TestCase):
         harness = '''
 using System;
 using System.Collections.Generic;
+namespace Antmicro.Renode.Time {public enum WorkMode {OneShot} public enum Direction {Ascending}}
 namespace Antmicro.Renode.Peripherals.Sensors {
 public interface ISPIPeripheral { byte Transmit(byte value); void FinishTransmission(); void Reset(); }
 public interface IGPIOReceiver { void OnGPIO(int number, bool value); }
+public interface IMachine {object ClockSource {get;}}
+public class GPIO {public void Set(bool value) {}}
+public class LimitTimer {
+ public LimitTimer(object clock,long frequency,object owner,string name,ulong limit,bool enabled,bool eventEnabled,Antmicro.Renode.Time.WorkMode workMode,Antmicro.Renode.Time.Direction direction){}
+ public event Action LimitReached {add{} remove{}}
+ public bool Enabled; public ulong Limit,Value; public void Reset(){}
+}
 ''' + model + '''
 class Test {
     static Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r adc =
-        new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(externalChipSelect: true);
+        new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(null,externalChipSelect: true);
     static void Write(params byte[] bytes) {
         adc.OnGPIO(0, false);
         foreach(var b in bytes) adc.Transmit(b);
@@ -81,7 +89,7 @@ class Test {
         var codes = new string[16];for(var i=0;i<16;i++) codes[i]="0";
         codes[0]="8388607";codes[1]="8388608";codes[9]="16777215";
         System.IO.File.WriteAllText(path,string.Join(",",codes));
-        adc=new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(externalChipSelect:true,stimulusPath:path);
+        adc=new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(null,externalChipSelect:true,stimulusPath:path);
         Equal(Read(3),0x7fffff); // Maximum positive signed code.
         for(var i=0;i<19;i++) Equal(Read(3),0x7fffff); // Explicit fixture holds; no +17 drift.
         Write(0x46,0x82,0x14,0xcf,0xf0,0x03,0x18); // Tagged 32-bit, MUX CH1.
@@ -110,7 +118,7 @@ class Test {
         Equal(Read(4),0xffffffff);
         adc.Reset();Write(0x46,0x82,0x14,0xcf,0x10); // format1 left aligned raw24.
         adc.SetChannelSample(0,0x800000);Equal(Read(4),0x80000000);
-        adc=new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(externalChipSelect:true);
+        adc=new Antmicro.Renode.Peripherals.Sensors.SedsMcp3564r(null,externalChipSelect:true);
         Equal(Read(3),0x100000);Equal(Read(3),0x100011); // Legacy no-file path unchanged.
 
     }

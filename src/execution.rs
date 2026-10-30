@@ -749,17 +749,40 @@ pub(crate) fn render_peripheral_overlay(layout: &BoardLayout) -> Result<String> 
             region.base, region.size
         ));
     }
+    // Group fanout into a single REPL output attribute. Some supported Renode
+    // releases replace repeated updating entries for the same GPIO source.
     for (index, connection) in layout.board.connections.iter().enumerate() {
         if connection.active_low {
             overlay.push_str(&format!(
-                "layoutSignalInverter{index}: Miscellaneous.SedsSignalInverter\n    preinit:\n        include @{}\n    Output -> {}\n{}",
+                "layoutSignalInverter{index}: Miscellaneous.SedsSignalInverter\n    preinit:\n        include @{}\n    Output -> {}\n",
                 source_root.join("SedsSignalInverter.cs").display(),
                 connection.to,
-                render_wire(&connection.from, &format!("layoutSignalInverter{index}@0"))
             ));
-        } else {
-            overlay.push_str(&render_wire(&connection.from, &connection.to));
         }
+    }
+    for (index, connection) in layout.board.connections.iter().enumerate() {
+        if layout.board.connections[..index]
+            .iter()
+            .any(|prior| prior.from == connection.from)
+        {
+            continue;
+        }
+        let targets = layout
+            .board
+            .connections
+            .iter()
+            .enumerate()
+            .filter(|(_, wire)| wire.from == connection.from)
+            .map(|(target_index, wire)| {
+                if wire.active_low {
+                    format!("layoutSignalInverter{target_index}@0")
+                } else {
+                    wire.to.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        overlay.push_str(&render_wire(&connection.from, &targets));
     }
     for route in &layout.board.dma_routes {
         overlay.push_str(&render_wire(
@@ -2289,6 +2312,25 @@ mod tests {
         assert_eq!(configured, scratch.path().join("custom.repl"));
         let overlay = render_peripheral_overlay(&board).unwrap();
         assert!(overlay.contains("mcu: \"stm32g4\""));
+    }
+
+    #[test]
+    fn gpio_fanout_emits_one_attribute_for_input_and_exti() {
+        let mut board = layout("stm32u5", "[]");
+        for (to, active_low) in [("gpio@26", false), ("exti@26", false), ("gpio@27", true)] {
+            board
+                .board
+                .connections
+                .push(crate::layout::ConnectionConfig {
+                    from: "layoutDevice0.IRQ".into(),
+                    to: to.into(),
+                    active_low,
+                });
+        }
+        let overlay = render_peripheral_overlay(&board).unwrap();
+        assert_eq!(overlay.matches("IRQ ->").count(), 1);
+        assert!(overlay.contains("IRQ -> gpio@26 | exti@26 | layoutSignalInverter2@0"));
+        assert!(overlay.contains("Output -> gpio@27"));
     }
 
     #[test]
