@@ -192,9 +192,29 @@ def inspect_image(image, docker_image):
     return results
 
 
+def discover_csv_inputs(paths):
+    """Read legacy root files and nested log folders without moving any data."""
+    found = {}
+    for path in paths:
+        path = Path(path)
+        if not path.is_dir():
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"CSV input unavailable: {path}")
+            found[str(path.resolve())] = path
+            continue
+        for item in path.rglob("*"):
+            if item.is_file() and not item.is_symlink() and item.suffix.lower() == ".csv":
+                found[str(item.resolve())] = item
+                if len(found) > 10000:
+                    raise ValueError("Too many CSV logs; choose a smaller directory")
+    if paths and not found:
+        raise ValueError("Directory has no CSV logs")
+    return [found[key] for key in sorted(found)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("csv", nargs="*", type=Path, help="CSV files to stream-check")
+    parser.add_argument("csv", nargs="*", type=Path, help="CSV files or directories to stream-check recursively (legacy root and new log folders)")
     parser.add_argument("--image", type=Path, help="sparse FAT32 SD image to inspect with mtools")
     parser.add_argument("--docker-image", help="run read-only mtools inside this simulator image")
     parser.add_argument("--capture", type=Path, help="retained bay capture containing counters and SD-image markers")
@@ -215,7 +235,7 @@ def main():
                 parser.error("capture contains no saved SD-image marker")
             args.image = args.capture.parent/f"sd-{args.node}-{markers[-1]}.img"
     files = []
-    for path in args.csv:
+    for path in discover_csv_inputs(args.csv):
         with path.open(newline="") as stream:
             files.append(inspect_csv(stream, str(path)))
     if args.image:

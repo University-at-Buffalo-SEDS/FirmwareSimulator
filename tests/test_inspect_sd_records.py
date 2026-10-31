@@ -27,6 +27,23 @@ def document(items, repeat_header=False):
 
 
 class SdRecordInspectionTests(unittest.TestCase):
+    def test_legacy_root_and_nested_categories_are_discovered_without_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            files=[root/"DAQ_legacy.CSV",root/"NO_UTC/DAQ_123_000.CSV",root/"UTC/DAQ_TELEMETRY_1000_000.CSV",root/"LAUNCH/DAQ_LAUNCH_1000_000.CSV"]
+            for path in files:
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(document([{}]).getvalue())
+            (root/"ignore.txt").write_text("not data")
+            expected={str(p.resolve()) for p in files}
+            found=records.discover_csv_inputs([root,files[0]])
+            self.assertEqual({str(p.resolve()) for p in found},expected)
+            self.assertEqual(len(found),4)
+            for path in found:
+                with path.open() as stream:
+                    self.assertEqual(records.inspect_csv(stream,str(path))["records"],1)
+            self.assertTrue(all(p.exists() for p in files))
+
     def test_vectors_quoted_messages_and_utc_steps_keep_their_original_values(self):
         source = document([dict(time_source="network", timestamp_ms="2000000"),
                            dict(sensor="Message", value='hello, "rocket"\nsecond line', time_source="network", timestamp_ms="1000000")])
