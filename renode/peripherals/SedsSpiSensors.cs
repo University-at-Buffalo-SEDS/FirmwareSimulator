@@ -422,7 +422,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
                     data = format == 0 ? code : format == 1 ? code << 8
                         : format == 2 ? signedCode : ((ScanMask() != 0 ? (uint)latchedChannel : 0u) << 28) | (signedCode & 0x0fffffffu);
                 }
-                var status = (byte)(0x1b | (dataReadyBeforeRead ? 0 : 4));
+                // DS20006391C6.2.6: device address01 has STAT[3] opposite
+                // to address bit0. CRC/POR inactive plus DR gives 0x13/0x17.
+                var status = (byte)(0x13 | (dataReadyBeforeRead ? 0 : 4));
                 if(value == 0x78) ResetRegisters();
                 if(value == 0x68) StartConversion();
                 position++;

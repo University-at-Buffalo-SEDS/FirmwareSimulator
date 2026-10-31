@@ -13,7 +13,7 @@ emulation RunFor "0.0002s"
 python "assert monitor.Machine['sysbus'].ReadDoubleWord(0x46022010)&0x400==0; print('MCP_NO_EARLY_CONVERSION_PASS')"
 emulation RunFor "0.00019s"
 python "b=monitor.Machine['sysbus']; print('READY_PB10_EXTI_NVIC',b.ReadDoubleWord(0x42020410),b.ReadDoubleWord(0x46022010),b.ReadDoubleWord(0xe000e200)); assert b.ReadDoubleWord(0x42020410)&0x400==0; assert b.ReadDoubleWord(0x46022010)&0x400; assert b.ReadDoubleWord(0xe000e200)&(1<<21); print('MCP_DRDY_GPIO_EXTI_NVIC_PASS')"
-python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); assert a.Transmit(0x41)==0x1b; r=[a.Transmit(0) for _ in range(4)]; assert r[0]>>4==6; a.OnGPIO(0,True); assert monitor.Machine['sysbus'].ReadDoubleWord(0x42020410)&0x400; print('MCP_FIVE_BYTE_STATUS_DATA_PASS')"
+python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); status=a.Transmit(0x41); print('MCP_STATUS',hex(status)); assert status==0x13; assert status&0xf8==0x10 and status&3==3; r=[a.Transmit(0) for _ in range(4)]; assert r[0]>>4==6; a.OnGPIO(0,True); assert monitor.Machine['sysbus'].ReadDoubleWord(0x42020410)&0x400; print('MCP_FIVE_BYTE_STATUS_DATA_PASS')"
 sysbus WriteDoubleWord 0x46022010 0x400
 python "a=monitor.Machine['sysbus.spi2.adc']; a.OnGPIO(0,False); a.Transmit(0x41); a.OnGPIO(0,True)"
 emulation RunFor "0.00039s"

@@ -131,7 +131,7 @@ class Test {
             image = os.environ.get('CSHARP_TEST_DOTNET_IMAGE')
             if image:
                 (Path(directory) / 'contract.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup><ItemGroup><Compile Include="adc.cs"/></ItemGroup></Project>')
-                result = subprocess.run(['docker','run','--rm','--network=none','--user',str(os.getuid())+':'+str(os.getgid()),'--env','HOME=/tmp','--env','DOTNET_CLI_HOME=/tmp','--mount','type=bind,source='+directory+',target=/fixture','--workdir','/fixture','--entrypoint','dotnet',image,'run','--project','contract.csproj'],capture_output=True,text=True)
+                result = subprocess.run(['docker','run','--rm','--network=none','--cpus=1','--user',str(os.getuid())+':'+str(os.getgid()),'--env','HOME=/tmp','--env','DOTNET_CLI_HOME=/tmp','--mount','type=bind,source='+directory+',target=/fixture','--workdir','/fixture','--entrypoint','dotnet',image,'run','--project','contract.csproj'],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             else:
                 subprocess.run(['mcs', '-out:' + str(binary), str(path)], check=True, capture_output=True)
