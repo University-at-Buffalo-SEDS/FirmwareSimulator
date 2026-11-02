@@ -14,6 +14,31 @@ A deterministic Rust orchestrator and Renode execution environment for SEDS embe
 
 ## Run
 
+The build helper uses one repository-local Cargo target, two compiler jobs and
+disables incremental compilation unless `CARGO_INCREMENTAL` is explicitly set.
+This avoids retaining a separate compiler cache for each qualification run.
+
+```sh
+python3 build.py build             # release native orchestrator
+python3 build.py test --offline    # Rust and Python native tests
+python3 build.py image --tag firmware-simulator:local
+python3 build.py cache
+python3 build.py clean --dry-run
+python3 build.py clean --incremental-only  # retain binaries and dependencies
+python3 build.py clean                    # remove generated compiler outputs
+```
+
+Cleanup is restricted to `target/`, `build/cache/`, and `bin/`/`obj/` beside test
+C# projects. It preserves `build/full-system` source checkouts, recordings,
+diagnostics and other evidence. Symbolic cache-root links and active Cargo output
+locks are rejected. Build, test and cleanup operations record size estimates,
+exit status and filesystem free-space changes in ignored
+`build/cache-maintenance.jsonl`. Btrfs/APFS shared extents can make directory-size
+estimates larger than the space actually reclaimed. Docker images, containers and
+the host-wide Docker build cache are not pruned by this command.
+
+Direct Cargo commands remain available:
+
 ```sh
 cargo test --all-targets
 cargo run -- self-test --arch stm32g4
