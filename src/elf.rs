@@ -267,11 +267,46 @@ fn program_header_offset(
 }
 
 fn fits_physical(base: u64, size: u64, memory: &MemoryLayout) -> bool {
-    fits_flash(base, size, memory)
-        || memory
+    fits_flash(base, size, memory) || fits_ram_coverage(base, size, memory)
+}
+
+// ELF program headers may span adjacent physical RAM banks even when each
+// allocated section stays within its own bank. Check complete coverage without
+// merging or modifying the bank mappings, and never bridge flash with RAM.
+fn fits_ram_coverage(base: u64, size: u64, memory: &MemoryLayout) -> bool {
+    let Some(end) = base.checked_add(size) else {
+        return false;
+    };
+    if memory
+        .ram_regions
+        .iter()
+        .any(|region| region.base.checked_add(region.size).is_none())
+    {
+        return false;
+    }
+    if size == 0 {
+        return memory.ram_regions.iter().any(|region| {
+            region.size > 0 && base >= region.base && base <= region.base + region.size
+        });
+    }
+    let mut covered = base;
+    loop {
+        // Extending to the furthest covering bank makes order irrelevant and
+        // handles overlap without allocating/sorting or accepting a gap.
+        let next = memory
             .ram_regions
             .iter()
-            .any(|region| fits(base, size, region.base, region.size))
+            .filter_map(|region| {
+                let region_end = region.base.checked_add(region.size)?;
+                (region.base <= covered && covered < region_end).then_some(region_end)
+            })
+            .max();
+        match next {
+            Some(next) if next >= end => return true,
+            Some(next) => covered = next,
+            None => return false,
+        }
+    }
 }
 
 fn fits_flash(base: u64, size: u64, memory: &MemoryLayout) -> bool {
@@ -385,6 +420,118 @@ mod tests {
         let path = dir.path().join("ok.elf");
         write(&path, &elf(0x2000_0000, 0x0800_5000, 4, 0x1c000));
         validate_elf(&path, &memory(), "firmware").unwrap();
+    }
+
+    fn split_fc_ram() -> MemoryLayout {
+        let mut layout = memory();
+        layout.ram_regions = vec![
+            MemoryRegion {
+                name: "sram".into(),
+                base: 0x2000_0000,
+                size: 0x33000,
+            },
+            MemoryRegion {
+                name: "dma_sram".into(),
+                base: 0x2003_3000,
+                size: 0x11000,
+            },
+        ];
+        layout
+    }
+
+    #[test]
+    fn accepts_segment_spanning_adjacent_ram_regions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("adjacent.elf");
+        write(&path, &elf(0x2003_2000, 0x0800_5000, 4, 0x2000));
+        validate_elf(&path, &split_fc_ram(), "adjacent RAM").unwrap();
+    }
+
+    #[test]
+    fn accepts_current_fc_nobits_span_in_either_bank_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fc-nobits.elf");
+        // Actual d199 Observer_ON LOAD2 values; no initialized bytes.
+        write(&path, &elf(0x2000_0160, 0x0807_3100, 0, 0x3c670));
+        let mut layout = split_fc_ram();
+        let before: Vec<_> = layout
+            .ram_regions
+            .iter()
+            .map(|r| (r.name.clone(), r.base, r.size))
+            .collect();
+        validate_elf(&path, &layout, "current FC NOBITS").unwrap();
+        assert_eq!(
+            layout
+                .ram_regions
+                .iter()
+                .map(|r| (r.name.clone(), r.base, r.size))
+                .collect::<Vec<_>>(),
+            before
+        );
+        layout.ram_regions.reverse();
+        validate_elf(&path, &layout, "reversed RAM banks").unwrap();
+    }
+
+    #[test]
+    fn rejects_ram_union_with_one_byte_gap() {
+        let mut layout = split_fc_ram();
+        layout.ram_regions[1].base += 1;
+        layout.ram_regions[1].size -= 1;
+        assert!(!super::fits_physical(0x2003_2fff, 2, &layout));
+    }
+
+    #[test]
+    fn rejects_ram_union_outer_bounds() {
+        let layout = split_fc_ram();
+        assert!(!super::fits_physical(0x1fff_ffff, 2, &layout));
+        assert!(!super::fits_physical(0x2000_0000, 0x44001, &layout));
+        assert!(super::fits_physical(0x2000_0000, 0x44000, &layout));
+    }
+
+    #[test]
+    fn rejects_ram_union_arithmetic_overflow() {
+        let layout = split_fc_ram();
+        assert!(!super::fits_physical(u64::MAX - 1, 4, &layout));
+        let mut overflowing = layout;
+        overflowing.ram_regions.push(MemoryRegion {
+            name: "invalid".into(),
+            base: u64::MAX - 1,
+            size: 4,
+        });
+        assert!(!super::fits_physical(0x2000_0000, 1, &overflowing));
+        assert!(!super::fits_physical(u64::MAX, 0, &overflowing));
+    }
+
+    #[test]
+    fn does_not_join_flash_to_adjacent_ram() {
+        let mut layout = memory();
+        layout.ram_regions[0].base = layout.flash_base + layout.flash_size;
+        assert!(!super::fits_physical(
+            layout.ram_regions[0].base - 1,
+            2,
+            &layout
+        ));
+    }
+
+    #[test]
+    fn zero_file_size_load_does_not_overwrite_initialized_flash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overlapping-nobits.elf");
+        let mut data = elf(0x0800_4000, 0x0800_4000, 8, 8);
+        let payload = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        data.truncate(84);
+        data.resize(116, 0);
+        data.extend_from_slice(&payload);
+        data[44..46].copy_from_slice(&2_u16.to_le_bytes());
+        data[56..60].copy_from_slice(&116_u32.to_le_bytes());
+        data[84..88].copy_from_slice(&1_u32.to_le_bytes());
+        data[92..96].copy_from_slice(&0x2000_0160_u32.to_le_bytes());
+        data[96..100].copy_from_slice(&0x0800_4004_u32.to_le_bytes());
+        data[104..108].copy_from_slice(&0x3c670_u32.to_le_bytes());
+        write(&path, &data);
+        let image = flash_image(&path, &split_fc_ram(), "NOBITS overlap").unwrap();
+        assert_eq!(&image[0x4000..], payload);
+        assert!(image[..0x4000].iter().all(|byte| *byte == 0xff));
     }
 
     #[test]
