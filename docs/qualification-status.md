@@ -24,6 +24,12 @@ radio links. Bounded shared-medium MCU execution with both GS and RRLS remains
 required before physical RF latency can be considered resolved. No LoRa airtime
 scheduler is enabled in the RFD firmware.
 
+The separate empirical ASYNC 4.03 MAC model (`docs/rfd-async-mesh-model.md`)
+is calibrated against the 10-28/10-29 hardware captures. It rejects
+collision-only CSMA as the explanation for the measured 1.2-5 s ACKs. It leaves
+two candidate mechanisms that a single S5 A/B test separates. It is analysis
+evidence, not qualification.
+
 ## Earlier field-failure candidate (2026-10-21; historical evidence)
 
 Cohort13 passes the strict 120-second, seven-board real-firmware simulation with
