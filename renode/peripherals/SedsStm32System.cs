@@ -70,6 +70,17 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 else if((previous & 0x300u) != 0)
                     value = (value & ~0x300u) | (previous & 0x300u);
             }
+            if(variant == "g4" && offset == 0x90)
+            {
+                uint previous;
+                registers.TryGetValue(offset, out previous);
+                if(pwr == null || !pwr.BackupWriteEnabled) value = previous;
+                if((value & (1u << 16)) != 0)
+                {
+                    value &= 0x03010000u; // BDRST and LSCOEN/LSCOSEL are outside RTC-domain reset.
+                    if((previous & (1u << 16)) == 0 && G4BackupReset != null) G4BackupReset();
+                }
+            }
             registers[offset] = value;
             writes++;
             if(variant == "h5" && (offset == 0xF0 || offset == 0xA8) && H5RtcClockChanged != null)
@@ -86,14 +97,28 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void Reset()
         {
             uint backup;
-            registers.TryGetValue(0xF0, out backup);
+            registers.TryGetValue(variant == "g4" ? 0x90 : 0xF0, out backup);
             registers.Clear();
             if(variant == "h5") registers[0xF0] = backup;
+            else if(variant == "g4")
+            {
+                registers[0x58] = 0x400; // RM0440: RTCAPBEN resets enabled.
+                registers[0x90] = backup;
+            }
             writes = clockSwitches = 0;
             if(H5RtcClockChanged != null) H5RtcClockChanged();
         }
         public event Action H5RtcClockChanged;
         public event Action H5BackupReset;
+        public event Action G4BackupReset;
+        public bool G4BackupBusEnabled
+        {
+            get { uint value; return variant == "g4" && registers.TryGetValue(0x58, out value) && (value & (1u << 10)) != 0; }
+        }
+        public bool G4BackupResetAsserted
+        {
+            get { uint value; return variant == "g4" && registers.TryGetValue(0x90, out value) && (value & (1u << 16)) != 0; }
+        }
 
         public void NoteWatchdogReset() { resetFlags |= 1u << 29; }
         private long ResetFlagsOffset { get { return variant == "g4" ? 0x94 : (variant == "h5" || variant == "u5" ? 0xF4 : -1); } }
@@ -224,7 +249,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public bool BackupWriteEnabled
         {
-            get { uint value; return variant == "h5" && registers.TryGetValue(0x24, out value) && (value & 1u) != 0; }
+            get
+            {
+                uint value;
+                if(variant == "g4") return registers.TryGetValue(0, out value) && (value & (1u << 8)) != 0;
+                return variant == "h5" && registers.TryGetValue(0x24, out value) && (value & 1u) != 0;
+            }
         }
         public void WriteDoubleWord(long offset, uint value) { registers[offset] = value; }
         public long Size { get { return 0x400; } }

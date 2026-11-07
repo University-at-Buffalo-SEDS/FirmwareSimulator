@@ -30,5 +30,7 @@ COPY sim/renode/peripherals/SedsSpiSensors.cs /opt/firmware-sim/renode/periphera
 
 # Flight watchdog recovery uses the real H5 backup-domain RTC register model.
 COPY sim/renode/peripherals/SedsStm32System.cs /opt/firmware-sim/renode/peripherals/SedsStm32System.cs
+COPY sim/renode/peripherals/SedsStm32G4Tamp.cs /opt/firmware-sim/renode/peripherals/SedsStm32G4Tamp.cs
+COPY sim/renode/platforms/stm32g491.repl /opt/firmware-sim/renode/platforms/stm32g491.repl
 COPY sim/renode/peripherals/SedsStm32H5Rtc.cs /opt/firmware-sim/renode/peripherals/SedsStm32H5Rtc.cs
 COPY sim/renode/platforms/stm32h523.repl /opt/firmware-sim/renode/platforms/stm32h523.repl
