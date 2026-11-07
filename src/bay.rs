@@ -336,12 +336,16 @@ impl PicoRestartWorkers {
         let mut failures = Vec::new();
         for handle in self.handles.drain(..) {
             match handle.join() {
-                Ok(Ok(())) => {},
+                Ok(Ok(())) => {}
                 Ok(Err(error)) => failures.push(format!("{error:#}")),
                 Err(_) => failures.push("software Pico worker panicked".to_owned()),
             }
         }
-        ensure!(failures.is_empty(), "software Pico worker teardown failed: {:?}", failures);
+        ensure!(
+            failures.is_empty(),
+            "software Pico worker teardown failed: {:?}",
+            failures
+        );
         Ok(())
     }
 }
@@ -354,16 +358,32 @@ impl Drop for PicoRestartWorkers {
 }
 
 fn validate_pico_restarts(topology: &BayTopology) -> Result<()> {
-    ensure!(topology.pico_restarts.len() <= 16, "at most sixteen Pico resets per run");
+    ensure!(
+        topology.pico_restarts.len() <= 16,
+        "at most sixteen Pico resets per run"
+    );
     let mut unique = BTreeSet::new();
     for event in &topology.pico_restarts {
-        ensure!(event.after_sample > 0 && event.after_sample < topology.sample_count,
-            "Pico reset must occur after a completed non-final sample");
-        ensure!(unique.insert((event.link.clone(), event.after_sample)), "duplicate Pico reset event");
-        ensure!(topology.links.iter().any(|link| link.name == event.link && matches!(link.kind, LinkKind::PicoFi))
-            && topology.host_nodes.iter().any(|host| host.serial_links.iter().any(|serial|
-                serial.link == event.link && serial.transport == HostLinkTransport::PicoFiDiscoveryToUart)),
-            "Pico reset requires an existing discovered Ethernet Pico link");
+        ensure!(
+            event.after_sample > 0 && event.after_sample < topology.sample_count,
+            "Pico reset must occur after a completed non-final sample"
+        );
+        ensure!(
+            unique.insert((event.link.clone(), event.after_sample)),
+            "duplicate Pico reset event"
+        );
+        ensure!(
+            topology
+                .links
+                .iter()
+                .any(|link| link.name == event.link && matches!(link.kind, LinkKind::PicoFi))
+                && topology.host_nodes.iter().any(|host| host
+                    .serial_links
+                    .iter()
+                    .any(|serial| serial.link == event.link
+                        && serial.transport == HostLinkTransport::PicoFiDiscoveryToUart)),
+            "Pico reset requires an existing discovered Ethernet Pico link"
+        );
     }
     Ok(())
 }
@@ -622,6 +642,14 @@ pub struct AssertionReport {
     pub observed: u32,
 }
 #[derive(Debug, Serialize)]
+pub struct RenodeRebootCapture {
+    pub schema_version: u32,
+    pub capture_complete: bool,
+    pub stdout: crate::bounded_diagnostics::RebootMarkerObservations,
+    pub stderr: crate::bounded_diagnostics::RebootMarkerObservations,
+}
+
+#[derive(Debug, Serialize)]
 pub struct BayReport {
     /// True when existing observations were checked without executing firmware.
     pub capture_recheck: bool,
@@ -636,6 +664,9 @@ pub struct BayReport {
     pub assertion_reports: Vec<AssertionReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pico_restart_reports: Vec<PicoRestartReport>,
+    /// Actual reader observations, not occurrences in rendered diagnostics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renode_reboot_capture: Option<RenodeRebootCapture>,
 }
 
 const PICO_I2C_SLOT_SIZE: usize = 32;
@@ -1270,7 +1301,27 @@ fn read_host_i2c_v2(state: &mut PicoBridgeState, length: usize) -> Result<Vec<u8
     Ok(result)
 }
 
-pub fn run(topology_path: &Path) -> Result<BayReport> {
+struct PreparedBay {
+    topology_bytes: Vec<u8>,
+    base: PathBuf,
+    topology: BayTopology,
+    scratch: tempfile::TempDir,
+    live_directory: Option<PathBuf>,
+    probe_path: PathBuf,
+    script: String,
+    boot_captures: Vec<(PathBuf, String)>,
+    node_layouts: Vec<(String, BoardLayout)>,
+    node_reset_vectors: BTreeMap<String, (u32, u32, u32, PathBuf)>,
+    host_serial_paths: BTreeMap<(String, String), PathBuf>,
+    renode_pty_paths: Vec<PathBuf>,
+    pico_bridges: Vec<(String, PathBuf, PathBuf, u64)>,
+    pico_tcp_bridges: Vec<(String, PathBuf, std::net::TcpListener)>,
+    pico_discovery_bridges: Vec<(String, PathBuf, u16)>,
+}
+#[path = "bay/owned.rs"]
+pub mod owned;
+
+fn prepare(topology_path: &Path, board_only: bool) -> Result<PreparedBay> {
     if !Path::new("/.dockerenv").exists()
         && env::var("FIRMWARE_SIM_CONTAINER").as_deref() != Ok("1")
     {
@@ -1311,10 +1362,49 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             host.name
         );
         ensure!(
-            host.binary.is_file(),
+            board_only || host.binary.is_file(),
             "host node {} binary is missing: {}",
             host.name,
             host.binary.display()
+        );
+    }
+    if board_only {
+        let valid_name = |name: &str| !name.is_empty() && name.len() <= 80 && safe(name) == name;
+        ensure!(
+            topology.nodes.iter().all(|n| valid_name(&n.name))
+                && topology.host_nodes.iter().all(|h| valid_name(&h.name))
+                && topology.links.iter().all(|l| valid_name(&l.name)),
+            "unsafe or ambiguous board/link name"
+        );
+        let names: BTreeSet<_> = topology.links.iter().map(|l| &l.name).collect();
+        ensure!(
+            names.len() == topology.links.len(),
+            "duplicate board-only link"
+        );
+        ensure!(
+            topology.nodes.len() <= 32
+                && topology.links.len() <= 16
+                && topology.host_nodes.len() <= 8,
+            "board-only cohort exceeds resource bounds"
+        );
+        ensure!(
+            topology.reboots.is_empty()
+                && topology.can_ack_events.is_empty()
+                && topology.can_link_events.is_empty()
+                && topology.radio_link_events.is_empty()
+                && topology.pico_restarts.is_empty(),
+            "scenario schedules require the finite bay runner"
+        );
+        ensure!(
+            !topology.host_nodes.is_empty(),
+            "board-only cohort needs explicit endpoint declarations"
+        );
+        ensure!(
+            topology.host_nodes.iter().all(|h| h
+                .serial_links
+                .iter()
+                .all(|l| l.transport != HostLinkTransport::PicoFiDiscoveryToUart)),
+            "discovery endpoints need an owned discovery binder before runtime support"
         );
     }
     validate_pico_restarts(&topology)?;
@@ -1381,7 +1471,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         );
     }
     validate_radio_links(&topology)?;
-    let base = topology_path.parent().unwrap_or_else(|| Path::new("."));
+    let base = topology_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let scratch = tempfile::tempdir()?;
     // Probe records must not share a stream with asynchronous device logs.
     let diagnostics_root = env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR").map(PathBuf::from);
@@ -1637,6 +1730,45 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                     }
                 }
             }
+            if board_only {
+                let clock_source = scratch.path().join("owned-clock.cs");
+                fs::write(&clock_source, include_str!("bay/owned_clock.cs"))?;
+                let sensor_source = include_str!("../renode/peripherals/SedsSpiSensors.cs");
+                let anchor = "            var culture = System.Globalization.CultureInfo.InvariantCulture;\n            var time = utc.ToString";
+                ensure!(
+                    sensor_source.matches(anchor).count() == 1,
+                    "GNSS observation anchor changed"
+                );
+                let sensor_source = sensor_source.replacen(anchor,
+                    "            if(validFix) Console.WriteLine(\"SEDS_OWNED_GNSS \" + (elapsedSeconds * 1000UL) + \" \" + new DateTimeOffset(utc).ToUnixTimeMilliseconds());\n            var culture = System.Globalization.CultureInfo.InvariantCulture;\n            var time = utc.ToString", 1);
+                let sensor_path = scratch.path().join("owned-gnss.cs");
+                fs::write(&sensor_path, sensor_source)?;
+                let sensor_root = env::var_os("FIRMWARE_SIM_ROOT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+                overlay = overlay.replace(
+                    &sensor_root
+                        .join("renode/peripherals/SedsSpiSensors.cs")
+                        .display()
+                        .to_string(),
+                    &sensor_path.display().to_string(),
+                );
+                overlay = overlay
+                    .replace(
+                        "Miscellaneous.SedsSimulationClock",
+                        "Miscellaneous.SedsOwnedSimulationClock",
+                    )
+                    .replace(
+                        &PathBuf::from(
+                            env::var_os("FIRMWARE_SIM_ROOT")
+                                .unwrap_or_else(|| root.clone().into_os_string()),
+                        )
+                        .join("renode/peripherals/SedsSimulationClock.cs")
+                        .display()
+                        .to_string(),
+                        &clock_source.display().to_string(),
+                    );
+            }
             overlay
         })?;
         let configured_platform =
@@ -1750,7 +1882,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         script += &render_can_link_event(event);
     }
     if !topology.host_nodes.is_empty() {
-        script += "echo \"SEDS_HOST_ENDPOINTS_READY\"\nsleep 5\n";
+        script += if board_only {
+            "echo \"SEDS_HOST_ENDPOINTS_READY\"\n"
+        } else {
+            "echo \"SEDS_HOST_ENDPOINTS_READY\"\nsleep 5\n"
+        };
     }
     /* Firmware nodes are independent MCUs and must advance concurrently.
      * Globally serial execution can deadlock a sender inside a bounded HAL
@@ -1761,6 +1897,44 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         "emulation SetGlobalQuantum \"{}\"\nemulation SetGlobalSerialExecution False\n",
         topology.quantum_seconds
     );
+    Ok(PreparedBay {
+        topology_bytes: bytes,
+        base,
+        topology,
+        scratch,
+        live_directory,
+        probe_path,
+        script,
+        boot_captures,
+        node_layouts,
+        node_reset_vectors,
+        host_serial_paths,
+        renode_pty_paths,
+        pico_bridges,
+        pico_tcp_bridges,
+        pico_discovery_bridges,
+    })
+}
+
+pub fn run(topology_path: &Path) -> Result<BayReport> {
+    let PreparedBay {
+        topology_bytes: _,
+        base,
+        topology,
+        scratch,
+        live_directory,
+        probe_path,
+        mut script,
+        boot_captures,
+        node_layouts,
+        node_reset_vectors,
+        host_serial_paths,
+        renode_pty_paths,
+        pico_bridges,
+        pico_tcp_bridges,
+        pico_discovery_bridges,
+    } = prepare(topology_path, false)?;
+    let base = base.as_path();
     let base_ms = topology.virtual_time_ms / topology.sample_count as u64;
     let remainder_ms = topology.virtual_time_ms % topology.sample_count as u64;
     let profiled_nodes: Vec<&str> = node_layouts
@@ -1927,6 +2101,31 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     fs::write(scratch.path().join("virtual-clock.txt"), "0\n")?;
     let sample_path = scratch.path().join("network-sample.txt");
     fs::write(&sample_path, "0\n").context("creating linked-bay sample marker")?;
+    // The plan is only a finite whitelist. No observation exists until an
+    // actual reader calls Capture::push with an exact console marker line.
+    let boot_markers: Vec<String> = topology
+        .nodes
+        .iter()
+        .map(|node| format!("SEDS_NODE_BOOT_{}", safe(&node.name)))
+        .collect();
+    let reboot_markers: Vec<String> = topology
+        .reboots
+        .iter()
+        .filter(|event| topology.nodes.iter().any(|node| node.name == event.node))
+        .map(|event| {
+            format!(
+                "SEDS_BAY_REBOOT {} {}",
+                safe(&event.node),
+                event.after_sample
+            )
+        })
+        .collect();
+    let stdout_capture = crate::bounded_diagnostics::Capture::with_reboot_markers(
+        boot_markers.clone(),
+        reboot_markers.clone(),
+    );
+    let stderr_capture =
+        crate::bounded_diagnostics::Capture::with_reboot_markers(boot_markers, reboot_markers);
     let mut child = Command::new(&renode)
         .process_group(0)
         .args(["--disable-xwt", "--console", "--execute"])
@@ -1947,9 +2146,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let _renode_stdin_guard = keep_console_stdin_open(&mut child)?;
     let (console_failure_tx, console_failure_rx) = mpsc::channel();
     let bridge_stop = Arc::new(AtomicBool::new(false));
-    let mut pico_restart_workers = (!topology.pico_restarts.is_empty()).then(|| PicoRestartWorkers {
-        stop: bridge_stop.clone(), handles: Vec::new(),
-    });
+    let mut pico_restart_workers =
+        (!topology.pico_restarts.is_empty()).then(|| PicoRestartWorkers {
+            stop: bridge_stop.clone(),
+            handles: Vec::new(),
+        });
     let mut pico_reset_senders = BTreeMap::new();
     let (pico_reset_completed_tx, pico_reset_completed_rx) = mpsc::channel::<usize>();
     let mut host_children = Vec::new();
@@ -1972,75 +2173,77 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             crate::bounded_diagnostics::RotatingLog::create(directory.join("renode.stderr.log"))
         })
         .transpose()?;
-    let boot_markers: Vec<String> = topology
-        .nodes
-        .iter()
-        .map(|node| format!("SEDS_NODE_BOOT_{}", safe(&node.name)))
-        .collect();
-    let stdout_boot_markers = boot_markers.clone();
-    let stdout_reader = thread::spawn(move || -> Result<String> {
-        let result = (|| -> Result<String> {
-            let mut captured =
-                crate::bounded_diagnostics::Capture::with_markers(stdout_boot_markers);
-            let mut reader = BufReader::new(stdout);
-            while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
-                if let Some(log) = &mut stdout_log {
-                    log.line(
-                        &line,
-                        line.starts_with("SEDS_BAY_SAMPLE_DONE ") || line == "SEDS_BAY_COMPLETE",
-                    )?;
-                }
-                if console_execution_failed(&line) {
-                    let _ = stdout_failure_tx.send(line.clone());
-                }
-                if line.trim() == "SEDS_BAY_COMPLETE" {
-                    // Renode closes its PTYs when the script exits. Stop the
-                    // simulated cable first; that expected close is not a live
-                    // transport failure. Probe/host validation still runs below.
-                    stdout_bridge_stop.store(true, Ordering::Release);
-                }
-                if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
-                    println!("[SIM] network sample {progress} complete");
-                    if let Some(sample) = progress.split_whitespace().next() {
-                        fs::write(&progress_sample_path, format!("{sample}\n"))
-                            .context("updating linked-bay sample marker")?;
+    let stdout_reader = thread::spawn(
+        move || -> Result<(String, crate::bounded_diagnostics::RebootMarkerObservations)> {
+            let result =
+                (|| -> Result<(String, crate::bounded_diagnostics::RebootMarkerObservations)> {
+                    let mut captured = stdout_capture;
+                    let mut reader = BufReader::new(stdout);
+                    while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
+                        if let Some(log) = &mut stdout_log {
+                            log.line(
+                                &line,
+                                line.starts_with("SEDS_BAY_SAMPLE_DONE ")
+                                    || line == "SEDS_BAY_COMPLETE",
+                            )?;
+                        }
+                        if console_execution_failed(&line) {
+                            let _ = stdout_failure_tx.send(line.clone());
+                        }
+                        if line.trim() == "SEDS_BAY_COMPLETE" {
+                            // Renode closes its PTYs when the script exits. Stop the
+                            // simulated cable first; that expected close is not a live
+                            // transport failure. Probe/host validation still runs below.
+                            stdout_bridge_stop.store(true, Ordering::Release);
+                        }
+                        if let Some(progress) = line.trim().strip_prefix("SEDS_BAY_SAMPLE_DONE ") {
+                            println!("[SIM] network sample {progress} complete");
+                            if let Some(sample) = progress.split_whitespace().next() {
+                                fs::write(&progress_sample_path, format!("{sample}\n"))
+                                    .context("updating linked-bay sample marker")?;
+                            }
+                        }
+                        captured.push(&line);
                     }
-                }
-                captured.push(&line);
+                    if let Some(log) = &mut stdout_log {
+                        log.flush()?;
+                    }
+                    Ok(captured.finish_with_reboot_observations())
+                })();
+            if let Err(error) = &result {
+                let _ =
+                    stdout_failure_tx.send(format!("stdout diagnostic capture failed: {error}"));
             }
-            if let Some(log) = &mut stdout_log {
-                log.flush()?;
+            result
+        },
+    );
+    let stderr_reader = thread::spawn(
+        move || -> Result<(String, crate::bounded_diagnostics::RebootMarkerObservations)> {
+            let result =
+                (|| -> Result<(String, crate::bounded_diagnostics::RebootMarkerObservations)> {
+                    let mut captured = stderr_capture;
+                    let mut reader = BufReader::new(stderr);
+                    while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
+                        if let Some(log) = &mut stderr_log {
+                            log.line(&line, false)?;
+                        }
+                        if console_execution_failed(&line) {
+                            let _ = stderr_failure_tx.send(line.clone());
+                        }
+                        captured.push(&line);
+                    }
+                    if let Some(log) = &mut stderr_log {
+                        log.flush()?;
+                    }
+                    Ok(captured.finish_with_reboot_observations())
+                })();
+            if let Err(error) = &result {
+                let _ =
+                    stderr_failure_tx.send(format!("stderr diagnostic capture failed: {error}"));
             }
-            Ok(captured.finish())
-        })();
-        if let Err(error) = &result {
-            let _ = stdout_failure_tx.send(format!("stdout diagnostic capture failed: {error}"));
-        }
-        result
-    });
-    let stderr_reader = thread::spawn(move || -> Result<String> {
-        let result = (|| -> Result<String> {
-            let mut captured = crate::bounded_diagnostics::Capture::with_markers(boot_markers);
-            let mut reader = BufReader::new(stderr);
-            while let Some(line) = crate::bounded_diagnostics::read_line(&mut reader)? {
-                if let Some(log) = &mut stderr_log {
-                    log.line(&line, false)?;
-                }
-                if console_execution_failed(&line) {
-                    let _ = stderr_failure_tx.send(line.clone());
-                }
-                captured.push(&line);
-            }
-            if let Some(log) = &mut stderr_log {
-                log.flush()?;
-            }
-            Ok(captured.finish())
-        })();
-        if let Err(error) = &result {
-            let _ = stderr_failure_tx.send(format!("stderr diagnostic capture failed: {error}"));
-        }
-        result
-    });
+            result
+        },
+    );
     if !topology.host_nodes.is_empty() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
         while renode_pty_paths.iter().any(|path| !path.exists())
@@ -2067,8 +2270,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             bail!(
                 "Renode did not create host UART PTY {}; console: {}\n{}",
                 path.display(),
-                execution_tail(&stdout, 30),
-                execution_tail(&stderr, 30)
+                execution_tail(&stdout.0, 30),
+                execution_tail(&stderr.0, 30)
             );
         }
         for path in &renode_pty_paths {
@@ -2135,16 +2338,26 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             let (reset_tx, reset_rx) = mpsc::sync_channel(16);
             pico_reset_senders.insert(name.clone(), reset_tx);
             let reset_completed = pico_reset_completed_tx.clone();
-            let restartable = topology.pico_restarts.iter().any(|event| event.link == name);
+            let restartable = topology
+                .pico_restarts
+                .iter()
+                .any(|event| event.link == name);
             if restartable {
-                let owner = pico_restart_workers.as_mut().context("restartable Pico worker owner is missing")?;
+                let owner = pico_restart_workers
+                    .as_mut()
+                    .context("restartable Pico worker owner is missing")?;
                 let handle = thread::spawn(move || {
-                    let outcome = picofi_tcp_bridge::run_discovered_restartable(port, &uart_path, || {
-                        worker_stop.load(Ordering::Acquire)
-                    }, reset_rx, reset_completed);
+                    let outcome = picofi_tcp_bridge::run_discovered_restartable(
+                        port,
+                        &uart_path,
+                        || worker_stop.load(Ordering::Acquire),
+                        reset_rx,
+                        reset_completed,
+                    );
                     if let Err(error) = &outcome {
                         if !worker_stop.load(Ordering::Acquire) {
-                            let _ = bridge_failure_tx.send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
+                            let _ = bridge_failure_tx
+                                .send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
                         }
                     }
                     outcome
@@ -2157,7 +2370,8 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
                         worker_stop.load(Ordering::Acquire)
                     }) {
                         if !worker_stop.load(Ordering::Acquire) {
-                            let _ = bridge_failure_tx.send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
+                            let _ = bridge_failure_tx
+                                .send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
                         }
                     }
                 });
@@ -2218,9 +2432,14 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             .unwrap_or(0);
         for (index, event) in topology.pico_restarts.iter().enumerate() {
             if event.after_sample <= completed_sample && !requested_pico_resets.contains(&index) {
-                let sent = pico_reset_senders.get(&event.link)
+                let sent = pico_reset_senders
+                    .get(&event.link)
                     .context("Pico reset link was not installed")
-                    .and_then(|sender| sender.try_send(index).context("queueing bounded software Pico reset"));
+                    .and_then(|sender| {
+                        sender
+                            .try_send(index)
+                            .context("queueing bounded software Pico reset")
+                    });
                 if let Err(error) = sent {
                     let failure = format!("Pico reset failed: {error:#}");
                     pico_reset_failure = Some(failure.clone());
@@ -2233,8 +2452,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         while let Ok(index) = pico_reset_completed_rx.try_recv() {
             if !requested_pico_resets.contains(&index) || !completed_pico_resets.insert(index) {
-                pico_reset_failure = Some("unexpected/duplicate software Pico reset completion".to_owned());
-                let _ = console_failure_tx.send("unexpected/duplicate software Pico reset completion".to_owned());
+                pico_reset_failure =
+                    Some("unexpected/duplicate software Pico reset completion".to_owned());
+                let _ = console_failure_tx
+                    .send("unexpected/duplicate software Pico reset completion".to_owned());
                 terminate_simulator(&mut child);
                 break;
             }
@@ -2289,17 +2510,26 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     };
     while let Ok(index) = pico_reset_completed_rx.try_recv() {
         if !requested_pico_resets.contains(&index) || !completed_pico_resets.insert(index) {
-            pico_reset_failure = Some("unexpected/duplicate software Pico reset completion".to_owned());
+            pico_reset_failure =
+                Some("unexpected/duplicate software Pico reset completion".to_owned());
         }
     }
     bridge_stop.store(true, Ordering::Release);
     let pico_worker_result = if let Some(owner) = &mut pico_restart_workers {
         owner.stop_and_join()
-    } else { Ok(()) };
-    let pico_restart_reports = completed_pico_resets.iter().map(|&index| {
-        let event = &topology.pico_restarts[index];
-        PicoRestartReport { link: event.link.clone(), after_sample: event.after_sample }
-    }).collect::<Vec<_>>();
+    } else {
+        Ok(())
+    };
+    let pico_restart_reports = completed_pico_resets
+        .iter()
+        .map(|&index| {
+            let event = &topology.pico_restarts[index];
+            PicoRestartReport {
+                link: event.link.clone(),
+                after_sample: event.after_sample,
+            }
+        })
+        .collect::<Vec<_>>();
     let mut host_failures = Vec::new();
     let mut host_diagnostics = BTreeMap::new();
     let mut host_outputs = BTreeMap::new();
@@ -2348,13 +2578,19 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         host_outputs.insert(runtime.name.clone(), combined_host);
         host_diagnostics.insert(runtime.name, diagnostic);
     }
-    let stdout = stdout_reader
+    let (stdout, stdout_reboots) = stdout_reader
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stdout reader panicked"))??;
-    let stderr = stderr_reader
+    let (stderr, stderr_reboots) = stderr_reader
         .join()
         .map_err(|_| anyhow::anyhow!("Renode stderr reader panicked"))??;
     let mut combined = format!("{stdout}{stderr}");
+    let renode_reboot_capture = RenodeRebootCapture {
+        schema_version: 1,
+        capture_complete: true,
+        stdout: stdout_reboots,
+        stderr: stderr_reboots,
+    };
     // Only the CPU hook creates these records. Never infer boot success from
     // later telemetry or synthesize a marker when a hook was not observed.
     for (path, marker) in boot_captures {
@@ -2383,6 +2619,10 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         let destination = PathBuf::from(directory).join(format!("bay-{stamp}"));
         fs::create_dir_all(&destination).context("creating bay diagnostics directory")?;
         fs::write(destination.join("renode.log"), &combined)?;
+        fs::write(
+            destination.join("renode-reboot-observations.json"),
+            serde_json::to_vec_pretty(&renode_reboot_capture)?,
+        )?;
         fs::copy(&script_path, destination.join("bay.resc"))?;
         if probe_path.exists() {
             fs::copy(&probe_path, destination.join("memory-probes.txt"))?;
@@ -2492,9 +2732,15 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     println!("[SIM] Final CPU positions:\n{}", register_dump.join("\n"));
     let probe_output = fs::read_to_string(&probe_path).context("reading bay probe capture")?;
     pico_worker_result?;
-    ensure!(pico_reset_failure.is_none(), "software Pico reset failed: {:?}", pico_reset_failure);
-    ensure!(pico_restart_reports.len() == topology.pico_restarts.len(),
-        "not every scheduled software Pico restart completed before execution ended");
+    ensure!(
+        pico_reset_failure.is_none(),
+        "software Pico reset failed: {:?}",
+        pico_reset_failure
+    );
+    ensure!(
+        pico_restart_reports.len() == topology.pico_restarts.len(),
+        "not every scheduled software Pico restart completed before execution ended"
+    );
     let mut report = qualify_observations(
         topology,
         &node_layouts,
@@ -2504,6 +2750,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         register_dump,
     )?;
     report.pico_restart_reports = pico_restart_reports;
+    report.renode_reboot_capture = Some(renode_reboot_capture);
     Ok(report)
 }
 
@@ -2969,6 +3216,7 @@ fn qualify_observations(
         link_reports,
         assertion_reports,
         pico_restart_reports: Vec::new(),
+        renode_reboot_capture: None,
     })
 }
 

@@ -11,6 +11,170 @@ const MAX_LINE: usize = 64 * 1024;
 const HEAD_BYTES: usize = 64 * 1024;
 const TAIL_BYTES: usize = 4 * 1024 * 1024;
 const LOG_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REBOOT_MARKERS: usize = 64;
+const MAX_REBOOT_MARKER_BYTES: usize = 256;
+
+/// Counts reader inputs, never occurrences in rendered head/tail diagnostics.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct RebootMarkerObservations {
+    pub input_lines: u64,
+    pub records: Vec<ObservedRebootMarker>,
+    pub unexpected_marker_lines: u64,
+    pub count_overflow: bool,
+    pub configuration_incomplete: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ObservedRebootMarker {
+    pub marker: String,
+    pub observations: u64,
+    pub first_input_line: u64,
+    pub last_input_line: u64,
+}
+
+#[derive(Default)]
+struct RebootMarkers {
+    input_lines: u64,
+    whitelist: Vec<ObservedRebootMarker>,
+    unexpected_marker_lines: u64,
+    count_overflow: bool,
+    configuration_incomplete: bool,
+}
+
+fn increment_bounded(value: &mut u64, overflow: &mut bool) {
+    match value.checked_add(1) {
+        Some(next) => *value = next,
+        None => *overflow = true,
+    }
+}
+
+fn valid_reboot_marker(marker: &str) -> bool {
+    if marker.len() > MAX_REBOOT_MARKER_BYTES {
+        return false;
+    }
+    let mut parts = marker.split(' ');
+    let Some("SEDS_BAY_REBOOT") = parts.next() else {
+        return false;
+    };
+    let Some(node) = parts.next() else {
+        return false;
+    };
+    let Some(sample) = parts.next() else {
+        return false;
+    };
+    !node.is_empty()
+        && node
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        && !sample.starts_with('0')
+        && sample.bytes().all(|byte| byte.is_ascii_digit())
+        && sample.parse::<usize>().is_ok()
+        && parts.next().is_none()
+}
+
+/// Strip SGR decoration only. Cursor motion, OSC and malformed escape sequences
+/// are not marker normalization and cannot turn a console line into evidence.
+fn without_sgr(line: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let input = line.as_bytes();
+    if input.len() > MAX_LINE {
+        return None;
+    }
+    if !input.contains(&0x1b) {
+        return Some(std::borrow::Cow::Borrowed(line));
+    }
+    let mut plain = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] != 0x1b {
+            plain.push(input[index]);
+            index += 1;
+            continue;
+        }
+        if input.get(index + 1) != Some(&b'[') {
+            return None;
+        }
+        let start = index;
+        index += 2;
+        while input
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
+        {
+            index += 1;
+            if index - start > 32 {
+                return None;
+            }
+        }
+        if input.get(index) != Some(&b'm') {
+            return None;
+        }
+        index += 1;
+    }
+    String::from_utf8(plain).ok().map(std::borrow::Cow::Owned)
+}
+
+impl RebootMarkers {
+    fn new(markers: Vec<String>) -> Self {
+        let mut capture = Self::default();
+        for marker in markers {
+            if capture.whitelist.len() == MAX_REBOOT_MARKERS
+                || !valid_reboot_marker(&marker)
+                || capture
+                    .whitelist
+                    .iter()
+                    .any(|record| record.marker == marker)
+            {
+                // Diagnostic capacity cannot make a previously valid scene
+                // unexecutable. Keep finite evidence and report its limits.
+                capture.configuration_incomplete = true;
+                continue;
+            }
+            capture.whitelist.push(ObservedRebootMarker {
+                marker,
+                observations: 0,
+                first_input_line: 0,
+                last_input_line: 0,
+            });
+        }
+        capture
+    }
+
+    fn push(&mut self, line: &str) {
+        increment_bounded(&mut self.input_lines, &mut self.count_overflow);
+        let Some(plain) = without_sgr(line) else {
+            return;
+        };
+        let marker = plain.trim();
+        if let Some(record) = self
+            .whitelist
+            .iter_mut()
+            .find(|record| record.marker == marker)
+        {
+            if record.observations == 0 {
+                record.first_input_line = self.input_lines;
+            }
+            record.last_input_line = self.input_lines;
+            increment_bounded(&mut record.observations, &mut self.count_overflow);
+        } else if marker == "SEDS_BAY_REBOOT" || marker.starts_with("SEDS_BAY_REBOOT ") {
+            // Preserve a finite refusal count, not arbitrary unbounded payloads.
+            increment_bounded(&mut self.unexpected_marker_lines, &mut self.count_overflow);
+        }
+    }
+
+    fn observations(&self) -> RebootMarkerObservations {
+        RebootMarkerObservations {
+            input_lines: self.input_lines,
+            records: self
+                .whitelist
+                .iter()
+                .filter(|record| record.observations != 0)
+                .cloned()
+                .collect(),
+            unexpected_marker_lines: self.unexpected_marker_lines,
+            count_overflow: self.count_overflow,
+            configuration_incomplete: self.configuration_incomplete,
+        }
+    }
+}
 
 /// Consume an entire line while bounding its allocation, including hostile/noisy
 /// console output with no newline. Subsequent marker lines remain readable.
@@ -51,8 +215,18 @@ pub(crate) struct Capture {
     omitted_bytes: u64,
     in_tail: bool,
     markers: Vec<(String, Option<String>)>,
+    reboots: RebootMarkers,
 }
 impl Capture {
+    pub(crate) fn with_reboot_markers(
+        boot_markers: Vec<String>,
+        reboot_markers: Vec<String>,
+    ) -> Self {
+        Self {
+            reboots: RebootMarkers::new(reboot_markers),
+            ..Self::with_markers(boot_markers)
+        }
+    }
     pub(crate) fn with_markers(markers: Vec<String>) -> Self {
         Self {
             markers: markers.into_iter().map(|marker| (marker, None)).collect(),
@@ -60,6 +234,7 @@ impl Capture {
         }
     }
     pub(crate) fn push(&mut self, line: &str) {
+        self.reboots.push(line);
         // Preserve only actual observations of this run's finite whitelist.
         // Expected-but-unseen markers must never become synthetic successes.
         let trimmed = line.trim();
@@ -101,6 +276,11 @@ impl Capture {
             output.push_str(&line);
         }
         output
+    }
+
+    pub(crate) fn finish_with_reboot_observations(self) -> (String, RebootMarkerObservations) {
+        let observations = self.reboots.observations();
+        (self.finish(), observations)
     }
 }
 
@@ -161,6 +341,127 @@ pub(crate) fn live_directory(root: Option<&Path>) -> io::Result<Option<PathBuf>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    const REBOOT: &str = "SEDS_BAY_REBOOT gateway 45";
+
+    #[test]
+    fn observed_reboot_survives_middle_eviction_without_planned_marker_evidence() {
+        let mut capture = Capture::with_reboot_markers(
+            Vec::new(),
+            vec![REBOOT.into(), "SEDS_BAY_REBOOT actuator 45".into()],
+        );
+        let noise = "x".repeat(4096);
+        for _ in 0..32 {
+            capture.push(&noise);
+        }
+        capture.push(REBOOT);
+        for _ in 0..2048 {
+            capture.push(&noise);
+        }
+        let (text, observed) = capture.finish_with_reboot_observations();
+        assert!(!text.contains(REBOOT));
+        assert!(text.contains("omitted from in-memory diagnostic"));
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.records[0].marker, REBOOT);
+        assert_eq!(observed.records[0].observations, 1);
+        assert_eq!(observed.records[0].first_input_line, 33);
+        assert_eq!(observed.records[0].last_input_line, 33);
+        assert_eq!(observed.unexpected_marker_lines, 0);
+        assert!(!observed.count_overflow);
+        assert!(!observed.configuration_incomplete);
+        assert!(text.len() <= HEAD_BYTES + TAIL_BYTES + 200);
+    }
+
+    #[test]
+    fn unseen_reboot_and_script_echo_are_not_observations() {
+        let mut capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into()]);
+        capture.push("echo \"SEDS_BAY_REBOOT gateway 45\"");
+        capture.push("[INFO] monitor: echo \"SEDS_BAY_REBOOT gateway 45\"");
+        capture.push("planned: SEDS_BAY_REBOOT gateway 45");
+        let (_, observed) = capture.finish_with_reboot_observations();
+        assert!(observed.records.is_empty());
+        assert_eq!(observed.unexpected_marker_lines, 0);
+    }
+
+    #[test]
+    fn sgr_decorated_exact_reboot_is_observed_but_cursor_escape_is_not() {
+        assert!(matches!(
+            without_sgr(REBOOT),
+            Some(std::borrow::Cow::Borrowed(_))
+        ));
+        let mut capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into()]);
+        capture.push("\x1b[32mSEDS_BAY_\x1b[0mREBOOT gateway 45\x1b[0m");
+        capture.push("\x1b[2KSEDS_BAY_REBOOT gateway 45");
+        let (_, observed) = capture.finish_with_reboot_observations();
+        assert_eq!(observed.records.len(), 1);
+        assert_eq!(observed.records[0].observations, 1);
+        assert_eq!(observed.records[0].first_input_line, 1);
+        assert_eq!(observed.records[0].last_input_line, 1);
+    }
+
+    #[test]
+    fn two_actual_reboot_inputs_count_two_while_head_rendering_counts_nothing() {
+        let mut capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into()]);
+        capture.push(REBOOT);
+        capture.push(REBOOT);
+        let (text, observed) = capture.finish_with_reboot_observations();
+        assert_eq!(text.lines().filter(|line| *line == REBOOT).count(), 2);
+        assert_eq!(observed.records[0].observations, 2);
+        assert_eq!(observed.records[0].first_input_line, 1);
+        assert_eq!(observed.records[0].last_input_line, 2);
+    }
+
+    #[test]
+    fn retained_boot_head_duplication_does_not_create_extra_reboot_observations() {
+        let mut capture = Capture::with_reboot_markers(
+            vec!["SEDS_NODE_BOOT_gateway".into()],
+            vec![REBOOT.into()],
+        );
+        capture.push("SEDS_NODE_BOOT_gateway");
+        capture.push(REBOOT);
+        let (text, observed) = capture.finish_with_reboot_observations();
+        assert_eq!(text.matches("SEDS_NODE_BOOT_gateway").count(), 2);
+        assert_eq!(observed.records[0].observations, 1);
+    }
+
+    #[test]
+    fn reboot_whitelist_and_unexpected_input_are_finitely_bounded() {
+        let capture = Capture::with_reboot_markers(
+            Vec::new(),
+            (1..=MAX_REBOOT_MARKERS + 1)
+                .map(|sample| format!("SEDS_BAY_REBOOT gateway {sample}"))
+                .collect(),
+        );
+        assert_eq!(capture.reboots.whitelist.len(), MAX_REBOOT_MARKERS);
+        assert!(capture.reboots.configuration_incomplete);
+        let capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into(), REBOOT.into()]);
+        assert!(capture.reboots.configuration_incomplete);
+        let capture = Capture::with_reboot_markers(
+            Vec::new(),
+            vec![format!(
+                "SEDS_BAY_REBOOT {} 45",
+                "x".repeat(MAX_REBOOT_MARKER_BYTES)
+            )],
+        );
+        assert!(capture.reboots.whitelist.is_empty());
+        assert!(capture.reboots.configuration_incomplete);
+        let mut capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into()]);
+        capture.push("SEDS_BAY_REBOOT unplanned 45");
+        capture.push("SEDS_BAY_REBOOT gateway 45 trailing");
+        let (_, observed) = capture.finish_with_reboot_observations();
+        assert!(observed.records.is_empty());
+        assert_eq!(observed.unexpected_marker_lines, 2);
+    }
+
+    #[test]
+    fn reboot_counter_overflow_is_refusal_evidence_not_wrapped_success() {
+        let mut capture = Capture::with_reboot_markers(Vec::new(), vec![REBOOT.into()]);
+        capture.reboots.whitelist[0].observations = u64::MAX;
+        capture.push(REBOOT);
+        let (_, observed) = capture.finish_with_reboot_observations();
+        assert_eq!(observed.records[0].observations, u64::MAX);
+        assert!(observed.count_overflow);
+    }
+
     #[test]
     fn oversized_unterminated_console_line_is_bounded_and_next_marker_survives() {
         let mut source = vec![b'x'; MAX_LINE * 3];

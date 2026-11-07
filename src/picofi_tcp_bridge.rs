@@ -43,8 +43,10 @@ impl Session {
     }
     fn service(&mut self, state: &mut PicoBridgeState) -> Result<()> {
         ensure!(
-            self.hello || self.hello_receive_started
-                .is_none_or(|started| started.elapsed() < HELLO_RECEIVE_TIMEOUT),
+            self.hello
+                || self
+                    .hello_receive_started
+                    .is_none_or(|started| started.elapsed() < HELLO_RECEIVE_TIMEOUT),
             "Pico-Fi TCP handshake timed out"
         );
         let total = if !self.hello {
@@ -175,8 +177,12 @@ pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> boo
     run_discovered_epoch(port, uart_path, stop, None)
 }
 
-fn run_discovered_epoch(port: u16, uart_path: &Path, stop: impl Fn() -> bool,
-    frozen_identity: Option<[u8; 6]>) -> Result<()> {
+fn run_discovered_epoch(
+    port: u16,
+    uart_path: &Path,
+    stop: impl Fn() -> bool,
+    frozen_identity: Option<[u8; 6]>,
+) -> Result<()> {
     use discovery_wire::{hardware_mac, Kind, Message, Party, PORT, SIZE};
     ensure!(
         port != 0,
@@ -187,7 +193,8 @@ fn run_discovered_epoch(port: u16, uart_path: &Path, stop: impl Fn() -> bool,
     configure_raw_nonblocking(uart.as_raw_fd())?;
     let discovery = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
     discovery.set_nonblocking(true)?;
-    let identity = frozen_identity.unwrap_or(hardware_mac(&discovery.local_addr()?.port().to_le_bytes()));
+    let identity =
+        frozen_identity.unwrap_or(hardware_mac(&discovery.local_addr()?.port().to_le_bytes()));
     let mut state = PicoBridgeState::ethernet();
     let mut session = None;
     let mut next_query = Instant::now();
@@ -281,16 +288,31 @@ pub(super) fn run_discovered_restartable(
     let identity = discovery_wire::hardware_mac(&port.to_le_bytes());
     loop {
         let reset = std::cell::Cell::new(None);
-        run_discovered_epoch(port, uart_path, || {
-            if stop() { return true; }
-            if reset.get().is_none() {
-                if let Ok(event) = resets.try_recv() { reset.set(Some(event)); }
-            }
-            reset.get().is_some()
-        }, Some(identity))?;
-        if stop() { return Ok(()); }
-        let event = reset.get().context("Pico discovery worker ended without stop/reset")?;
-        completed.send(event).context("recording completed software Pico reset")?;
+        run_discovered_epoch(
+            port,
+            uart_path,
+            || {
+                if stop() {
+                    return true;
+                }
+                if reset.get().is_none() {
+                    if let Ok(event) = resets.try_recv() {
+                        reset.set(Some(event));
+                    }
+                }
+                reset.get().is_some()
+            },
+            Some(identity),
+        )?;
+        if stop() {
+            return Ok(());
+        }
+        let event = reset
+            .get()
+            .context("Pico discovery worker ended without stop/reset")?;
+        completed
+            .send(event)
+            .context("recording completed software Pico reset")?;
         // Every invocation creates a fresh complete state, including HELLO.
     }
 }
