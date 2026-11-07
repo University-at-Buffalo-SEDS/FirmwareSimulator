@@ -1,4 +1,5 @@
 import importlib.util
+import ast
 from pathlib import Path
 import unittest
 import tempfile
@@ -44,6 +45,15 @@ class Contracts(unittest.TestCase):
    with patch.object(fixture.urllib.request,'urlopen',return_value=io.BytesIO(prefix+(json.dumps(gps)+'\n').encode())):
     fixture.capture_recent_gps('http://127.0.0.1:1','fixture-only',p)
    self.assertEqual(json.loads(p.read_text()),[gps]);self.assertTrue(json.loads(p.with_suffix('.capture.json').read_text())['complete'])
+ def test_generated_host_environment_preserves_real_startup_producer(self):
+  # Inspect the actual environment emitted by prepare, without starting Docker.
+  prepare=next(n for n in ast.parse(p.read_text()).body if isinstance(n,ast.FunctionDef)and n.name=='prepare')
+  environments=[n.value for n in ast.walk(prepare)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Subscript)and isinstance(t.value,ast.Name)and t.value.id=='host'and isinstance(t.slice,ast.Constant)and t.slice.value=='env'for t in n.targets)]
+  self.assertEqual(len(environments),1)
+  environment=ast.literal_eval(environments[0])
+  self.assertNotIn('GS_FLIGHT_STATE_DEFAULT',environment)
+  self.assertEqual(environment['GS_SIM_MODE'],'0')
+  self.assertEqual(environment['GS_NETWORK_VARIABLE_CACHE'],'/diagnostics/state/network-variables.json')
  def test_assumed_plant_uses_only_actual_valve_inputs(self):
   self.assertEqual(fixture.plant_pressure(0,200,[False,False,False,True,False]),7)
   self.assertEqual(fixture.plant_pressure(40,200,[False,True,False,True,False]),0)

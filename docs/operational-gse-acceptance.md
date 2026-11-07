@@ -16,6 +16,16 @@ paths. It creates a disposable synthetic account and isolated settings. No
 physical device or socket is mounted, and no qualification fields or command
 acknowledgements are injected.
 
+The generated GS environment leaves `GS_FLIGHT_STATE_DEFAULT` unset. A fresh GS
+starts in its normal Startup state and must publish Idle through the real
+Startup-to-Idle producer and its existing guards. Forcing the default to Idle
+skips that producer: a default value with no original publication timestamp is
+not a replayable managed-state update, and Gateway/DAQ recovery queries can
+correctly remain without a verified flight state. Do not seed the network cache
+or restamp that default to make a scene proceed. A linked run must observe the
+original live Idle publication and fresh verified firmware state; the durable
+default's timestamp alone is not that evidence.
+
 The default scenario verifies real valve self-test and nitrogen test completion,
 automatic persisted checklist receipts, then starts fill with an intentionally
 unmet mass target, rejects Fire and pauses all valves closed. `--positive-fill`
