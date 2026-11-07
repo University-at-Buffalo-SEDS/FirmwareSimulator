@@ -363,6 +363,16 @@ fault diagnostics remain available. Firmware should expose a boot-only probe
 for the value read from persistent storage; checking only the eventual GPIO or
 network cache can hide a failed local restore after network synchronization.
 
+### DAQ 50 kg input selection
+
+`scripts/test-kg50-input-sync.py` runs the real DAQ and gateway firmware against
+the real backend for 205 virtual seconds. It selects each input (through the
+bundled UI with `--ui`), reboots the DAQ with the GroundStation up and again with
+its CAN link detached, restarts the GroundStation, and finally restarts it with a
+saved selection that disagrees with the board. CH1 and CH2-CH3 carry different
+stimulus codes, and each checkpoint compares the DAQ's RAM, the report values,
+the status API and the UI.
+
 ## Complete seven-board qualification
 
 From a clean FirmwareSimulator checkout, obtain the seven firmware migration
