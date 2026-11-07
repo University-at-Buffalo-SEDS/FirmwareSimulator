@@ -60,6 +60,13 @@
         }}
       }, "additionalProperties": false
     }},
+    "pico_restarts": {"type": "array", "maxItems": 16, "items": {
+      "type": "object", "required": ["link", "after_sample"],
+      "properties": {
+        "link": {"type": "string", "minLength": 1},
+        "after_sample": {"type": "integer", "minimum": 1}
+      }, "additionalProperties": false
+    }},
     "assertions": {"type": "array", "items": {
       "type": "object", "required": ["name", "node", "probe"],
       "properties": {

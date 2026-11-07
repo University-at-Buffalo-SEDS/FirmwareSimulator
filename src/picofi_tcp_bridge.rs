@@ -158,6 +158,11 @@ mod discovery_wire;
 
 /// Exercise the deployed direction: Pico discovers a GS-selected TCP endpoint.
 pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> bool) -> Result<()> {
+    run_discovered_epoch(port, uart_path, stop, None)
+}
+
+fn run_discovered_epoch(port: u16, uart_path: &Path, stop: impl Fn() -> bool,
+    frozen_identity: Option<[u8; 6]>) -> Result<()> {
     use discovery_wire::{hardware_mac, Kind, Message, Party, PORT, SIZE};
     ensure!(
         port != 0,
@@ -168,7 +173,7 @@ pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> boo
     configure_raw_nonblocking(uart.as_raw_fd())?;
     let discovery = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
     discovery.set_nonblocking(true)?;
-    let identity = hardware_mac(&discovery.local_addr()?.port().to_le_bytes());
+    let identity = frozen_identity.unwrap_or(hardware_mac(&discovery.local_addr()?.port().to_le_bytes()));
     let mut state = PicoBridgeState::ethernet();
     let mut session = None;
     let mut next_query = Instant::now();
@@ -245,6 +250,35 @@ pub(super) fn run_discovered(port: u16, uart_path: &Path, stop: impl Fn() -> boo
         thread::sleep(Duration::from_millis(1));
     }
     Ok(())
+}
+
+/// Cold-reset only this software Pico endpoint. Each request is acknowledged
+/// after the prior discovery socket, TCP session, UART parser and queues have
+/// been dropped by `run_discovered`; this is not a board or wire-drain proof.
+pub(super) fn run_discovered_restartable(
+    port: u16,
+    uart_path: &Path,
+    stop: impl Fn() -> bool,
+    resets: mpsc::Receiver<usize>,
+    completed: mpsc::Sender<usize>,
+) -> Result<()> {
+    // The modeled unit retains its configured identity across power cycles;
+    // ephemeral UDP client ports do not create a different modeled Pico.
+    let identity = discovery_wire::hardware_mac(&port.to_le_bytes());
+    loop {
+        let reset = std::cell::Cell::new(None);
+        run_discovered_epoch(port, uart_path, || {
+            if stop() { return true; }
+            if reset.get().is_none() {
+                if let Ok(event) = resets.try_recv() { reset.set(Some(event)); }
+            }
+            reset.get().is_some()
+        }, Some(identity))?;
+        if stop() { return Ok(()); }
+        let event = reset.get().context("Pico discovery worker ended without stop/reset")?;
+        completed.send(event).context("recording completed software Pico reset")?;
+        // Every invocation creates a fresh complete state, including HELLO.
+    }
 }
 
 #[cfg(test)]
@@ -427,3 +461,7 @@ mod tests {
         assert_eq!(state.host_packet_bytes, 0);
     }
 }
+
+#[cfg(test)]
+#[path = "picofi_restart_tests.rs"]
+mod restart_tests;

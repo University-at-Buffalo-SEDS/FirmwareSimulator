@@ -142,6 +142,9 @@ pub struct BayTopology {
     /// rest of the linked network remains online.
     #[serde(default)]
     pub reboots: Vec<RebootEvent>,
+    /// Reset the modeled Pico discovery/TCP/UART endpoint, not an RP2040 MCU.
+    #[serde(default)]
+    pub pico_restarts: Vec<PicoRestartEvent>,
     /// Change whether an emulated CAN controller sees link-layer ACKs after a
     /// sample. This models a disconnected peer or transient physical-bus
     /// outage without stopping the firmware or its scheduler.
@@ -311,6 +314,60 @@ pub struct RebootEvent {
     /// One-based sample number after which the reset is applied.
     pub after_sample: usize,
 }
+#[derive(Debug, Deserialize)]
+pub struct PicoRestartEvent {
+    pub link: String,
+    pub after_sample: usize,
+}
+#[derive(Debug, Serialize)]
+pub struct PicoRestartReport {
+    pub link: String,
+    pub after_sample: usize,
+}
+
+/// Own only opt-in restartable workers. The legacy no-event path is unchanged.
+struct PicoRestartWorkers {
+    stop: Arc<AtomicBool>,
+    handles: Vec<thread::JoinHandle<Result<()>>>,
+}
+impl PicoRestartWorkers {
+    fn stop_and_join(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Release);
+        let mut failures = Vec::new();
+        for handle in self.handles.drain(..) {
+            match handle.join() {
+                Ok(Ok(())) => {},
+                Ok(Err(error)) => failures.push(format!("{error:#}")),
+                Err(_) => failures.push("software Pico worker panicked".to_owned()),
+            }
+        }
+        ensure!(failures.is_empty(), "software Pico worker teardown failed: {:?}", failures);
+        Ok(())
+    }
+}
+impl Drop for PicoRestartWorkers {
+    fn drop(&mut self) {
+        // Error/unwind cleanup still joins every remaining worker. The normal
+        // success path explicitly checks the actual joined worker result.
+        let _ = self.stop_and_join();
+    }
+}
+
+fn validate_pico_restarts(topology: &BayTopology) -> Result<()> {
+    ensure!(topology.pico_restarts.len() <= 16, "at most sixteen Pico resets per run");
+    let mut unique = BTreeSet::new();
+    for event in &topology.pico_restarts {
+        ensure!(event.after_sample > 0 && event.after_sample < topology.sample_count,
+            "Pico reset must occur after a completed non-final sample");
+        ensure!(unique.insert((event.link.clone(), event.after_sample)), "duplicate Pico reset event");
+        ensure!(topology.links.iter().any(|link| link.name == event.link && matches!(link.kind, LinkKind::PicoFi))
+            && topology.host_nodes.iter().any(|host| host.serial_links.iter().any(|serial|
+                serial.link == event.link && serial.transport == HostLinkTransport::PicoFiDiscoveryToUart)),
+            "Pico reset requires an existing discovered Ethernet Pico link");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CanAckEvent {
     pub node: String,
@@ -577,6 +634,8 @@ pub struct BayReport {
     pub memory_profiles: BTreeMap<String, Vec<MemoryProbeReport>>,
     pub link_reports: Vec<LinkReport>,
     pub assertion_reports: Vec<AssertionReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pico_restart_reports: Vec<PicoRestartReport>,
 }
 
 const PICO_I2C_SLOT_SIZE: usize = 32;
@@ -1258,6 +1317,7 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             host.binary.display()
         );
     }
+    validate_pico_restarts(&topology)?;
     for reboot in &topology.reboots {
         ensure!(
             topology.nodes.iter().any(|node| node.name == reboot.node)
@@ -1887,6 +1947,11 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     let _renode_stdin_guard = keep_console_stdin_open(&mut child)?;
     let (console_failure_tx, console_failure_rx) = mpsc::channel();
     let bridge_stop = Arc::new(AtomicBool::new(false));
+    let mut pico_restart_workers = (!topology.pico_restarts.is_empty()).then(|| PicoRestartWorkers {
+        stop: bridge_stop.clone(), handles: Vec::new(),
+    });
+    let mut pico_reset_senders = BTreeMap::new();
+    let (pico_reset_completed_tx, pico_reset_completed_rx) = mpsc::channel::<usize>();
     let mut host_children = Vec::new();
     let mut host_pty_guards = BTreeMap::new();
     let stdout = child.stdout.take().context("capturing Renode stdout")?;
@@ -2067,16 +2132,36 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         for (name, uart_path, port) in pico_discovery_bridges {
             let bridge_failure_tx = console_failure_tx.clone();
             let worker_stop = bridge_stop.clone();
-            thread::spawn(move || {
-                if let Err(error) = picofi_tcp_bridge::run_discovered(port, &uart_path, || {
-                    worker_stop.load(Ordering::Acquire)
-                }) {
-                    if !worker_stop.load(Ordering::Acquire) {
-                        let _ = bridge_failure_tx
-                            .send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
+            let (reset_tx, reset_rx) = mpsc::sync_channel(16);
+            pico_reset_senders.insert(name.clone(), reset_tx);
+            let reset_completed = pico_reset_completed_tx.clone();
+            let restartable = topology.pico_restarts.iter().any(|event| event.link == name);
+            if restartable {
+                let owner = pico_restart_workers.as_mut().context("restartable Pico worker owner is missing")?;
+                let handle = thread::spawn(move || {
+                    let outcome = picofi_tcp_bridge::run_discovered_restartable(port, &uart_path, || {
+                        worker_stop.load(Ordering::Acquire)
+                    }, reset_rx, reset_completed);
+                    if let Err(error) = &outcome {
+                        if !worker_stop.load(Ordering::Acquire) {
+                            let _ = bridge_failure_tx.send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
+                        }
                     }
-                }
-            });
+                    outcome
+                });
+                // The guard exists before any restartable worker is spawned.
+                owner.handles.push(handle);
+            } else {
+                thread::spawn(move || {
+                    if let Err(error) = picofi_tcp_bridge::run_discovered(port, &uart_path, || {
+                        worker_stop.load(Ordering::Acquire)
+                    }) {
+                        if !worker_stop.load(Ordering::Acquire) {
+                            let _ = bridge_failure_tx.send(format!("Pico-Fi discovery bridge {name} failed: {error:#}"));
+                        }
+                    }
+                });
+            }
         }
         for host in &topology.host_nodes {
             for serial in &host.serial_links {
@@ -2105,6 +2190,9 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
     }
     let mut completed_host_reboots = BTreeSet::new();
+    let mut pico_reset_failure = None;
+    let mut requested_pico_resets = BTreeSet::new();
+    let mut completed_pico_resets = BTreeSet::new();
     let status = loop {
         if let Ok(error) = console_failure_rx.try_recv() {
             eprintln!("[SIM] Renode execution failed: {error}");
@@ -2128,6 +2216,32 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .unwrap_or(0);
+        for (index, event) in topology.pico_restarts.iter().enumerate() {
+            if event.after_sample <= completed_sample && !requested_pico_resets.contains(&index) {
+                let sent = pico_reset_senders.get(&event.link)
+                    .context("Pico reset link was not installed")
+                    .and_then(|sender| sender.try_send(index).context("queueing bounded software Pico reset"));
+                if let Err(error) = sent {
+                    let failure = format!("Pico reset failed: {error:#}");
+                    pico_reset_failure = Some(failure.clone());
+                    let _ = console_failure_tx.send(failure);
+                    terminate_simulator(&mut child);
+                    break;
+                }
+                requested_pico_resets.insert(index);
+            }
+        }
+        while let Ok(index) = pico_reset_completed_rx.try_recv() {
+            if !requested_pico_resets.contains(&index) || !completed_pico_resets.insert(index) {
+                pico_reset_failure = Some("unexpected/duplicate software Pico reset completion".to_owned());
+                let _ = console_failure_tx.send("unexpected/duplicate software Pico reset completion".to_owned());
+                terminate_simulator(&mut child);
+                break;
+            }
+            let event = &topology.pico_restarts[index];
+            println!("[SIM] software Pico {} old session/parser/queues dropped after sample {} (event {})",
+                event.link, event.after_sample, index);
+        }
         for (event_index, reboot) in topology.reboots.iter().enumerate() {
             if reboot.after_sample > completed_sample
                 || completed_host_reboots.contains(&event_index)
@@ -2173,7 +2287,19 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
         }
         thread::sleep(Duration::from_millis(20));
     };
+    while let Ok(index) = pico_reset_completed_rx.try_recv() {
+        if !requested_pico_resets.contains(&index) || !completed_pico_resets.insert(index) {
+            pico_reset_failure = Some("unexpected/duplicate software Pico reset completion".to_owned());
+        }
+    }
     bridge_stop.store(true, Ordering::Release);
+    let pico_worker_result = if let Some(owner) = &mut pico_restart_workers {
+        owner.stop_and_join()
+    } else { Ok(()) };
+    let pico_restart_reports = completed_pico_resets.iter().map(|&index| {
+        let event = &topology.pico_restarts[index];
+        PicoRestartReport { link: event.link.clone(), after_sample: event.after_sample }
+    }).collect::<Vec<_>>();
     let mut host_failures = Vec::new();
     let mut host_diagnostics = BTreeMap::new();
     let mut host_outputs = BTreeMap::new();
@@ -2365,20 +2491,28 @@ pub fn run(topology_path: &Path) -> Result<BayReport> {
     }
     println!("[SIM] Final CPU positions:\n{}", register_dump.join("\n"));
     let probe_output = fs::read_to_string(&probe_path).context("reading bay probe capture")?;
-    qualify_observations(
+    pico_worker_result?;
+    ensure!(pico_reset_failure.is_none(), "software Pico reset failed: {:?}", pico_reset_failure);
+    ensure!(pico_restart_reports.len() == topology.pico_restarts.len(),
+        "not every scheduled software Pico restart completed before execution ended");
+    let mut report = qualify_observations(
         topology,
         &node_layouts,
         &probe_output,
         &host_outputs,
         &host_diagnostics,
         register_dump,
-    )
+    )?;
+    report.pico_restart_reports = pico_restart_reports;
+    Ok(report)
 }
 
 /// Re-evaluate a retained run with the production memory/link/host validators.
 /// This does not execute firmware or change its captured register values.
 pub fn check_capture(topology_path: &Path, capture: &Path) -> Result<BayReport> {
     let topology: BayTopology = serde_json::from_slice(&fs::read(topology_path)?)?;
+    ensure!(topology.pico_restarts.is_empty(),
+        "scheduled Pico restarts require live software Pico execution; capture-only replay cannot certify worker lifecycle");
     let console = fs::read_to_string(capture.join("renode.log"))?;
     ensure!(
         observed_marker(&console, "SEDS_BAY_COMPLETE"),
@@ -2834,6 +2968,7 @@ fn qualify_observations(
         memory_profiles,
         link_reports,
         assertion_reports,
+        pico_restart_reports: Vec::new(),
     })
 }
 
@@ -4345,3 +4480,7 @@ mod radio_profile_tests {
         assert_ne!(radio_host_name("a_b", "c"), radio_host_name("a", "b_c"));
     }
 }
+
+#[cfg(test)]
+#[path = "pico_restart_event_tests.rs"]
+mod pico_restart_event_tests;
