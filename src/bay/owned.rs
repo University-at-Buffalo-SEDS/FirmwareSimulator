@@ -36,11 +36,51 @@ pub struct BayClockSample {
     pub monotonic_ms: u64,
     pub utc_ms: u64,
 }
+/// One immutable modeled-fix observation from this owner's stdout worker.
+/// The host timestamp is when that worker observed a complete console line,
+/// subject to pipe buffering/backlog. It is not MCU/SDK ingress, authentication,
+/// source election, freshness, or readiness. Sampling never refreshes it.
+#[derive(Clone)]
+pub struct BaySourceObservation {
+    sample: BayClockSample,
+    ingress: GnssIngress,
+    failure: BayClockFailureFence,
+}
+#[derive(Clone, Copy)]
+struct GnssIngress {
+    index: u64,
+    modeled_elapsed_ms: u64,
+    modeled_utc_ms: u64,
+    console_received_at: Instant,
+}
+impl BaySourceObservation {
+    /// Current owner-clock mapping, distinct from the original modeled fix.
+    pub fn sample(&self) -> BayClockSample {
+        self.sample
+    }
+    pub fn ingress_index(&self) -> u64 {
+        self.ingress.index
+    }
+    pub fn modeled_fix_elapsed_ms(&self) -> u64 {
+        self.ingress.modeled_elapsed_ms
+    }
+    pub fn modeled_fix_utc_ms(&self) -> u64 {
+        self.ingress.modeled_utc_ms
+    }
+    pub fn console_received_at(&self) -> Instant {
+        self.ingress.console_received_at
+    }
+    /// Negative-only terminal fence for the same original clock instance.
+    pub fn has_failed(&self) -> bool {
+        self.failure.has_failed()
+    }
+}
 #[derive(Default)]
 struct ClockState {
     last: Option<u64>,
     failed: bool,
     gnss_epoch_ms: Option<u64>,
+    gnss_ingress: Option<GnssIngress>,
 }
 /// Read-only terminal-failure evidence for one original clock instance.
 /// Initial false proves neither a sample nor freshness, election or readiness.
@@ -140,6 +180,9 @@ impl BayClock {
         if state.failed || self.failed.load(Ordering::Acquire) {
             return None;
         }
+        self.sample_locked(&mut state)
+    }
+    fn sample_locked(&self, state: &mut ClockState) -> Option<BayClockSample> {
         let monotonic_ms = state.last?;
         let epoch = state.gnss_epoch_ms?;
         let Some(utc_ms) = epoch
@@ -155,6 +198,29 @@ impl BayClock {
             utc_ms,
         })
     }
+    /// Snapshot current mapping and the actual last modeled-fix ingress under
+    /// one mutex. Call outside Core/final dispatch guards. No wall UTC is used.
+    pub fn source_observation(&self) -> Option<BaySourceObservation> {
+        if self.failed.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut state = self.lock_state().ok()?;
+        if state.failed || self.failed.load(Ordering::Acquire) {
+            return None;
+        }
+        let sample = self.sample_locked(&mut state)?;
+        let ingress = state.gnss_ingress?;
+        let observation = BaySourceObservation {
+            sample,
+            ingress,
+            failure: self.failure_fence(),
+        };
+        (!self.failed.load(Ordering::Acquire)).then_some(observation)
+    }
+    /// Original-instance identity only; liveness still requires its sticky fence.
+    pub fn owns_source_observation(&self, observation: &BaySourceObservation) -> bool {
+        self.owns_failure_fence(&observation.failure)
+    }
     pub fn terminal_failure(&self) -> bool {
         if self.failed.load(Ordering::Acquire) {
             return true;
@@ -168,7 +234,12 @@ impl BayClock {
             state.failed = true;
         }
     }
-    fn observe_gnss(&self, elapsed_ms: u64, utc_ms: u64) -> Result<()> {
+    fn observe_gnss(
+        &self,
+        elapsed_ms: u64,
+        utc_ms: u64,
+        console_received_at: Instant,
+    ) -> Result<()> {
         let mut state = self.lock_state()?;
         let epoch = utc_ms.checked_sub(elapsed_ms).filter(|epoch| *epoch > 0);
         if self.failed.load(Ordering::Acquire)
@@ -188,7 +259,21 @@ impl BayClock {
             state.failed = true;
             bail!("owned GNSS source changed epoch");
         }
+        let Some(index) = state
+            .gnss_ingress
+            .map_or(Some(1), |old| old.index.checked_add(1))
+        else {
+            self.failed.store(true, Ordering::Release);
+            state.failed = true;
+            bail!("owned GNSS observation index exhausted");
+        };
         state.gnss_epoch_ms = epoch;
+        state.gnss_ingress = Some(GnssIngress {
+            index,
+            modeled_elapsed_ms: elapsed_ms,
+            modeled_utc_ms: utc_ms,
+            console_received_at,
+        });
         Ok(())
     }
     fn observe(&self, value: u64) -> Result<()> {
@@ -949,6 +1034,12 @@ fn start(bay: &mut OwnedBay, config: &BoardOnlyConfig) -> Result<()> {
                             trace.line(&line)?;
                             continue;
                         }
+                        // Existing fatal fencing above stays first. Capture this
+                        // accepted complete-line observation before diagnostic IO
+                        // or the clock mutex, never at adapter sampling.
+                        let gnss_received_at = (parse_clock
+                            && line.trim().starts_with("SEDS_OWNED_GNSS "))
+                        .then(Instant::now);
                         // Record the actual pipe observation before diagnostics IO.
                         // Only the frozen instance-specific full line can start boot.
                         if parse_clock && line.trim() == load.marker {
@@ -963,7 +1054,11 @@ fn start(bay: &mut OwnedBay, config: &BoardOnlyConfig) -> Result<()> {
                                     fields.next().context("GNSS elapsed missing")?.parse()?;
                                 let utc = fields.next().context("GNSS UTC missing")?.parse()?;
                                 ensure!(fields.next().is_none(), "invalid GNSS sample fields");
-                                clock.observe_gnss(elapsed, utc)?;
+                                clock.observe_gnss(
+                                    elapsed,
+                                    utc,
+                                    gnss_received_at.context("GNSS ingress timestamp absent")?,
+                                )?;
                             }
                             if let Some(value) = line.trim().strip_prefix("SEDS_OWNED_CLOCK ") {
                                 clock.observe(

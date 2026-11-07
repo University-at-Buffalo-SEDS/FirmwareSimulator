@@ -10,7 +10,9 @@ fn clock_fences_rollback_changed_epoch_and_overflow() {
         !fence.has_failed(),
         "missing initial UTC is unready, not a failure"
     );
-    clock.observe_gnss(0, 1_767_225_600_000).unwrap();
+    clock
+        .observe_gnss(0, 1_767_225_600_000, Instant::now())
+        .unwrap();
     assert_eq!(clock.sample().unwrap().utc_ms, 1_767_225_600_100);
     assert!(clock.observe(99).is_err());
     assert!(fence.has_failed());
@@ -18,13 +20,19 @@ fn clock_fences_rollback_changed_epoch_and_overflow() {
     assert!(clock.observe(101).is_err());
     let clock = BayClock::new();
     let fence = clock.failure_fence();
-    clock.observe_gnss(0, 1_767_225_600_000).unwrap();
-    assert!(clock.observe_gnss(1, 1_767_225_600_002).is_err());
+    clock
+        .observe_gnss(0, 1_767_225_600_000, Instant::now())
+        .unwrap();
+    assert!(clock
+        .observe_gnss(1, 1_767_225_600_002, Instant::now())
+        .is_err());
     assert!(fence.has_failed());
     assert!(clock.terminal_failure());
     let clock = BayClock::new();
     let fence = clock.failure_fence();
-    clock.observe_gnss(0, i64::MAX as u64).unwrap();
+    clock
+        .observe_gnss(0, i64::MAX as u64, Instant::now())
+        .unwrap();
     assert!(clock.observe(1).is_err());
     assert!(fence.has_failed());
     assert!(clock.sample().is_none());
@@ -33,7 +41,9 @@ fn clock_fences_rollback_changed_epoch_and_overflow() {
     let clock = BayClock::new();
     let fence = clock.failure_fence();
     clock.observe(100).unwrap();
-    assert!(clock.observe_gnss(0, i64::MAX as u64).is_err());
+    assert!(clock
+        .observe_gnss(0, i64::MAX as u64, Instant::now())
+        .is_err());
     assert!(fence.has_failed());
     assert!(clock.sample().is_none());
 }
@@ -470,6 +480,11 @@ fn clock_failure_fence_is_original_unready_and_sticky_after_drop() {
 fn clock_failure_fence_precedes_held_mutex_and_poison_unwind() {
     let clock = Arc::new(BayClock::new());
     let fence = clock.failure_fence();
+    clock.observe(10).unwrap();
+    clock
+        .observe_gnss(0, 1_767_225_600_000, Instant::now())
+        .unwrap();
+    let source = clock.source_observation().unwrap();
     let held = clock.lock_state().unwrap();
     let worker_clock = clock.clone();
     let (entered, received) = mpsc::channel();
@@ -489,6 +504,7 @@ fn clock_failure_fence_precedes_held_mutex_and_poison_unwind() {
         thread::yield_now();
     };
     let still_held = !worker.is_finished();
+    let source_failed_while_held = source.has_failed();
     // Always release and join even if the ordering assertion will fail.
     drop(held);
     let joined = worker.join();
@@ -502,9 +518,18 @@ fn clock_failure_fence_precedes_held_mutex_and_poison_unwind() {
         "worker must still be blocked by the genuinely held mutex"
     );
     joined.unwrap();
+    assert!(
+        source_failed_while_held,
+        "retained ingress snapshot must share pure atomic fence"
+    );
     assert!(fence.has_failed());
     let clock = Arc::new(BayClock::new());
     let fence = clock.failure_fence();
+    clock.observe(10).unwrap();
+    clock
+        .observe_gnss(0, 1_767_225_600_000, Instant::now())
+        .unwrap();
+    let source = clock.source_observation().unwrap();
     let panicking_clock = clock.clone();
     let worker = thread::spawn(move || {
         let _actual_guard = panicking_clock.lock_state().unwrap();
@@ -521,6 +546,10 @@ fn clock_failure_fence_precedes_held_mutex_and_poison_unwind() {
     assert!(
         fence.has_failed(),
         "actual guard unwind must fence without a later sample"
+    );
+    assert!(
+        source.has_failed(),
+        "snapshot must fence before sampler notices poison"
     );
     assert!(clock.state.is_poisoned());
     assert!(clock.sample().is_none());
@@ -549,4 +578,65 @@ fn clock_failure_fence_observes_actual_worker_unwind_without_sampler() {
         "worker termination must fence before a subsequent sampler"
     );
     assert!(clock.sample().is_none());
+}
+
+#[test]
+fn source_observation_preserves_ingress_across_sampling_and_owner_clock_advances() {
+    let clock = BayClock::new();
+    let foreign = BayClock::new();
+    assert!(clock.source_observation().is_none());
+    clock.observe(10).unwrap();
+    let observed_at = Instant::now();
+    clock
+        .observe_gnss(0, 1_767_225_600_000, observed_at)
+        .unwrap();
+    let first = clock.source_observation().unwrap();
+    assert!(clock.owns_source_observation(&first));
+    assert!(!foreign.owns_source_observation(&first));
+    assert!(!first.has_failed());
+    for modeled_now in [20, 30, 40] {
+        clock.observe(modeled_now).unwrap();
+        let next = clock.source_observation().unwrap();
+        assert_eq!(next.ingress_index(), 1);
+        assert_eq!(next.console_received_at(), observed_at);
+        assert_eq!(next.modeled_fix_elapsed_ms(), 0);
+        assert_eq!(next.modeled_fix_utc_ms(), 1_767_225_600_000);
+        assert_eq!(next.sample().monotonic_ms, modeled_now);
+        assert_eq!(next.sample().utc_ms, 1_767_225_600_000 + modeled_now);
+    }
+    assert_eq!(first.console_received_at(), observed_at);
+    clock.fail();
+    assert!(first.has_failed());
+    assert!(clock.source_observation().is_none());
+    assert!(!foreign.failure_fence().has_failed());
+}
+
+#[test]
+fn source_observation_counts_actual_observations_and_fences_exhaustion() {
+    let clock = BayClock::new();
+    clock.observe(10).unwrap();
+    let first_at = Instant::now();
+    clock.observe_gnss(0, 1_767_225_600_000, first_at).unwrap();
+    let first = clock.source_observation().unwrap();
+    let next_at = Instant::now();
+    // A second actual input counts even if its modeled values repeat. No
+    // deduplication or authenticity claim is inferred from source values.
+    clock.observe_gnss(0, 1_767_225_600_000, next_at).unwrap();
+    let second = clock.source_observation().unwrap();
+    assert_eq!(second.ingress_index(), 2);
+    assert_eq!(second.console_received_at(), next_at);
+    assert_eq!(first.ingress_index(), 1);
+    assert_eq!(first.console_received_at(), first_at);
+    clock
+        .lock_state()
+        .unwrap()
+        .gnss_ingress
+        .as_mut()
+        .unwrap()
+        .index = u64::MAX;
+    assert!(clock
+        .observe_gnss(0, 1_767_225_600_000, Instant::now())
+        .is_err());
+    assert!(first.has_failed() && second.has_failed());
+    assert!(clock.source_observation().is_none());
 }
