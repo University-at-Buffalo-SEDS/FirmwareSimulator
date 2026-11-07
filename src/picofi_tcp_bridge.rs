@@ -4,6 +4,9 @@ use super::*;
 use std::net::{TcpListener, TcpStream};
 use std::time::Instant;
 
+// Match PICO-FI LINK_HANDSHAKE_TIMEOUT_MS; writer-stall remains 500 ms.
+const HELLO_RECEIVE_TIMEOUT: Duration = Duration::from_millis(2_000);
+
 struct Session {
     socket: TcpStream,
     hello: bool,
@@ -12,11 +15,13 @@ struct Session {
     outgoing: Vec<u8>,
     offset: usize,
     write_started: Instant,
+    hello_receive_started: Option<Instant>,
 }
 impl Session {
     fn new(socket: TcpStream) -> Result<Self> {
         socket.set_nonblocking(true)?;
         socket.set_nodelay(true)?;
+        let accepted = Instant::now();
         Ok(Self {
             socket,
             hello: false,
@@ -24,18 +29,22 @@ impl Session {
             incoming: Vec::new(),
             outgoing: Vec::new(),
             offset: 0,
-            write_started: Instant::now(),
+            write_started: accepted,
+            hello_receive_started: Some(accepted),
         })
     }
     fn client(socket: TcpStream) -> Result<Self> {
         let mut session = Self::new(socket)?;
         session.client = true;
+        // Initiator's reply timer begins after its complete own HELLO write.
+        session.hello_receive_started = None;
         session.outgoing = b"PICOFI1".to_vec();
         Ok(session)
     }
     fn service(&mut self, state: &mut PicoBridgeState) -> Result<()> {
         ensure!(
-            self.hello || self.write_started.elapsed() < Duration::from_millis(500),
+            self.hello || self.hello_receive_started
+                .is_none_or(|started| started.elapsed() < HELLO_RECEIVE_TIMEOUT),
             "Pico-Fi TCP handshake timed out"
         );
         let total = if !self.hello {
@@ -56,7 +65,8 @@ impl Session {
         // admit it. Keep serving the opposite direction while reads pause.
         // The production core owns one complete pending receive frame outside
         // the mailbox. Read at most that frame, then retain it under pressure.
-        let can_receive = true;
+        // Actual initiator writes its full magic before starting the reply read.
+        let can_receive = self.hello || self.hello_receive_started.is_some();
         let mut bytes = [0; 4100];
         let need = total - self.incoming.len();
         if need != 0 && can_receive {
@@ -75,6 +85,7 @@ impl Session {
                 }
                 self.write_started = Instant::now();
                 self.hello = true;
+                self.hello_receive_started = None;
                 state.ethernet_connected = true;
                 self.incoming.clear();
             } else if total > 4 && state.uart_has_room(total) {
@@ -112,6 +123,9 @@ impl Session {
                     if self.offset == self.outgoing.len() {
                         self.outgoing.clear();
                         self.offset = 0;
+                        if self.client && !self.hello && self.hello_receive_started.is_none() {
+                            self.hello_receive_started = Some(Instant::now());
+                        }
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}

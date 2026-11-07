@@ -171,6 +171,11 @@ fn missing_first_greeting_recovers_without_a_second_power_cycle() {
         })),
     };
     let (mut first, identity) = accept_discovered(&discovery, &listener);
+    // Outer observation guard is strictly longer than the unchanged logical
+    // receive deadline; it does not prolong the modeled HELLO permission.
+    first
+        .set_read_timeout(Some(HELLO_RECEIVE_TIMEOUT + Duration::from_secs(1)))
+        .unwrap();
     let mut one = [0];
     assert_eq!(
         first.read(&mut one).unwrap(),
@@ -180,7 +185,8 @@ fn missing_first_greeting_recovers_without_a_second_power_cycle() {
     let (mut second, again) = accept_discovered(&discovery, &listener);
     assert_eq!(again, identity);
     second.write_all(b"PICOFI1").unwrap();
-    // Existing model timeout500ms is intentionally not an RP2040 2000ms claim.
+    // HELLO receive window matches configured PICO-FI 2000ms; other modeled
+    // transport and scheduler timing remains explicitly separate.
     second.write_all(&[0xb5, 0x4e, 1, 0, 77]).unwrap();
     assert_eq!(receive_uart(&mut uart), [0xa5, 0x5a, 1, 0, 77]);
     uart.write_all(&[0xa5, 0x5a, 1, 0, 78]).unwrap();
@@ -188,4 +194,101 @@ fn missing_first_greeting_recovers_without_a_second_power_cycle() {
     second.read_exact(&mut reply).unwrap();
     assert_eq!(reply, [0xb5, 0x4e, 1, 0, 78]);
     worker.stop_and_join();
+}
+
+#[test]
+fn delayed_valid_greeting_after_750ms_keeps_same_tcp_and_duplex_uart() {
+    let (mut uart, _slave, path) = fixture();
+    let discovery = UdpSocket::bind("127.0.0.1:0").unwrap();
+    discovery
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let port = discovery.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let (_requests, rx) = mpsc::sync_channel(16);
+    let (done, _completed) = mpsc::channel();
+    let worker = Worker {
+        stop,
+        thread: Some(thread::spawn(move || {
+            run_discovered_restartable(port, &path, || stopped.load(Ordering::Acquire), rx, done)
+        })),
+    };
+    let (mut host, _) = accept_discovered(&discovery, &listener);
+    let original_peer = host.peer_addr().unwrap();
+    host.set_nonblocking(true).unwrap();
+    // Intentional real network fault delay: exceed the former500ms timeout,
+    // while remaining inside the actual firmware's2000ms receive window.
+    let release = Instant::now() + Duration::from_millis(750);
+    let mut byte = [0];
+    while Instant::now() < release {
+        match host.peek(&mut byte) {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            other => panic!(
+                "original TCP session ended or emitted unexpected bytes before greeting: {other:?}"
+            ),
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    host.set_nonblocking(false).unwrap();
+    host.write_all(b"PICOFI1").unwrap();
+    host.write_all(&[0xb5, 0x4e, 1, 0, 81]).unwrap();
+    assert_eq!(receive_uart(&mut uart), [0xa5, 0x5a, 1, 0, 81]);
+    uart.write_all(&[0xa5, 0x5a, 1, 0, 82]).unwrap();
+    let mut reply = [0; 5];
+    host.read_exact(&mut reply).unwrap();
+    assert_eq!(reply, [0xb5, 0x4e, 1, 0, 82]);
+    assert_eq!(host.peer_addr().unwrap(), original_peer);
+    worker.stop_and_join();
+}
+
+#[test]
+fn reply_clock_starts_after_actual_own_magic_write_and_partial_reply_cannot_extend_it() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut host, _) = listener.accept().unwrap();
+    host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut peer = Session::client(client).unwrap();
+    let mut state = PicoBridgeState::ethernet();
+    assert!(peer.hello_receive_started.is_none());
+    let before = Instant::now();
+    peer.service(&mut state).unwrap();
+    let after = Instant::now();
+    assert!(
+        peer.outgoing.is_empty(),
+        "real own HELLO must finish its socket write"
+    );
+    let started = peer.hello_receive_started.unwrap();
+    assert!(before <= started && started <= after);
+    let mut magic = [0; 7];
+    host.read_exact(&mut magic).unwrap();
+    assert_eq!(&magic, b"PICOFI1");
+    host.write_all(b"PIC").unwrap();
+    let until = Instant::now() + Duration::from_secs(1);
+    while peer.incoming.len() < 3 {
+        peer.service(&mut state).unwrap();
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!peer.hello);
+    assert_eq!(peer.hello_receive_started, Some(started));
+    host.write_all(b"OFI1").unwrap();
+    while !peer.hello {
+        peer.service(&mut state).unwrap();
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(peer.hello_receive_started.is_none());
+
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, _) = listener.accept().unwrap();
+    let before = Instant::now();
+    let server = Session::new(socket).unwrap();
+    let after = Instant::now();
+    let accepted = server.hello_receive_started.unwrap();
+    assert!(before <= accepted && accepted <= after);
+    assert!(!server.client && !server.hello && server.outgoing.is_empty());
+    drop(client);
 }

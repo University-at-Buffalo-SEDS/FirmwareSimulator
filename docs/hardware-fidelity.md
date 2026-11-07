@@ -202,6 +202,14 @@ UART received while disconnected is discarded. I2C's legacy path is unchanged
 and is outside current qualification. These are transport contracts: the model
 does not execute RP2040 cores or model W5500 electrical/CPU timing.
 
+The modeled HELLO receive window is 2,000 ms, matching PICO-FI's configured
+`LINK_HANDSHAKE_TIMEOUT_MS`. A client starts that window after its complete
+own HELLO socket write; a server starts it when its session is accepted.
+Partial replies retain the original deadline. The separate modeled writer
+stall limit remains 500 ms, and publication rates remain unchanged. This
+alignment covers HELLO reception, not DHCP, connect/reconnect scheduling,
+idle-session timing or RP2040 execution.
+
 Run the separate no-outage baseline with:
 
 ```sh
