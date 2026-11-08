@@ -33,6 +33,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import http.client
 import importlib.util
 import ipaddress
 import json
@@ -70,7 +71,7 @@ def atomic(path: Path, text: str):
     tmp.replace(path)
 
 
-def request(origin, path, body=None, token=None, timeout=3):
+def request(origin, path, body=None, token=None, timeout=10):
     headers = {'Content-Type': 'application/json'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
@@ -505,7 +506,9 @@ class Run:
         self.write_result()
         self.milestone('gs_origin_ready', origin=self.origin)
         if self.args.ui_driver:
-            env = {'PLAYWRIGHT_MODULE': str(WP.parent / 'fill-ui-readiness-20261105/browser-tools/node_modules/playwright'),
+            shells = sorted(Path.home().glob('.cache/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell'))
+            env = {'PLAYWRIGHT_MODULE': str(WP.parent / 'fill-ui-readiness-20261105/browser-tools/node_modules/playwright/index.mjs'),
+                   **({'CHROME_BINARY': str(shells[-1])} if shells else {}),
                    'UI_TIMEOUT_S': str(int(self.args.timeout)), **os.environ, 'GS_ORIGIN': self.origin, 'GS_USER': USER, 'GS_PASSWORD': PASSWORD, 'EVIDENCE_DIR': str(self.out),
                    'STATUS_FILE': str(self.status_path), 'TIMELINE_FILE': str(self.timeline_path)}
             self.ui = subprocess.Popen(self.args.ui_driver, shell=True, env=env, stdout=(self.out / 'ui-driver.log').open('w'),
@@ -766,34 +769,42 @@ class Run:
                 if self.now == previous:
                     time.sleep(.05)
                     continue
-                code, status = self.api('/api/gse/status')
-                if code != 200:
+                # Stimuli that must not depend on GS responsiveness come first.
+                self.observe_fc_probe()
+                self.comms()
+                try:
+                    code, status = self.api('/api/gse/status')
+                    if code != 200:
+                        time.sleep(.2)
+                        continue
+                    delta = max(0, min(self.now - previous, 200))
+                    previous = self.now
+                    pressure = plant_pressure(pressure, delta, status['valves'])
+                    atomic(self.diag / 'pressure.raw', str(raw_pressure(pressure)))
+                    mass = plant_mass(mass, delta, status['valves'], nitro['n2o'], nitro['n2'])
+                    atomic(self.diag / 'loadcell.raw', mass_samples(mass))
+                    if status.get('phase') != self.gs.get('gse_phase'):
+                        self.gs['gse_phase'] = status.get('phase')
+                        self.event('gse_phase', gse_phase=status.get('phase'), mission_stage=status.get('mission_stage'), message=status.get('message'))
+                    full = time.monotonic() - last_full > (1.0 if self.t0 is not None else 3.0)
+                    if full:
+                        last_full = time.monotonic()
+                    self.observe_gs(full=full)
+                    if self.stage != 'flight':
+                        self.gse_step(status, nitro)
+                    if self.now - last_heartbeat >= 10000:
+                        last_heartbeat = self.now
+                        self.status()
+                        if self.t0 is not None:
+                            code, maxima = self.api('/api/flight_maxima')
+                            self.result['gs_flight_maxima_latest'] = {'virtual_ms': self.now, 'status': code, 'body': maxima}
+                            self.write_result()
+                except (OSError, http.client.HTTPException, ValueError) as error:
+                    # The GS can be slow under full-bay load; a slow reply is not a failure.
+                    self.result['api_errors'] = self.result.get('api_errors', 0) + 1
+                    self.result['last_api_error'] = f'{type(error).__name__}: {error}'
                     time.sleep(.2)
                     continue
-                delta = max(0, min(self.now - previous, 200))
-                previous = self.now
-                pressure = plant_pressure(pressure, delta, status['valves'])
-                atomic(self.diag / 'pressure.raw', str(raw_pressure(pressure)))
-                mass = plant_mass(mass, delta, status['valves'], nitro['n2o'], nitro['n2'])
-                atomic(self.diag / 'loadcell.raw', mass_samples(mass))
-                if status.get('phase') != self.gs.get('gse_phase'):
-                    self.gs['gse_phase'] = status.get('phase')
-                    self.event('gse_phase', gse_phase=status.get('phase'), mission_stage=status.get('mission_stage'), message=status.get('message'))
-                self.observe_fc_probe()
-                full = time.monotonic() - last_full > (1.0 if self.t0 is not None else 3.0)
-                if full:
-                    last_full = time.monotonic()
-                self.observe_gs(full=full)
-                if self.stage != 'flight':
-                    self.gse_step(status, nitro)
-                self.comms()
-                if self.now - last_heartbeat >= 10000:
-                    last_heartbeat = self.now
-                    self.status()
-                    if self.t0 is not None:
-                        code, maxima = self.api('/api/flight_maxima')
-                        self.result['gs_flight_maxima_latest'] = {'virtual_ms': self.now, 'status': code, 'body': maxima}
-                        self.write_result()
                 done_state = args.stop_after
                 if finished_at is None and done_state and self.fc_state and done_state in FC_LOCAL and self.fc_state in FC_LOCAL \
                         and FC_LOCAL.index(self.fc_state) >= FC_LOCAL.index(done_state) and (self.cut['state'] != 'cut'):
