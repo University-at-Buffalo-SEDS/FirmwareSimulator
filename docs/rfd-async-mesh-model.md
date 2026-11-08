@@ -68,8 +68,52 @@ ASYNC firmware does not use the SiK register map. On ASYNC, S4 is
 MAX_RETRIES (minimum 1; 1 disables resend), S5 is GLOBAL_RETRIES for
 broadcast (0-100; resends after the first), S6 is the serial break in ms
 (local to each node), S11 is DESTID and S12 is TXPOWER ([M] Table 3-2).
-The 4.03 map itself is unpublished. The GS modem check therefore writes a
-register only when `ATI5` gives it the V1.1 name.
+The 4.03 map itself is unpublished, and the field readback of ASYNC 4.03 on
+RFD900x2 differs from V1.1 above S5: S6 `SER_BRK_DETMS`, S7/S8
+`TX_ENCAP_METHOD`/`RX_ENCAP_METHOD`, S17 `DUTY_CYCLE`, S18 `LBT_RSSI`, S19
+`RTSCTS`, S20 `MAX_WINDOW`, S22 `RESV`. The GS and RF modem checks therefore
+resolve every register by the name `ATI5` reports and write to the modem's
+own number for that name.
+
+## Command mode in linked-firmware scenes
+
+`SedsRadioMedium.cs` can model one station's modem command mode, so linked
+firmware that configures its modem can be tested. It is opt-in per station
+index (the order of the radio link's endpoints):
+
+```sh
+FIRMWARE_SIM_RFD_MODEM="0=6:SER_BRK_DETMS=20,11:DESTID=1,19:RTSCTS=1"
+```
+
+Each `;`-separated entry is `<station>=<overrides>`; an override is
+`n:NAME=value` or `n=value` and sets that EEPROM register. The default layout
+is the 4.03 field layout above with the deployed `rfd-async-64k-compatible`
+values. The model follows the documented rules: `+++` after one second of host
+silence and `OK` after a further second, echoed command characters,
+`ATI`/`ATI5`/`ATSn?` answers without a trailing `OK`, `ATSn=X` and `AT&W`
+answered `OK`, `ATZ` reloading EEPROM with a 1.5 s reboot, `ATO` without
+output, and `AT+F?` (an empty table in the 4.03 format
+`0:0->0,...,9:0->0, | FwdBuff=13320`). In command mode or while rebooting the station passes no
+air data and held `+` bytes never reach the air. The radio `Snapshot` adds a
+`modem` object per modelled station (state, command entries, commands, saves,
+reboots, dropped air bytes, accepted writes and EEPROM values).
+`FIRMWARE_SIM_RFD_MODEM_LOG=<file>` appends each executed command with its
+virtual time. Stations without an entry stay transparent, as before. The
+contract test is `RADIO_RFD_MODEM_COMMAND_MODE_PASS` in
+`tests/radio-medium/Program.cs`.
+
+The medium no longer calls a UART while holding its own lock. A UART takes its
+machine's clock-source lock, and a guest's TX callback holds that lock while
+it enqueues into the medium, so a delivery under the medium lock could
+deadlock the emulation when a guest transmits while receiving (polled AT
+commands with echoed replies do exactly that).
+
+Known limitation: in a linked RF + FC + GroundStation scene with the model
+enabled, the emulation still hung intermittently (4 of 11 runs, 2 of them
+after the change above) during the modem command exchange, with every Renode
+thread waiting. It was not root-caused; the hung runs never reached a wrong
+modem state, and the other runs completed with the expected result. Scenes
+that do not set `FIRMWARE_SIM_RFD_MODEM` do not use the model.
 
 ## What is modelled
 

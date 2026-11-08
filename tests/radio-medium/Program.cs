@@ -63,10 +63,53 @@ class Program
         }
         Console.WriteLine("RADIO_PRODUCTION_PACKETIZATION_LATENCY_PASS");
     }
+    // Opt-in RFD ASYNC command mode for one station (FIRMWARE_SIM_RFD_MODEM).
+    static void ModemCommandMode()
+    {
+        Fresh();
+        var machine=new Machine();var host=new SedsRadioHostPort(machine);var peer=new SedsRadioHostPort(machine);
+        var medium=Medium(burst:256,idle:2000);
+        medium.ConfigureModem(0,"6:SER_BRK_DETMS=20,19:RTSCTS=1");
+        medium.AttachHost(0,host);medium.AttachHost(1,peer);
+        var fromModem=new List<byte>();host.CharReceived+=fromModem.Add;
+        var air=new List<byte>();peer.CharReceived+=air.Add;
+        Func<string> text=()=>System.Text.Encoding.ASCII.GetString(fromModem.ToArray());
+        Action<string> send=line=>{foreach(var c in line)host.WriteChar((byte)c);};
+        Advance(1200000);send("+++");Advance(Clock.NowUs+1500000);
+        Assert(text().Contains("OK\r\n"),"no OK one second after a guarded +++");
+        Assert(air.Count==0,"+++ reached the air");
+        foreach(var b in new byte[]{1,2,3})peer.WriteChar(b);
+        Advance(Clock.NowUs+200000);
+        Assert(!fromModem.Contains(1)&&medium.Snapshot().Contains("\"dropped_air\":3"),"command mode passed air data");
+        fromModem.Clear();send("ATI5\r");Advance(Clock.NowUs+300000);
+        Assert(text().StartsWith("ATI5\r")&&text().Contains("S6:SER_BRK_DETMS=20\r\n")&&text().Contains("S18:LBT_RSSI=0\r\n")
+            &&text().Contains("S19:RTSCTS=1\r\n")&&!text().Contains("OK"),"ATI5 must echo and list the 4.03 layout without OK");
+        fromModem.Clear();send("ATS19?\r");Advance(Clock.NowUs+100000);
+        Assert(text()=="ATS19?\r1\r\n","ATSn? answer");
+        fromModem.Clear();send("ATS19=0\r");Advance(Clock.NowUs+100000);
+        Assert(text().EndsWith("OK\r\n"),"ATSn=X not acknowledged");
+        fromModem.Clear();send("ATS99=1\r");Advance(Clock.NowUs+100000);
+        Assert(text().EndsWith("ERROR\r\n"),"unknown register accepted");
+        send("AT&W\r");Advance(Clock.NowUs+100000);send("ATZ\r");Advance(Clock.NowUs+2000000);
+        var snapshot=medium.Snapshot();
+        Assert(snapshot.Contains("\"S19:RTSCTS\":0")&&snapshot.Contains("\"S6:SER_BRK_DETMS\":20")&&snapshot.Contains("\"saves\":1")
+            &&snapshot.Contains("\"reboots\":1")&&snapshot.Contains("\"state\":\"data\"")&&snapshot.Contains("\"writes\":\"19=0\""),
+            "AT&W/ATZ did not persist and reboot: "+snapshot);
+        air.Clear();send("a+b");Advance(Clock.NowUs+200000);
+        Assert(System.Text.Encoding.ASCII.GetString(air.ToArray())=="a+b","data mode after ATZ must pass bytes, including an unguarded +");
+        // Without ConfigureModem a station stays transparent.
+        Fresh();var m2=new Machine();var a=new SedsRadioHostPort(m2);var b2=new SedsRadioHostPort(m2);
+        var plain=Medium(burst:256,idle:2000);plain.AttachHost(0,a);plain.AttachHost(1,b2);
+        var got=new List<byte>();b2.CharReceived+=got.Add;
+        Advance(1200000);foreach(var c in "+++")a.WriteChar((byte)c);Advance(Clock.NowUs+1500000);
+        Assert(System.Text.Encoding.ASCII.GetString(got.ToArray())=="+++"&&!plain.Snapshot().Contains("modem"),"transparent station changed");
+        Console.WriteLine("RADIO_RFD_MODEM_COMMAND_MODE_PASS");
+    }
     static void Main()
     {
         var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");
         if(schedule!=null){PacketizationLatency(schedule);return;}
+        ModemCommandMode();
         // An idle-delimited UART packet stays complete while another modem
         // owns the air. A later UART write cannot reopen that packet.
         foreach(var packetIdle in new ulong[]{10000,50000})

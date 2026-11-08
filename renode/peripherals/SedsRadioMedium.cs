@@ -93,6 +93,49 @@ namespace Antmicro.Renode.Peripherals.UART
             }
             for(var i = 0; i < MaxNodes; i++)
                 for(var j = 0; j < MaxNodes; j++) links[i,j] = i != j;
+            // Opt-in RFD900x ASYNC command-mode model per station, for example
+            // FIRMWARE_SIM_RFD_MODEM="0=6:SER_BRK_DETMS=20,19:RTSCTS=1". Stations
+            // without an entry stay transparent, exactly as before.
+            var modems = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_MODEM");
+            if(!string.IsNullOrEmpty(modems))
+                foreach(var entry in modems.Split(';'))
+                {
+                    if(entry.Trim().Length == 0) continue;
+                    var eq = entry.IndexOf('=');
+                    int station;
+                    if(eq < 1 || !int.TryParse(entry.Substring(0, eq), NumberStyles.None, CultureInfo.InvariantCulture, out station))
+                        throw new RecoverableException("FIRMWARE_SIM_RFD_MODEM entries are <station>=<overrides>");
+                    ConfigureModem(station, entry.Substring(eq + 1));
+                }
+        }
+
+        // Models the RFD900x ASYNC command mode for one station: "+++" after
+        // one second of host silence, OK after a further second of silence,
+        // echoed characters, ATI/ATI5/ATSn?/ATSn=/AT&W/ATZ/ATO/AT+F?. The
+        // register layout is the field ASYNC 4.03 RFD900x2 one; `overrides`
+        // ("n:NAME=value,..." or "n=value,...") sets EEPROM values or names.
+        // While in command mode or rebooting the station passes no air data.
+        public void ConfigureModem(int index, string overrides)
+        {
+            ValidateIndex(index);
+            var modem = new Modem();
+            if(!string.IsNullOrEmpty(overrides))
+                foreach(var item in overrides.Split(','))
+                {
+                    var text = item.Trim();
+                    if(text.Length == 0) continue;
+                    var eq = text.LastIndexOf('=');
+                    var colon = text.IndexOf(':');
+                    int number, value;
+                    var numberText = colon > 0 ? text.Substring(0, colon) : (eq > 0 ? text.Substring(0, eq) : "");
+                    if(eq < 1 || !int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out number)
+                        || number < 0 || number > 255
+                        || !int.TryParse(text.Substring(eq + 1), NumberStyles.None, CultureInfo.InvariantCulture, out value))
+                        throw new RecoverableException("Invalid RFD modem override: " + text);
+                    var name = colon > 0 ? text.Substring(colon + 1, eq - colon - 1) : null;
+                    modem.Set(number, name, value);
+                }
+            lock(sync) { modemConfig[index] = modem; if(nodes[index] != null) nodes[index].Modem = modem; }
         }
 
         // Resetting one MCU does not power-cycle this external radio medium.
@@ -200,7 +243,9 @@ namespace Antmicro.Renode.Peripherals.UART
                     if(!first) b.Append(','); first = false;
                     b.Append("{\"index\":").Append(i).Append(",\"counters\":[");
                     for(var c = 0; c < 9; c++) { if(c != 0) b.Append(','); b.Append(ReadCounter(i,c)); }
-                    b.Append("]}");
+                    b.Append(']');
+                    if(nodes[i].Modem != null) b.Append(",\"modem\":").Append(nodes[i].Modem.Json());
+                    b.Append('}');
                 }
                 return b.Append("]}").ToString();
             }
@@ -217,7 +262,7 @@ namespace Antmicro.Renode.Peripherals.UART
                 for(var i = 0; i < MaxNodes; i++)
                     if(nodes[i] != null && nodes[i].Uart == uart)
                         throw new RecoverableException("Radio UART is already attached");
-                var node = new Node { Uart = uart, Machine = machine, Receive = receive, Host = host };
+                var node = new Node { Uart = uart, Machine = machine, Receive = receive, Host = host, Modem = modemConfig[index] };
                 if(!string.IsNullOrEmpty(traceDirectory))
                 {
                     if(traces[index] == null)
@@ -233,8 +278,11 @@ namespace Antmicro.Renode.Peripherals.UART
                         if(nodes[index] != node) return;
                         node.Delivered++;
                         if(node.Trace != null) node.Trace.Rx.Record(NowUs(), value);
-                        node.Receive(value);
                     }
+                    // Never call into a UART while holding the medium lock: a
+                    // UART takes its machine's clock-source lock, and that
+                    // machine's TX callback holds it while it calls Enqueue.
+                    node.Receive(value);
                 };
                 node.Input = value => Enqueue(index, node, value);
                 nodes[index] = node;
@@ -258,30 +306,36 @@ namespace Antmicro.Renode.Peripherals.UART
                 var n = nodes[index];
                 if(n != attachment) return;
                 if(n.Trace != null) n.Trace.Tx.Record(now, value);
-                if(n.PendingTx >= txFifo) { n.RefusedTx++; return; }
-                // PTY writes are instantaneous. Serialize their ingress at
-                // 8N1 before air admission. Guest UARTs are already paced; this
-                // adds at most one character of pipeline latency, not a second
-                // serialization rate or an unbounded staging allocation.
-                var inputStart = Math.Max(now, n.InputReady);
-                n.InputReady = inputStart + UartByteUs;
-                // UART packet boundaries belong to each modem's ingress,
-                // independently of which modem currently owns airtime. Retain
-                // a completed idle gap even if a later write arrives before
-                // this station gets its next turn. Only lengths/times are
-                // staged here; payload bytes retain their single FIFO owner.
-                if(n.PacketTail == null || n.PacketTail.Count == maxBurst
-                    || inputStart >= n.PacketTail.LastReadyUs + idleUs)
-                {
-                    n.PacketTail = new TxPacket();
-                    n.Packets.Enqueue(n.PacketTail);
-                }
-                n.PacketTail.Count++;
-                n.PacketTail.LastReadyUs = n.InputReady;
-                n.Tx.Enqueue(new TimedByte(value, n.InputReady));
-                n.PendingTx++;
-                n.PeakTx = Math.Max(n.PeakTx, (ulong)n.PendingTx);
+                try { if(n.Modem != null && ModemInput(n, value, now)) return; }
+                catch(Exception e) { DebugLog("ModemInput exception " + e); return; }
+                EnqueueAir(n, value, now);
             }
+        }
+        private void EnqueueAir(Node n, byte value, ulong now)
+        {
+            if(n.PendingTx >= txFifo) { n.RefusedTx++; return; }
+            // PTY writes are instantaneous. Serialize their ingress at
+            // 8N1 before air admission. Guest UARTs are already paced; this
+            // adds at most one character of pipeline latency, not a second
+            // serialization rate or an unbounded staging allocation.
+            var inputStart = Math.Max(now, n.InputReady);
+            n.InputReady = inputStart + UartByteUs;
+            // UART packet boundaries belong to each modem's ingress,
+            // independently of which modem currently owns airtime. Retain
+            // a completed idle gap even if a later write arrives before
+            // this station gets its next turn. Only lengths/times are
+            // staged here; payload bytes retain their single FIFO owner.
+            if(n.PacketTail == null || n.PacketTail.Count == maxBurst
+                || inputStart >= n.PacketTail.LastReadyUs + idleUs)
+            {
+                n.PacketTail = new TxPacket();
+                n.Packets.Enqueue(n.PacketTail);
+            }
+            n.PacketTail.Count++;
+            n.PacketTail.LastReadyUs = n.InputReady;
+            n.Tx.Enqueue(new TimedByte(value, n.InputReady));
+            n.PendingTx++;
+            n.PeakTx = Math.Max(n.PeakTx, (ulong)n.PendingTx);
         }
         private void Tick()
         {
@@ -300,6 +354,8 @@ namespace Antmicro.Renode.Peripherals.UART
                         var n = nodes[i];
                         if(n == null || n != active.Recipients[i] || i == active.Sender) continue;
                         if(!links[active.Sender,i]) { n.LostLink += (ulong)active.Bytes.Length; continue; }
+                        // A modem in command mode or rebooting does not output air data.
+                        if(n.Modem != null && n.Modem.State != ModemState.Data) { n.Modem.DroppedAir += (ulong)active.Bytes.Length; continue; }
                         foreach(var value in active.Bytes)
                         {
                             if(n.Rx.Count >= rxFifo) { n.DroppedRx++; continue; }
@@ -311,6 +367,10 @@ namespace Antmicro.Renode.Peripherals.UART
                     availableUs = active.EndUs + turnUs;
                     active = null;
                 }
+                try {
+                for(var i = 0; i < MaxNodes; i++)
+                    if(nodes[i] != null && nodes[i].Modem != null) ModemTick(nodes[i], now);
+                } catch(Exception e) { DebugLog("ModemTick exception " + e); }
                 for(var i = 0; i < MaxNodes; i++)
                 {
                     var n = nodes[i];
@@ -352,6 +412,168 @@ namespace Antmicro.Renode.Peripherals.UART
             foreach(var delivery in deliveries)
                 delivery.Node.Machine.HandleTimeDomainEvent(delivery.Node.Deliver, delivery.Value, stamp);
         }
+        // --- RFD900x ASYNC command-mode model -----------------------------
+        private bool ModemInput(Node n, byte value, ulong now)
+        {
+            var m = n.Modem;
+            var silent = now >= m.LastHostUs + 1000000;
+            var handled = true;
+            switch(m.State)
+            {
+            case ModemState.Rebooting:
+                break;
+            case ModemState.Command:
+                Say(n, now, new[] { value });
+                if(value == (byte)'\r')
+                {
+                    var line = m.Line.ToString().Trim();
+                    m.Line.Clear();
+                    if(line.Length != 0) ModemExecute(n, line, now);
+                }
+                else if(m.Line.Length < 128) m.Line.Append((char)value);
+                break;
+            default:
+                if(value == (byte)'+' && (m.Pluses > 0 || silent) && m.Pluses < 3)
+                {
+                    m.Pluses++;
+                    m.PlusUs = now;
+                }
+                else
+                {
+                    // Held '+' bytes were ordinary data after all.
+                    for(var k = 0; k < m.Pluses; k++) EnqueueAir(n, (byte)'+', now);
+                    m.Pluses = 0;
+                    handled = false;
+                }
+                break;
+            }
+            m.LastHostUs = now;
+            return handled;
+        }
+        private void ModemTick(Node n, ulong now)
+        {
+            var m = n.Modem;
+            if(m.State == ModemState.Rebooting && now >= m.RebootUntilUs)
+            {
+                m.State = ModemState.Data;
+                foreach(var r in m.Regs.Values) r.Ram = r.Eeprom;
+            }
+            if(m.Pluses == 3 && now >= m.PlusUs + 1000000 && m.LastHostUs <= m.PlusUs)
+            {
+                m.Pluses = 0;
+                m.State = ModemState.Command;
+                m.CommandEntries++;
+                Say(n, now, Encoding.ASCII.GetBytes("OK\r\n"));
+            }
+        }
+        private void Say(Node n, ulong now, byte[] bytes)
+        {
+            foreach(var value in bytes)
+            {
+                if(n.Rx.Count >= rxFifo) { n.DroppedRx++; continue; }
+                n.OutputReady = Math.Max(now + 2000, n.OutputReady) + UartByteUs;
+                n.Rx.Enqueue(new TimedByte(value, n.OutputReady));
+            }
+        }
+        private void ModemExecute(Node n, string cmd, ulong now)
+        {
+            var m = n.Modem;
+            m.Commands++;
+            DebugLog(now + " cmd " + cmd);
+            var reply = new StringBuilder();
+            int number, value;
+            if(cmd == "AT") reply.Append("OK\r\n");
+            else if(cmd == "ATI") reply.Append("RFD ASYNC 4.03 on RFD900X2\r\n");
+            else if(cmd == "ATI5")
+                foreach(var pair in m.Regs) reply.Append('S').Append(pair.Key).Append(':').Append(pair.Value.Name).Append('=').Append(pair.Value.Ram).Append("\r\n");
+            else if(cmd == "AT+F?")
+            {
+                // ASYNC 4.03 format: ten empty "slot:src->dst" entries.
+                for(var slot = 0; slot < 10; slot++) reply.Append(slot).Append(":0->0,");
+                reply.Append(" | FwdBuff=13320\r\n");
+            }
+            else if(cmd == "AT&W")
+            {
+                foreach(var r in m.Regs.Values) r.Eeprom = r.Ram;
+                m.Saves++;
+                reply.Append("OK\r\n");
+            }
+            else if(cmd == "ATZ")
+            {
+                m.State = ModemState.Rebooting;
+                m.RebootUntilUs = now + 1500000;
+                m.Reboots++;
+            }
+            else if(cmd == "ATO") m.State = ModemState.Data;
+            else if(cmd.StartsWith("ATS", StringComparison.Ordinal) && cmd.EndsWith("?", StringComparison.Ordinal)
+                && int.TryParse(cmd.Substring(3, cmd.Length - 4), NumberStyles.None, CultureInfo.InvariantCulture, out number)
+                && m.Regs.ContainsKey(number))
+                reply.Append(m.Regs[number].Ram).Append("\r\n");
+            else if(cmd.StartsWith("ATS", StringComparison.Ordinal) && cmd.IndexOf('=') > 3
+                && int.TryParse(cmd.Substring(3, cmd.IndexOf('=') - 3), NumberStyles.None, CultureInfo.InvariantCulture, out number)
+                && int.TryParse(cmd.Substring(cmd.IndexOf('=') + 1), NumberStyles.None, CultureInfo.InvariantCulture, out value)
+                && m.Regs.ContainsKey(number))
+            {
+                m.Regs[number].Ram = value;
+                m.Writes.Append(m.Writes.Length == 0 ? "" : ",").Append(number).Append('=').Append(value);
+                reply.Append("OK\r\n");
+            }
+            else reply.Append("ERROR\r\n");
+            if(reply.Length != 0) Say(n, now, Encoding.ASCII.GetBytes(reply.ToString()));
+        }
+        private static void DebugLog(string line)
+        {
+            var path = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_MODEM_LOG");
+            if(!string.IsNullOrEmpty(path)) File.AppendAllText(path, line + "\n");
+        }
+        private enum ModemState { Data, Command, Rebooting }
+        private sealed class ModemReg { public string Name; public int Ram, Eeprom; }
+        private sealed class Modem
+        {
+            public Modem()
+            {
+                // RFD ASYNC 4.03 on RFD900x2 as read in the field (S17 DUTY_CYCLE
+                // shifts LBT_RSSI to S18 and RTSCTS to S19), with the deployed
+                // rfd-async-64k-compatible values.
+                Set(0, "FORMAT", 27); Set(1, "SERIAL_SPEED", 115); Set(2, "AIR_SPEED", 64);
+                Set(3, "MAX_DATA", 3968); Set(4, "MAX_RETRIES", 10); Set(5, "GLOBAL_RETRIES", 10);
+                Set(6, "SER_BRK_DETMS", 50); Set(7, "TX_ENCAP_METHOD", 0); Set(8, "RX_ENCAP_METHOD", 0);
+                Set(9, "NETID", 25); Set(10, "NODEID", 2); Set(11, "DESTID", 32768);
+                Set(12, "TXPOWER", 30); Set(13, "MAVLINK1", 0); Set(14, "MIN_FREQ", 915000);
+                Set(15, "MAX_FREQ", 928000); Set(16, "NUM_CHANNELS", 20); Set(17, "DUTY_CYCLE", 100);
+                Set(18, "LBT_RSSI", 0); Set(19, "RTSCTS", 0); Set(20, "MAX_WINDOW", 131); Set(22, "RESV", 0);
+            }
+            public void Set(int number, string name, int value)
+            {
+                ModemReg r;
+                if(!Regs.TryGetValue(number, out r)) { r = new ModemReg { Name = name ?? ("S" + number) }; Regs[number] = r; }
+                if(!string.IsNullOrEmpty(name)) r.Name = name;
+                r.Ram = r.Eeprom = value;
+            }
+            public string Json()
+            {
+                var b = new StringBuilder("{\"state\":\"").Append(State.ToString().ToLowerInvariant())
+                    .Append("\",\"command_entries\":").Append(CommandEntries).Append(",\"commands\":").Append(Commands)
+                    .Append(",\"saves\":").Append(Saves).Append(",\"reboots\":").Append(Reboots)
+                    .Append(",\"dropped_air\":").Append(DroppedAir)
+                    .Append(",\"writes\":\"").Append(Writes).Append("\",\"eeprom\":{");
+                var first = true;
+                foreach(var pair in Regs)
+                {
+                    if(!first) b.Append(','); first = false;
+                    b.Append("\"S").Append(pair.Key).Append(':').Append(pair.Value.Name).Append("\":").Append(pair.Value.Eeprom);
+                }
+                return b.Append("}}").ToString();
+            }
+            public readonly SortedDictionary<int, ModemReg> Regs = new SortedDictionary<int, ModemReg>();
+            public readonly StringBuilder Line = new StringBuilder();
+            public readonly StringBuilder Writes = new StringBuilder();
+            public ModemState State;
+            public int Pluses;
+            public ulong PlusUs, LastHostUs, RebootUntilUs, DroppedAir;
+            public ulong CommandEntries, Commands, Saves, Reboots;
+        }
+
         private Node GetNode(int index)
         {
             ValidateIndex(index);
@@ -380,6 +602,7 @@ namespace Antmicro.Renode.Peripherals.UART
             public Action<byte> Input, Receive, Deliver;
             public TracePair Trace;
             public bool Host;
+            public Modem Modem;
             public readonly Queue<TimedByte> Tx = new Queue<TimedByte>();
             // At least one accepted FIFO byte owns every descriptor; the TX
             // FIFO limit also bounds this metadata, including while air busy.
@@ -482,6 +705,7 @@ namespace Antmicro.Renode.Peripherals.UART
         private const ulong QuantumUs = 100;
         private readonly object sync = new object();
         private readonly Node[] nodes = new Node[MaxNodes];
+        private readonly Modem[] modemConfig = new Modem[MaxNodes];
         private readonly TracePair[] traces = new TracePair[MaxNodes];
         private readonly string traceDirectory, traceName;
         private readonly ulong traceUntilUs;

@@ -187,3 +187,9 @@ control must reproduce seconds of ACK buffering, redundant command traffic,
 FIFO overflow, and resulting stream-framing loss without injected bit flips.
 Checksums here protect opaque test records; they are not SEDSnet SDT CRCs.
 This fixture identifies a failure mechanism and does not qualify hardware.
+
+The RFD ASYNC command-mode contract configures one station with
+`ConfigureModem`, checks the guarded `+++`, echo, `ATI5` with the 4.03 field
+layout, `ATSn?`, `ATSn=X`, an unknown register, `AT&W`/`ATZ` persistence and
+reboot, that command mode passes no air data, and that an unconfigured
+station stays transparent.
