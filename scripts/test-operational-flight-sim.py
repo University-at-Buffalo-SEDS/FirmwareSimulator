@@ -732,6 +732,12 @@ class Run:
             nitro['n2o'] = True
             self.stage = 'fill'
             self.milestone('fill_started')
+        elif stage == 'fill' and phase == 'paused' and 'below target' in str(status.get('message')) \
+                and not status['qualification']['fill_target'] and self.now - self.qd_checked_ms >= 5000:
+            # Operator review of a settled mass below target: resume the fill.
+            self.qd_checked_ms = self.now
+            code, reply = self.api('/api/command', 'StartFill')
+            self.milestone('fill_resumed_below_target', status=code, reply=reply, message=status.get('message'))
         elif stage == 'fill' and status['qualification']['fill_target']:
             assert status['mission_stage'] == 'armed', status['mission_stage']
             self.milestone('armed_fill_target', valves=status['valves'])
