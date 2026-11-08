@@ -1,0 +1,8 @@
+{
+  "retry_mode": "collision",
+  "stall_duty_rf": 0.5,
+  "stall_duty_gs": 0.3,
+  "stall_duty_rrls": 0.3,
+  "stall_mean_ms": 2000.0,
+  "rf_load_scale": 0.8
+}

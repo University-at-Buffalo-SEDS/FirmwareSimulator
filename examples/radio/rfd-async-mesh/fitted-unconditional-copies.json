@@ -1,6 +1,6 @@
 {
   "retry_mode": "unconditional",
-  "unconditional_copy_fraction": 0.4,
+  "unconditional_copy_fraction": 0.3,
   "backoff_slots": 128,
   "rf_load_scale": 0.8
 }

@@ -1,7 +1,10 @@
 """Empirical discrete-event model of three RFD900x modems on ASYNC 4.03.
 
 RFDesign has published no description of the 4.03 MAC. This is therefore not
-an emulation of the firmware. It is a parameterised model whose every input is
+an emulation of the firmware. The register map and the documented behaviour
+were re-checked on 2026-11-07 against the official RFDesign documents listed in
+``DOCS``; see docs/rfd-async-mesh-model.md for the confirmed / contradicted /
+undocumented table. It is a parameterised model whose every input is
 labelled in ``PARAMS`` as one of:
 
 * ``measured``   read from SEDS hardware captures or live modem readback;
@@ -28,6 +31,15 @@ import sys
 MEASURED, DOCUMENTED, INFERRED = 'measured', 'documented', 'inferred'
 HW = '.coordination/hardware-20261028/'
 MANUAL = 'RFD900x Asynchronous User Manual V1.1 (2018)'
+DOCS = {
+    'manual': 'https://files.rfdesign.com.au/Files/documents/RFD900x%20Asynchronous%20User%20Manual%20V1.1.pdf',
+    'release_notes': 'https://files.rfdesign.com.au/Files/firmware/RFD%20X%20modems%20Asynchronous%20release%20notes.txt',
+    'datasheet_x': 'https://files.rfdesign.com.au/Files/documents/XseriesDatasheet2.1.pdf',
+    'datasheet_ux': 'https://files.rfdesign.com.au/Files/documents/uXseriesDatasheet2.2.pdf',
+    'faq': 'https://files.rfdesign.com.au/Files/documents/Modem%20Support%20FAQs%20V1.2.pdf',
+    'tools_release_notes': 'https://files.rfdesign.com.au/Files/tools/RFD%20Modem%20Tools%20Release%20Notes.txt',
+    'support_lbt': 'https://discuss.ardupilot.org/t/rfd900x-asynchronous-mesh-firmware-multi-vehicle-connection-issue/77020',
+}
 NODES = ('gs', 'rf', 'rrls')
 
 
@@ -43,35 +55,54 @@ def _p(value, kind, source):
 
 
 PARAMS = {
-    # Modem S-registers. Async numbering, not SiK: S4 is MAX_RETRIES, S5 is
-    # GLOBAL_RETRIES (broadcast); there is no ECC/duty-cycle/MAX_WINDOW register.
+    # Modem S-registers. Async numbering, not SiK (manual Table 3-2, pp. 6-8):
+    # S4 MAX_RETRIES (range 1-100), S5 GLOBAL_RETRIES "for broadcast messages"
+    # (range 0-100), S6 SER_BREAK_DETECT_MS (local), S11 DESTID, S12 TXPOWER.
+    # There is no ECC/duty-cycle/MAX_WINDOW register. S2-S5 must match on every
+    # node; S1, S6, S10-S13 and S18 are local.
     'uart_baud': _p(115200, MEASURED, HW + 'rrls-live-radio-settings-attempt2.json S1=115'),
     'air_kbps': _p(64, MEASURED, 'RRLS readback S2=64; GS cached 10-20 read; RF never read'),
     'max_data': _p(3968, MEASURED, 'RRLS readback S3=3968 (manual default 4068, p6)'),
-    'max_retries': _p(10, MEASURED, 'RRLS readback S4=10; unicast only, unused while DESTID is broadcast'),
-    'global_retries': _p(10, MEASURED, 'RRLS readback S5=10; broadcast retries, manual p6-7'),
-    'serial_break_ms': _p(50, MEASURED, 'RRLS readback S6=50; manual p6-7: bytes grouped until S6 gap or S3'),
+    'max_retries': _p(10, MEASURED, 'RRLS readback S4=10. Manual p6: "Maximum number of retries", min 1; '
+                      'p11: S4=1 disables collision resend, so S4 is read as total attempts. That it '
+                      'applies only to unicast is inferred (S5 is the broadcast limit)'),
+    'global_retries': _p(10, MEASURED, 'RRLS readback S5=10; manual p7: "Maximum number of retries for broadcast '
+                         'messages", range 0-100'),
+    's5_counts': _p('retries', INFERRED,
+                    'manual p7 gives S5 a minimum of 0 (S4 has minimum 1), so S5 is read as resends after the '
+                    'first transmission: attempts = 1 + S5. The pre-11-07 model read it as total attempts '
+                    '("attempts"); kept as a sensitivity option'),
+    'global_retries_gs': _p(None, INFERRED, 'per-node S5 override (None = global_retries); for a mixed rollout'),
+    'global_retries_rf': _p(None, INFERRED, 'per-node S5 override (None = global_retries)'),
+    'global_retries_rrls': _p(None, INFERRED, 'per-node S5 override (None = global_retries)'),
+    'serial_break_ms': _p(50, MEASURED, 'RRLS readback S6=50; manual p7: break detection in ms, local (need not match)'),
+    'serial_break_ms_gs': _p(None, INFERRED, 'per-node S6 override; S6 is local per manual p7'),
+    'serial_break_ms_rf': _p(None, INFERRED, 'per-node S6 override'),
+    'serial_break_ms_rrls': _p(None, INFERRED, 'per-node S6 override'),
     'broadcast_dest': _p(True, MEASURED, 'RRLS readback S11=32768 (broadcast from V2.45F, manual p7); RF unread'),
     'cts_gs': _p(False, DOCUMENTED, 'GS comms.json raw_uart; worklist R6: RTS/CTS wired only on RRLS'),
     'cts_rf': _p(False, DOCUMENTED, 'RFBoard26 main.c:320 disables UART hardware flow control'),
-    'cts_rrls': _p(True, INFERRED, 'wired per worklist R6, but RRLS readback S18=0; set False to follow readback'),
+    'cts_rrls': _p(False, MEASURED, 'RRLS readback S18=0. Manual p7: S18 enables RTS/CTS (async default 1), so '
+                   'wired-but-disabled means no flow control. Was True (inferred) before 11-07'),
     # Physical layer and MAC.
     'fec_factor': _p(1.0, DOCUMENTED, 'async S-register table has no ECC register (manual p6-8)'),
     'phy_overhead_bytes': _p(24, INFERRED, 'preamble+sync+header+CRC; RFD gives no byte counts'),
     'turnaround_ms': _p(1.0, INFERRED, 'release notes v2.45 add a 1 ms delay for ack overlap'),
-    'carrier_sense': _p(True, DOCUMENTED, 'datasheet 2.1 s5.3 "if an RF channel is free"; RFD support: LBT + random backoff'),
+    'carrier_sense': _p(True, DOCUMENTED, 'datasheet 2.1 s5.3 "if an RF channel is free"; manual S17 LBT_RSSI '
+                        '(default 0, "shouldn\'t be changed", must match); RFD support: LBT + random backoff'),
     'cca_delay_ms': _p(2.0, INFERRED, 'time before a started transmission is sensed by others'),
     'backoff_slot_ms': _p(1.0, INFERRED, 'datasheet s5.3 says random backoff; no bounds published'),
     'backoff_slots': _p(32, INFERRED, 'initial contention window; no bounds published'),
     'backoff_growth': _p(2.0, INFERRED, 'window multiplier per retry; not published'),
     'retry_mode': _p('collision', INFERRED,
-                     'manual p11: resend "whenever a package collision happens"; how a broadcast '
-                     'sender learns of a collision is undocumented, so detection is an oracle. '
-                     'Alternatives: unconditional (blind copies), none'),
+                     'manual p11: resend "whenever a package collision happens". Release notes 2.45 '
+                     'list air rates "no acknowledgement" / "with acknowledgement" and an ack-overlap fix, so '
+                     'collision detection is by ACK. A broadcast has no single receiver to ACK, so '
+                     'collision mode on broadcast traffic is an oracle and not doc-consistent; '
+                     'unconditional (blind S5 copies) is the doc-consistent broadcast reading. none = no resend'),
     'unconditional_copy_fraction': _p(1.0, INFERRED,
                                       'only used with retry_mode=unconditional: copies = '
-                                      'max(1, round(fraction*S5)); S4=1 disables resend (manual p11), '
-                                      'so the register is read as a total attempt count'),
+                                      '1 + round(fraction*S5) (s5_counts=retries) or max(1, round(fraction*S5))'),
     'aggregate_on_send': _p(True, INFERRED,
                             'at channel access the modem sends all queued serial bytes up to S3 as one '
                             'packet; datasheet s5.3 "transmit ... as soon as they receive anything"; '
@@ -81,10 +112,12 @@ PARAMS = {
     'stall_duty_rrls': _p(0.0, INFERRED, 'fraction of time the RRLS modem cannot start a transmission'),
     'stall_mean_ms': _p(2000.0, INFERRED,
                         'mean TX-blocked interval. Empirical stand-in for LBT lockout ("some nodes '
-                        'locked out by other nodes", RFD support on ArduPilot Discourse 77020), '
-                        'local EMI above the LBT threshold, or hop desync; cause unidentified'),
+                        'locked out by other nodes regularly transmitting", RFD support on ArduPilot '
+                        'Discourse 77020) or local EMI above the LBT threshold. Hop desync is ruled out: '
+                        'the manual calls the topology non-hopping with no synchronisation (pp. 3, 10)'),
     'ber': _p(2e-6, INFERRED, 'bit error rate; checked against 2 CRC failures in 750 frames (radio-wire-analysis.json)'),
-    'serial_buffer_bytes': _p(8192, INFERRED, 'release notes v2.45: 8 kB heap; v2.47 variable buffers; 4.03 unknown'),
+    'serial_buffer_bytes': _p(8192, INFERRED, 'release notes v2.45: 8 kB heap; v2.47 variable buffers; manual AT+F?: '
+                              'forwarding buffer grows when MAX_DATA is lowered; 4.03 size undocumented'),
     'dedup': _p(True, INFERRED, 'only 12 of 221 RX packet ids repeated (radio-packets.json), consistent with SDK retries'),
     # SEDS host behaviour.
     'gs_retransmit_ms': _p(250, DOCUMENTED, 'GroundStation26 backend/src/main.rs:173 (GS_RELIABLE_RETRANSMIT_MS)'),
@@ -99,6 +132,7 @@ PARAMS = {
     'rf_retransmit_ms': _p(250, DOCUMENTED, 'RFBoard26 telemetry.c:778-779'),
     'rf_max_sends': _p(18, DOCUMENTED, 'RF_sdk_max_retries 17 (radio-source-latency-audit)'),
     'rf_ack_delay_ms': _p(5, INFERRED, 'RF owner ACK generation; no joined trace exists (worklist R4)'),
+    'rf_ack_bytes': _p(36, MEASURED, 'same as gs_frame_bytes; smaller when an ACK rides in a telemetry frame'),
     'gs_ack_delay_ms': _p(3, MEASURED, HW + 'latency-status.json first ACK 2-67 ms, median 3'),
     'rrls_role': _p(True, DOCUMENTED, 'raw UART links default to primary (docs/backend/rrls.md)'),
     'relay_loss_ms': _p(3000, DOCUMENTED, 'GroundStation26 rrls.rs:21 LOSS_MS'),
@@ -113,6 +147,17 @@ PARAMS = {
     'command_bytes': _p(40, MEASURED, 'underglow command writes 35-40 B (strace)'),
     'envelope_bytes': _p(8, INFERRED, 'RRLS relay envelope overhead'),
     'rf_load_scale': _p(1.0, INFERRED, 'multiplier on the measured RF stream table'),
+    # Candidate host behaviours (all off by default = current GS/RF behaviour).
+    'gs_batch_bytes': _p(None, INFERRED, 'GS-only batch cap override (None = batch_bytes)'),
+    'gs_retry_policy': _p('fixed', DOCUMENTED, 'fixed = SDK 250 ms x 18; adaptive = RTT-derived RTO with backoff'),
+    'gs_rto_min_ms': _p(250, INFERRED, 'adaptive retry: lower RTO bound'),
+    'gs_rto_max_ms': _p(3000, INFERRED, 'adaptive retry: upper RTO bound'),
+    'gs_rto_initial_ms': _p(1000, INFERRED, 'adaptive retry: RTO before any RTT sample'),
+    'gs_rto_backoff': _p(1.5, INFERRED, 'adaptive retry: RTO multiplier per resend'),
+    'gs_retry_deadline_ms': _p(15000, INFERRED, 'adaptive retry: give up after this long (time horizon, not a count)'),
+    'backlog_cap_gs': _p(0, INFERRED, 'GS host holds frames while its estimate of modem backlog exceeds this (0 = off)'),
+    'backlog_cap_rf': _p(0, INFERRED, 'RF host backlog cap (0 = off); needs RF firmware'),
+    'gs_quiet_after_ms': _p(0, INFERRED, 'GS drops filler and halves heartbeat after this long without RF frames (0 = off)'),
 }
 
 # RF downlink streams: (name, period_ms, wire_bytes, reliable). Periods and
@@ -167,13 +212,40 @@ def make_config(overrides=None):
         cfg[key] = value
     if cfg['retry_mode'] not in ('collision', 'unconditional', 'none'):
         raise ValueError('retry_mode must be collision, unconditional or none')
-    if not 1 <= cfg['global_retries'] <= 100 or not 1 <= cfg['max_retries'] <= 100:
+    if cfg['s5_counts'] not in ('retries', 'attempts'):
+        raise ValueError('s5_counts must be retries or attempts')
+    if cfg['gs_retry_policy'] not in ('fixed', 'adaptive'):
+        raise ValueError('gs_retry_policy must be fixed or adaptive')
+    s5 = [cfg['global_retries']] + [cfg['global_retries_' + n] for n in NODES if cfg['global_retries_' + n] is not None]
+    s6 = [cfg['serial_break_ms']] + [cfg['serial_break_ms_' + n] for n in NODES if cfg['serial_break_ms_' + n] is not None]
+    # Manual Table 3-2: S4 1-100, S5 0-100, S6 0-500, S3 1-4068.
+    if not all(0 <= v <= 100 for v in s5) or not 1 <= cfg['max_retries'] <= 100:
         raise ValueError('S4/S5 outside documented range')
-    if not 0 <= cfg['serial_break_ms'] <= 500 or not 1 <= cfg['max_data'] <= 4068:
+    if cfg['s5_counts'] == 'attempts' and min(s5) < 1:
+        raise ValueError('S5=0 has no meaning when S5 counts total attempts')
+    if not all(0 <= v <= 500 for v in s6) or not 1 <= cfg['max_data'] <= 4068:
         raise ValueError('S6/S3 outside documented range')
     if not all(0 <= cfg['stall_duty_' + n] < 0.95 for n in NODES) or cfg['stall_mean_ms'] <= 0:
         raise ValueError('stall duty must be in [0, 0.95) and stall_mean_ms positive')
     return cfg
+
+
+def node_reg(cfg, name, node):
+    """Per-node register value: S5/S6 overrides fall back to the shared value."""
+    value = cfg.get(name + '_' + node)
+    return cfg[name] if value is None else value
+
+
+def broadcast_attempts(cfg, node):
+    """Maximum transmissions of one broadcast packet for collision mode."""
+    s5 = node_reg(cfg, 'global_retries', node)
+    return 1 + s5 if cfg['s5_counts'] == 'retries' else max(1, s5)
+
+
+def blind_copies(cfg, node):
+    s5 = node_reg(cfg, 'global_retries', node)
+    f = cfg['unconditional_copy_fraction']
+    return 1 + round(f * s5) if cfg['s5_counts'] == 'retries' else max(1, round(f * s5))
 
 
 def profile_overrides(path):
@@ -183,7 +255,7 @@ def profile_overrides(path):
     return {
         'uart_baud': modem['serial_baud'], 'air_kbps': modem['air_bps'] // 1000,
         'max_data': modem['max_data_bytes'], 'max_retries': modem['max_retries'],
-        'global_retries': max(1, modem['broadcast_retries']),
+        'global_retries': modem['broadcast_retries'],
         'serial_break_ms': modem['serial_break_ms'],
         'usable_air_bps': transport['usable_air_bps'],
         'packet_gap_ms': transport['packet_gap_ms'], 'rf_share_pct': transport['rf_share_percent'],
@@ -232,6 +304,7 @@ class Command:
     rf_first_rx: float = None
     rf_ack_created: float = None
     done: bool = False
+    rto: float = 0.0
     send_times: list = field(default_factory=list)
 
 
@@ -295,7 +368,7 @@ class Modem:
         self.last_in = sim.now
         self.close_token += 1
         token = self.close_token
-        sim.at(sim.now + cfg['serial_break_ms'], self._break_timer, token)
+        sim.at(sim.now + node_reg(cfg, 'serial_break_ms', self.name), self._break_timer, token)
 
     def _break_timer(self, token):
         if token == self.close_token and self.pending:
@@ -306,10 +379,9 @@ class Modem:
         if not self.pending:
             return
         sim.pid += 1
-        s5 = cfg['global_retries'] if cfg['broadcast_dest'] else cfg['max_retries']
         copies = 1
         if cfg['retry_mode'] == 'unconditional':
-            copies = max(1, round(cfg['unconditional_copy_fraction'] * s5))
+            copies = blind_copies(cfg, self.name) if cfg['broadcast_dest'] else 1
         packet = Packet(sim.pid, self.name, self.pending, self.pending_bytes, copies_left=copies)
         self.pending, self.pending_bytes = [], 0
         self.txq.append(packet)
@@ -362,7 +434,7 @@ class Modem:
             packet.copies_left -= 1
             retry = packet.copies_left > 0
         elif cfg['retry_mode'] == 'collision' and collided:
-            limit = cfg['global_retries'] if cfg['broadcast_dest'] else cfg['max_retries']
+            limit = broadcast_attempts(cfg, self.name) if cfg['broadcast_dest'] else cfg['max_retries']
             retry = packet.attempts < limit
         if retry:
             sim.stats['modem_retries'][self.name] += 1
@@ -404,6 +476,14 @@ class Host:
         self.line_free = 0.0
         self.scheduled = False
         self.waiting_cts = False
+        self.batch_limit = sim.cfg['batch_bytes']
+        if name == 'gs' and sim.cfg['gs_batch_bytes']:
+            self.batch_limit = sim.cfg['gs_batch_bytes']
+        self.backlog_cap = sim.cfg.get('backlog_cap_' + name, 0) or 0
+        self.est_backlog, self.est_at = 0.0, 0.0
+        # Host estimate of the modem drain: air rate less PHY overhead per
+        # ~200 B packet. It cannot see TX stalls or modem copies.
+        self.drain = sim.cfg['air_kbps'] / 8.0 * 200 / (200 + sim.cfg['phy_overhead_bytes'])
 
     def enqueue(self, frame, priority=5):
         sim = self.sim
@@ -448,11 +528,22 @@ class Host:
             return
         self.queue.sort(key=lambda q: (q[0], q[1]))
         batch, size = [], 0
-        while self.queue and (not batch or size + self.queue[0][2].size <= cfg['batch_bytes']):
+        while self.queue and (not batch or size + self.queue[0][2].size <= self.batch_limit):
             frame = self.queue.pop(0)[2]
             batch.append(frame)
             size += frame.size
         modem = sim.modem[self.name]
+        if self.backlog_cap:
+            self.est_backlog = max(0.0, self.est_backlog - (sim.now - self.est_at) * self.drain)
+            self.est_at = sim.now
+            if self.est_backlog > 0 and self.est_backlog + size > self.backlog_cap:
+                for frame in reversed(batch):
+                    self.queue.insert(0, (0, 0, frame))
+                wait = (self.est_backlog + size - self.backlog_cap) / self.drain
+                self.scheduled = True
+                sim.at(sim.now + max(1.0, wait), self._service)
+                return
+            self.est_backlog += size
         if modem.cts and modem.space() < size:
             for frame in reversed(batch):
                 self.queue.insert(0, (0, 0, frame))
@@ -510,6 +601,8 @@ class MeshSim:
         self.last_direct, self.direct_since, self.fallback = None, None, False
         self.fallback_since = None
         self.rrls_health_at, self.rrls_primary_direct = None, True
+        self.gs_quiet_skip = False
+        self.srtt = None
 
     # -- event loop ---------------------------------------------------------
     def at(self, t, fn, *args):
@@ -601,13 +694,24 @@ class MeshSim:
         self.host['rf'].enqueue(copy, 4)
         self.at(self.now + self.cfg['rf_retransmit_ms'], self._rf_rel_send, frame)
 
+    def _gs_quiet(self):
+        after = self.cfg['gs_quiet_after_ms']
+        if not after:
+            return False
+        last = self.last_direct if self.last_direct is not None else 0.0
+        return self.now - last >= after
+
     def _gs_periodic(self, kind, period, size):
-        self.gs_send(Frame(kind, 'gs', size, self.now), 5)
+        quiet = self._gs_quiet()
+        self.gs_quiet_skip = not self.gs_quiet_skip if quiet else False
+        if not self.gs_quiet_skip:
+            self.gs_send(Frame(kind, 'gs', size, self.now), 5)
         self.at(self.now + period, self._gs_periodic, kind, period, size)
 
     def _gs_misc(self):
         size = self.rng.choice((44, 60, 90, 150))
-        self.gs_send(Frame('misc', 'gs', size, self.now), 6)
+        if not self._gs_quiet():
+            self.gs_send(Frame('misc', 'gs', size, self.now), 6)
         self.at(self.now + self.rng.expovariate(self.cfg['gs_misc_bps'] / size) * 1000, self._gs_misc)
 
     def gs_send(self, frame, priority):
@@ -661,15 +765,27 @@ class MeshSim:
     def _cmd_start(self, cmd):
         self.active_cmd = cmd
         cmd.started = self.now
-        horizon = self.cfg['gs_retransmit_ms'] * self.cfg['gs_max_sends']
-        for k in range(self.cfg['gs_max_sends']):
-            self.at(self.now + k * self.cfg['gs_retransmit_ms'], self._cmd_copy, cmd)
+        cfg = self.cfg
+        if cfg['gs_retry_policy'] == 'adaptive':
+            # RTO from the smoothed time-to-first-ACK of earlier commands,
+            # backed off per resend, bounded by a time deadline.
+            rto = cfg['gs_rto_initial_ms'] if self.srtt is None else 1.5 * self.srtt
+            cmd.rto = min(max(rto, cfg['gs_rto_min_ms']), cfg['gs_rto_max_ms'])
+            self._cmd_copy(cmd)
+            self.at(self.now + cfg['gs_retry_deadline_ms'], self._cmd_exhaust, cmd)
+            return
+        horizon = cfg['gs_retransmit_ms'] * cfg['gs_max_sends']
+        for k in range(cfg['gs_max_sends']):
+            self.at(self.now + k * cfg['gs_retransmit_ms'], self._cmd_copy, cmd)
         self.at(self.now + horizon, self._cmd_exhaust, cmd)
 
     def _cmd_copy(self, cmd):
         if cmd.done:
             return
         self.gs_send(Frame('cmd', 'gs', self.cfg['command_bytes'], self.now, ref=cmd), 2)
+        if self.cfg['gs_retry_policy'] == 'adaptive':
+            self.at(self.now + cmd.rto, self._cmd_copy, cmd)
+            cmd.rto = min(cmd.rto * self.cfg['gs_rto_backoff'], self.cfg['gs_rto_max_ms'])
 
     def _cmd_finish(self, cmd):
         cmd.done = True
@@ -696,6 +812,8 @@ class MeshSim:
                 cmd = payload.ref
                 if cmd.first_ack is None:
                     cmd.first_ack = self.now
+                    sample = self.now - cmd.started
+                    self.srtt = sample if self.srtt is None else 0.875 * self.srtt + 0.125 * sample
                 if not cmd.done:
                     self._cmd_finish(cmd)
             elif payload.kind in ('rel', 'tele'):
@@ -742,7 +860,7 @@ class MeshSim:
     def _rf_ack(self, cmd):
         if cmd.rf_ack_created is None:
             cmd.rf_ack_created = self.now
-        self.host['rf'].enqueue(Frame('ack', 'rf', self.cfg['gs_frame_bytes'], self.now, ref=cmd), 1)
+        self.host['rf'].enqueue(Frame('ack', 'rf', self.cfg['rf_ack_bytes'], self.now, ref=cmd), 1)
 
     # -- results ------------------------------------------------------------------
     def result(self):
@@ -927,15 +1045,23 @@ CALIBRATION_FAMILIES = {
     'weak_lbt_collision_resend': [
         {'retry_mode': 'collision', 'carrier_sense': cs, 'cca_delay_ms': d, 'backoff_slots': b}
         for cs, d in ((False, 2.0), (True, 20.0), (True, 60.0)) for b in (32, 256)],
-    # Blind broadcast copies tied to S5.
+    # Blind broadcast copies tied to S5 (copies = 1 + round(f * S5)).
     'unconditional_copies': [
         {'retry_mode': 'unconditional', 'unconditional_copy_fraction': f, 'backoff_slots': b}
-        for f in (0.2, 0.3, 0.4, 1.0) for b in (64, 128, 256, 512)],
+        for f in (0.1, 0.2, 0.3, 0.4, 1.0) for b in (64, 128, 256, 512)],
     # Exogenous TX-blocking intervals (LBT lockout stand-in) on working CSMA.
+    # Collision-detected broadcast resend is an oracle (see retry_mode).
     'tx_stall': [
         {'retry_mode': 'collision', 'stall_duty_rf': rf, 'stall_duty_gs': gs, 'stall_duty_rrls': gs,
          'stall_mean_ms': mean}
         for rf in (0.4, 0.5, 0.6) for gs in (0.1, 0.2, 0.3) for mean in (1000.0, 1500.0, 2000.0)],
+    # The same TX blocking with the doc-consistent broadcast resend: S5 blind
+    # copies, from none (f=0) to a few.
+    'tx_stall_blind': [
+        {'retry_mode': 'unconditional', 'unconditional_copy_fraction': f, 'stall_duty_rf': rf,
+         'stall_duty_gs': gs, 'stall_duty_rrls': gs, 'stall_mean_ms': mean}
+        for f in (0.0, 0.1, 0.2) for rf in (0.4, 0.5, 0.6) for gs in (0.1, 0.2, 0.3)
+        for mean in (1500.0, 2000.0)],
 }
 
 
@@ -1025,6 +1151,105 @@ def rank(evaluation):
     return [name for name, _ in sorted(evaluation.items(), key=lambda item: rank_cost(item[1]))]
 
 
+# ---------------------------------------------------------------------------
+# Air-rate fallback rendezvous (mode switching on an unstable link)
+# ---------------------------------------------------------------------------
+RENDEZVOUS = {
+    # Datasheets (X 2.1 / uX 2.2 receiver sensitivity at 1e-5 BER): 64k -101 / -98 dBm,
+    # 56k and 12k -102 / -99 dBm. A slower air rate buys about 1 dB. The async
+    # manual (Table 3-2) lists 64 as the lowest accepted S2 value, so on ASYNC
+    # firmware a slower rate may not exist at all.
+    'fallback_gain_db': 1.0,
+    'fallback_capacity': 56 / 64,
+    # S2 must match on every node (manual p6) and only takes effect after
+    # AT&W + ATZ (manual p5): one EEPROM write and one reboot per switch.
+    'reboot_s': 3.0,           # undocumented; assumed
+    'loss_timeout_s': 3.0,     # N: no frames heard for N s -> fall back
+    'fallback_dwell_s': 20.0,  # H: stay on fallback at least H s, then try primary
+    'margin_db': 6.0,          # clear-sky margin at 64k
+    'fade_rate_per_min': 1.0,
+    'fade_mean_s': 6.0,
+    'fade_depth_max_db': 20.0,
+    'asymmetric_fraction': 0.3,  # fades that hit only one direction
+    'duration_s': 3600.0,
+    'dt_s': 0.1,
+}
+
+
+def rendezvous_run(params, seed, switching=True):
+    """Two nodes (GS and RF) that each run the same deterministic rule.
+
+    Rule per node: on primary, if nothing is heard for N s, write the fallback
+    rate and reboot. On fallback, stay at least H s; then write primary and
+    reboot. On primary again, the N s loss timer restarts from the switch.
+    H > 2 N + 2 reboots guarantees that a node that switched alone is joined
+    by its peer before it leaves fallback, so the pair can never stay split.
+    """
+    p = dict(RENDEZVOUS, **params)
+    rng = random.Random(seed)
+    dt, steps = p['dt_s'], int(p['duration_s'] / p['dt_s'])
+    fades = {'up': [], 'down': []}   # (start, end, depth)
+    t = 0.0
+    while t < p['duration_s']:
+        t += rng.expovariate(p['fade_rate_per_min'] / 60.0)
+        dur, depth = rng.expovariate(1.0 / p['fade_mean_s']), rng.uniform(0, p['fade_depth_max_db'])
+        dirs = ('up', 'down') if rng.random() >= p['asymmetric_fraction'] else (rng.choice(('up', 'down')),)
+        for d in dirs:
+            fades[d].append((t, t + dur, depth))
+
+    def margin(direction, now):
+        m = p['margin_db']
+        for start, end, depth in fades[direction]:
+            if start <= now < end:
+                m -= depth
+        return m
+    nodes = {n: {'rate': 'P', 'reboot_until': -1.0, 'last_heard': 0.0, 'since': 0.0} for n in ('gs', 'rf')}
+    up_steps = cap_steps = split_steps = switches = 0
+    longest_split = split_run = 0.0
+    hear = {'gs': 'down', 'rf': 'up'}    # gs hears the downlink, rf the uplink
+    for k in range(steps):
+        now = k * dt
+        alive = {n: now >= s['reboot_until'] for n, s in nodes.items()}
+        same = nodes['gs']['rate'] == nodes['rf']['rate']
+        gain = p['fallback_gain_db'] if nodes['gs']['rate'] == 'F' else 0.0
+        ok = {d: same and alive['gs'] and alive['rf'] and margin(d, now) + gain >= 0 for d in ('up', 'down')}
+        if ok['up'] and ok['down']:
+            up_steps += 1
+            cap_steps += p['fallback_capacity'] if nodes['gs']['rate'] == 'F' else 1.0
+        if alive['gs'] and alive['rf'] and not same:
+            split_steps += 1
+            split_run += dt
+            longest_split = max(longest_split, split_run)
+        else:
+            split_run = 0.0
+        if not switching:
+            continue
+        for n, st in nodes.items():
+            if not alive[n]:
+                continue
+            if ok[hear[n]]:
+                st['last_heard'] = now
+            quiet_for = now - max(st['last_heard'], st['since'])
+            if st['rate'] == 'P' and quiet_for >= p['loss_timeout_s']:
+                st.update(rate='F', reboot_until=now + p['reboot_s'], since=now + p['reboot_s'])
+                switches += 1
+            elif st['rate'] == 'F' and now - st['since'] >= p['fallback_dwell_s']:
+                st.update(rate='P', reboot_until=now + p['reboot_s'], since=now + p['reboot_s'])
+                switches += 1
+    return {'availability': up_steps / steps, 'capacity_weighted': cap_steps / steps,
+            'eeprom_writes_per_hour': switches * 3600.0 / p['duration_s'],
+            'split_fraction': split_steps / steps, 'longest_split_s': round(longest_split, 1)}
+
+
+def rendezvous_eval(params=None, seeds=16):
+    out = {}
+    for label, switching in (('fixed_64k', False), ('fallback_rendezvous', True)):
+        runs = [rendezvous_run(params or {}, s, switching) for s in range(seeds)]
+        out[label] = {k: round(statistics.fmean(r[k] for r in runs), 4) for k in runs[0]}
+        out[label]['longest_split_s'] = max(r['longest_split_s'] for r in runs)
+    return out
+
+
 def assumptions_table():
     return [{'name': k, 'default': v.value, 'kind': v.kind, 'source': v.source} for k, v in PARAMS.items()]
 
@@ -1046,6 +1271,9 @@ def main(argv=None):
     e.add_argument('--command-gap-ms', type=float, default=8000.0,
                    help='mean operator command spacing (uniform +-2.5 s)')
     e.add_argument('--jobs', type=int, default=6)
+    z = sub.add_parser('rendezvous', help='air-rate fallback with deterministic rendezvous')
+    z.add_argument('--set', action='append', default=[], metavar='KEY=VALUE')
+    z.add_argument('--seeds', type=int, default=16)
     r = sub.add_parser('replay')
     r.add_argument('--base', type=Path)
     r.add_argument('--seeds', type=int, default=8)
@@ -1056,6 +1284,14 @@ def main(argv=None):
     elif args.cmd == 'calibrate':
         rows = calibrate(args.seeds, args.jobs)
         print(json.dumps(rows[:args.top], indent=1, default=str))
+    elif args.cmd == 'rendezvous':
+        params = {}
+        for item in args.set:
+            key, value = item.split('=', 1)
+            if key not in RENDEZVOUS:
+                raise SystemExit(f'unknown rendezvous parameter {key}')
+            params[key] = float(value)
+        print(json.dumps({'params': dict(RENDEZVOUS, **params), 'result': rendezvous_eval(params, args.seeds)}, indent=1))
     elif args.cmd == 'replay':
         base = json.loads(args.base.read_text()) if args.base else {}
         print(json.dumps(summarize_replay(run_many('replay', make_config(base), range(args.seeds), args.jobs)),

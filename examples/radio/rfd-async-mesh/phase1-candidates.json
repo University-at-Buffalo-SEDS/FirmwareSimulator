@@ -1,0 +1,20 @@
+{
+  "P_gs_rrls_s5_0_s6_20": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20},
+  "P_s5_0_only": {"global_retries_gs": 0, "global_retries_rrls": 0},
+  "P_s5_1_only": {"global_retries_gs": 1, "global_retries_rrls": 1},
+  "P_s6_20_only": {"serial_break_ms_gs": 20, "serial_break_ms_rrls": 20},
+  "P_s6_10": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 10, "serial_break_ms_rrls": 10},
+  "P_s6_30": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 30, "serial_break_ms_rrls": 30},
+  "P+adaptive_retry": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20, "gs_retry_policy": "adaptive"},
+  "P+quiet_rrls": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20, "health_ms": 1000, "ready_ms": 1000},
+  "P+gs_quiet_on_loss": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20, "gs_quiet_after_ms": 1000},
+  "P+gs_batch_512": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20, "gs_batch_bytes": 512},
+  "P+backlog_cap_gs_512": {"global_retries_gs": 0, "global_retries_rrls": 0, "serial_break_ms_gs": 20, "serial_break_ms_rrls": 20, "backlog_cap_gs": 512},
+  "adaptive_retry_only": {"gs_retry_policy": "adaptive"},
+  "quiet_rrls_only": {"health_ms": 1000, "ready_ms": 1000},
+  "gs_quiet_on_loss_only": {"gs_quiet_after_ms": 1000},
+  "P2_all_s5_0_s6_20": {"global_retries": 0, "serial_break_ms": 20},
+  "P2+adaptive_retry": {"global_retries": 0, "serial_break_ms": 20, "gs_retry_policy": "adaptive"},
+  "P2+rf_ack_piggyback": {"global_retries": 0, "serial_break_ms": 20, "rf_ack_bytes": 12},
+  "P2+backlog_cap_rf_512": {"global_retries": 0, "serial_break_ms": 20, "backlog_cap_rf": 512}
+}

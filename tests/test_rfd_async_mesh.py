@@ -58,11 +58,36 @@ class AssumptionLedger(unittest.TestCase):
         with self.assertRaises(ValueError):
             mesh.make_config({'txpower': 20})
         with self.assertRaises(ValueError):
-            mesh.make_config({'global_retries': 0})
+            mesh.make_config({'global_retries': 101})
+        with self.assertRaises(ValueError):
+            mesh.make_config({'global_retries': 0, 's5_counts': 'attempts'})
+        with self.assertRaises(ValueError):
+            mesh.make_config({'serial_break_ms_gs': 501})
         with self.assertRaises(ValueError):
             mesh.make_config({'retry_mode': 'magic'})
         with self.assertRaises(ValueError):
             mesh.make_config({'stall_duty_rf': 1.0})
+
+    def test_documented_ranges_and_register_scope(self):
+        # Manual Table 3-2: S5 accepts 0 (S4 does not); S6 is local per node.
+        cfg = mesh.make_config({'global_retries': 0})
+        self.assertEqual(mesh.broadcast_attempts(cfg, 'gs'), 1)
+        self.assertEqual(mesh.broadcast_attempts(mesh.make_config(), 'gs'), 11)
+        mixed = mesh.make_config({'global_retries_gs': 0, 'serial_break_ms_gs': 20})
+        self.assertEqual(mesh.node_reg(mixed, 'global_retries', 'gs'), 0)
+        self.assertEqual(mesh.node_reg(mixed, 'global_retries', 'rf'), 10)
+        self.assertEqual(mesh.node_reg(mixed, 'serial_break_ms', 'gs'), 20)
+        self.assertEqual(mesh.node_reg(mixed, 'serial_break_ms', 'rrls'), 50)
+        self.assertFalse(mesh.PARAMS['cts_rrls'].value)   # readback S18=0
+        self.assertIn('non-hopping', mesh.PARAMS['stall_mean_ms'].source)
+        for key in ('manual', 'release_notes', 'datasheet_x'):
+            self.assertTrue(mesh.DOCS[key].startswith('https://files.rfdesign.com.au/'))
+
+    def test_one_retry_layer_profile_maps_s5_zero(self):
+        ov = mesh.profile_overrides(EXAMPLES / 'gs-rfd-async-64k-one-retry-layer.json')
+        self.assertEqual((ov['max_retries'], ov['global_retries'], ov['serial_break_ms']), (10, 0, 20))
+        self.assertEqual(ov['packet_gap_ms'], 55)
+        self.assertEqual(mesh.broadcast_attempts(mesh.make_config(ov), 'rf'), 1)
 
     def test_groundstation_low_latency_profile_maps_to_registers(self):
         ov = mesh.profile_overrides(EXAMPLES / 'gs-rfd-async-64k-low-latency.json')
@@ -130,8 +155,8 @@ class Mac(unittest.TestCase):
         self.assertGreater(sim.stats['modem_retries']['gs'] + sim.stats['modem_retries']['rf'], 0)
         self.assertEqual(sim.stats['rx_frames']['rrls'], 2)
 
-    def test_s5_of_one_disables_resend(self):
-        sim = self.collide(retry_mode='collision', global_retries=1)
+    def test_s5_of_zero_disables_resend(self):
+        sim = self.collide(retry_mode='collision', global_retries=0)
         self.assertEqual(sim.stats['modem_retries'], {'gs': 0, 'rf': 0, 'rrls': 0})
         self.assertEqual(sim.stats['rx_frames']['rrls'], 0)
 
@@ -147,13 +172,25 @@ class Mac(unittest.TestCase):
         self.assertEqual(sim.stats['rx_frames']['rf'], 1)
 
     def test_unconditional_copies_use_airtime_but_deliver_once(self):
-        cfg = quiet(retry_mode='unconditional', unconditional_copy_fraction=0.4, backoff_slots=8)
+        cfg = quiet(retry_mode='unconditional', unconditional_copy_fraction=0.3, backoff_slots=8)
         sim = mesh.MeshSim(cfg, 3, 3000, [], background=False)
         sim.modem['gs'].serial_in([frame(sim, 'gs', 64)])
         run_until(sim, 3000)
         one = (cfg['phy_overhead_bytes'] + 64) * 8 / 64
-        self.assertAlmostEqual(sim.stats['air_ms']['gs'], 4 * one, places=6)
+        self.assertAlmostEqual(sim.stats['air_ms']['gs'], 4 * one, places=6)   # 1 + round(0.3 * 10)
         self.assertEqual(sim.stats['rx_frames']['rf'], 1)
+
+    def test_per_node_s5_only_changes_that_senders_copies(self):
+        cfg = quiet(retry_mode='unconditional', unconditional_copy_fraction=0.3, backoff_slots=8,
+                    global_retries_gs=0)
+        sim = mesh.MeshSim(cfg, 3, 3000, [], background=False)
+        sim.modem['gs'].serial_in([frame(sim, 'gs', 64)])
+        run_until(sim, 1000)
+        sim.modem['rf'].serial_in([frame(sim, 'rf', 64)])
+        run_until(sim, 3000)
+        one = (cfg['phy_overhead_bytes'] + 64) * 8 / 64
+        self.assertAlmostEqual(sim.stats['air_ms']['gs'], one, places=6)
+        self.assertAlmostEqual(sim.stats['air_ms']['rf'], 4 * one, places=6)
 
     def test_half_duplex_receiver_misses_packets_while_transmitting(self):
         cfg = quiet(carrier_sense=False, retry_mode='none')
@@ -229,6 +266,30 @@ class Scenarios(unittest.TestCase):
         self.assertEqual(off['air_utilisation']['rrls'], 0.0)
         self.assertGreater(on['air_utilisation']['rrls'], 0.0)
         self.assertLess(off['gs_tx_Bps'], on['gs_tx_Bps'])
+
+    def test_adaptive_retry_sends_fewer_copies_and_uses_a_time_deadline(self):
+        base = json.loads((EXAMPLES / 'fitted-tx-stall.json').read_text())
+        fixed = mesh.command_stream(mesh.make_config(base), 5, 90000.0)
+        adaptive = mesh.command_stream(mesh.make_config(dict(base, gs_retry_policy='adaptive')), 5, 90000.0)
+        mean = lambda r: statistics.fmean(c['sends'] for c in r['commands'] if c['started'])
+        self.assertLess(mean(adaptive), mean(fixed) / 2)
+
+    def test_gs_host_already_paces_below_the_modem_drain(self):
+        # A GS backlog cap never engages: share pacing is far below air rate.
+        a = mesh.command_stream(mesh.make_config(), 6, 40000.0)
+        b = mesh.command_stream(mesh.make_config({'backlog_cap_gs': 512}), 6, 40000.0)
+        self.assertEqual(a, b)
+
+    def test_rendezvous_never_leaves_the_pair_split(self):
+        for params in ({}, {'reboot_s': 1.0, 'asymmetric_fraction': 0.8, 'margin_db': 2.0}):
+            result = mesh.rendezvous_eval(params, seeds=3)
+            fixed, switching = result['fixed_64k'], result['fallback_rendezvous']
+            self.assertEqual(fixed['eeprom_writes_per_hour'], 0.0)
+            self.assertGreater(switching['eeprom_writes_per_hour'], 10)
+            bound = mesh.RENDEZVOUS['loss_timeout_s'] + params.get('reboot_s', mesh.RENDEZVOUS['reboot_s'])
+            self.assertLessEqual(switching['longest_split_s'], bound)
+            # With the documented ~1 dB gain, switching costs availability.
+            self.assertLess(switching['availability'], fixed['availability'])
 
     def test_evaluation_ranks_candidates_and_honours_s5(self):
         base = json.loads((EXAMPLES / 'fitted-unconditional-copies.json').read_text())

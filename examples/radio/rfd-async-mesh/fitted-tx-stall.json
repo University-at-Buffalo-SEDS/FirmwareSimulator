@@ -1,8 +1,9 @@
 {
-  "retry_mode": "collision",
-  "stall_duty_rf": 0.5,
+  "retry_mode": "unconditional",
+  "unconditional_copy_fraction": 0.1,
+  "stall_duty_rf": 0.6,
   "stall_duty_gs": 0.3,
   "stall_duty_rrls": 0.3,
-  "stall_mean_ms": 2000.0,
+  "stall_mean_ms": 1500.0,
   "rf_load_scale": 0.8
 }
