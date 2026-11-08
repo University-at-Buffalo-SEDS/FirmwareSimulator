@@ -440,6 +440,7 @@ class Run:
         self.gs = {}
         self.cut = {'state': 'nominal', 'start_ms': None, 'end_ms': None}
         self.qd_checked_ms = -10**9
+        self.qd_query_wall = self.qd_policy_wall = 0.0
         self.seen_notifications = set()
         self.seen_messages = set()
         self.result = {
@@ -592,7 +593,7 @@ class Run:
                 self.gs['mission_phase'] = name
                 self.result['mission_phases_seen'].append({'virtual_ms': self.now, 't_plus_ms': self.tplus_ms(), 'phase': name, 'fc_state': self.fc_state, 'comms': self.cut['state']})
                 changed.append(('mission_phase', {'value': phase_value}))
-        if self.t0 is not None or self.stage in ('fire', 'flight'):
+        if self.t0 is not None or self.stage in ('qd', 'fire', 'flight'):
             code, clock = self.api('/api/launch_clock')
             if code == 200:
                 self.gs['launch_clock'] = clock
@@ -706,28 +707,37 @@ class Run:
             with (self.out / 'retract-attempts.jsonl').open('a') as handle:
                 handle.write(json.dumps({'virtual_ms': self.now, 'status': code, 'response': reply, 'qd': status.get('qd')}, default=str) + '\n')
         elif stage == 'qd':
-            # Launch needs fresh same-operation retraction proof: ask the
-            # actuator for its readback (the UI's "Check readiness"), and send
-            # one Launch only when the interlock reports it allowed.
-            if self.now - self.qd_checked_ms < 2000:
+            # Launch needs fresh same-operation retraction proof and fresh tank
+            # data. Those GS freshness windows are wall-clock (5 s plumbing
+            # proof, 2 s pressure) while the bay runs ~10-20x slower than real
+            # time, so act like an operator: refresh the actuator readback every
+            # 2 s wall, poll the Launch control at ~5 Hz wall, and press Launch
+            # the moment it is enabled.
+            wall = time.monotonic()
+            if wall - self.qd_query_wall >= 2.0:
+                self.qd_query_wall = wall
+                self.api('/api/actuator/plumbing/query', {})
+            if wall - self.qd_policy_wall < (0.2 if self.args.operator_launch_retry else 2.0):
                 return
-            self.qd_checked_ms = self.now
-            self.api('/api/actuator/plumbing/query', {})
-            code, plumbing = self.api('/api/actuator/plumbing/status')
-            interlock = (plumbing or {}).get('retraction_interlock') or {} if code == 200 else {}
-            record = {'virtual_ms': self.now, 'qd': status.get('qd'), 'interlock': interlock,
-                      'motion_remaining_ms': ((plumbing or {}).get('motion') or {}).get('minimum_delay_remaining_ms') if code == 200 else None}
-            if interlock.get('allowed'):
+            self.qd_policy_wall = wall
+            code, policy = self.api('/api/action_policy')
+            control = next((c for c in (policy or {}).get('controls', []) if c.get('cmd') == 'Launch'), None) if code == 200 else None
+            record = {'virtual_ms': self.now, 'wall_ms': int(time.time() * 1000), 'qd': status.get('qd'), 'launch_control': control}
+            if control and control.get('enabled'):
                 code, reply = self.api('/api/command', 'Launch')
                 record.update(launch_status=code, launch_response=reply)
                 if code == 200:
                     self.stage = 'fire'
-                    self.milestone('launch_sent', qd=status.get('qd'), interlock=interlock)
-            with (self.out / 'launch-attempts.jsonl').open('a') as handle:
-                handle.write(json.dumps(record, default=str) + '\n')
-        elif stage == 'fire':
+                    self.milestone('launch_sent', qd=status.get('qd'))
+            if record.get('launch_status') is not None or self.now - self.qd_checked_ms >= 2000:
+                self.qd_checked_ms = self.now
+                with (self.out / 'launch-attempts.jsonl').open('a') as handle:
+                    handle.write(json.dumps(record, default=str) + '\n')
+        if self.stage in ('qd', 'fire'):
             clock = self.gs.get('launch_clock') or {}
             if clock.get('kind') == 't_plus':
+                if self.stage == 'qd':
+                    self.milestone('launch_observed_from_gs_clock', note='Launch was not sent by this controller')
                 self.t0 = self.now
                 atomic(self.flight / 'launch-anchor.txt', str(self.t0))
                 self.stage = 'flight'
@@ -919,6 +929,8 @@ def main():
     p.add_argument('--ui-driver', default=None, help='shell command started when the GS origin is known')
     p.add_argument('--ui-grace-s', type=float, default=120.0)
     p.add_argument('--profile-arg', action='append', default=[], help='extra flight_profile.py argument (repeatable)')
+    p.add_argument('--operator-launch-retry', action=argparse.BooleanOptionalAction, default=True,
+                   help='poll the Launch control at ~5 Hz wall and press Launch when enabled (default on)')
     p.add_argument('--prepare-only', action='store_true')
     args = p.parse_args()
     if args.evidence is None:
