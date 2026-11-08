@@ -389,7 +389,13 @@ def prepare(args):
                                          ('fc_watchdog_resume_rejected', 'g_fc_watchdog_resume_rejected', 0),
                                          ('fc_watchdog_resumed', 'g_fc_watchdog_resumed', 0),
                                          ('fc_commands_received', 'g_network_flight_commands_received', 0),
-                                         ('fc_last_command_id', 'g_last_network_flight_command_id', 0)], miss)
+                                         ('fc_last_command_id', 'g_last_network_flight_command_id', 0),
+                                         # ThreadX stack-check / startup fault evidence (Core/Src/app_threadx.c)
+                                         ('fc_startup_fault_stage', 'g_startup_fault_stage', 0),
+                                         ('fc_stack_error_count', 'g_thread_stack_error_count', 0),
+                                         ('fc_stack_error_thread', 'g_thread_stack_error_thread', 0),
+                                         ('fc_stack_error_start', 'g_thread_stack_error_start', 0),
+                                         ('fc_stack_error_end', 'g_thread_stack_error_end', 0)], miss)
         (config / f'{name}.json').write_text(json.dumps(layout))
     (config / 'comms.json').write_text(json.dumps({'version': 1,
         'av_bay': {'interface': 'serial', 'port': '/dev/ttyAMA0', 'baud_rate': 115200, 'protocol': 'raw_uart'},
@@ -440,6 +446,7 @@ class Run:
         self.gs = {}
         self.cut = {'state': 'nominal', 'start_ms': None, 'end_ms': None}
         self.qd_checked_ms = -10**9
+        self.qd_mode_set = False
         self.qd_query_wall = self.qd_policy_wall = 0.0
         self.seen_notifications = set()
         self.seen_messages = set()
@@ -546,6 +553,10 @@ class Run:
         sample, row = self.probes.latest('flight')
         if not row or 'fc_state' not in row or sample == self.fc_word.get('sample'):
             return
+        if row.get('fc_startup_fault_stage') and not self.result.get('fc_fault'):
+            self.result['fc_fault'] = {'virtual_ms': self.now, 'probe_sample': sample, **{k: row.get(k) for k in row if k.startswith(('fc_startup', 'fc_stack'))}}
+            self.event('fc_fault', fault=self.result['fc_fault'])
+            self.write_result()
         word = row['fc_state']
         local = word & 0xff
         state = FC_LOCAL[local] if local < len(FC_LOCAL) else f'invalid:{local}'
@@ -648,6 +659,29 @@ class Run:
         stage = self.stage
         if status['qualification'].get('fault') or phase == 'fault':
             raise AssertionError('Procedure fault: ' + str(status.get('message')))
+        if stage == 'boot' and self.args.qd_mode != 'stepper' and not self.qd_mode_set:
+            # Operator drive selection (only allowed in Startup/Idle).
+            if not (status['topology_stable'] and phase in ('idle', 'cancelled')):
+                return
+            if self.now - self.qd_checked_ms < 2000:
+                return
+            self.qd_checked_ms = self.now
+            self.api('/api/actuator/plumbing/query', {})
+            code, plumbing = self.api('/api/actuator/plumbing/status')
+            board = (plumbing or {}).get('board') or {}
+            if code != 200 or not board.get('fresh'):
+                return
+            if board.get('mode') == self.args.qd_mode:
+                self.qd_mode_set = True
+                self.milestone('qd_drive_mode_confirmed', mode=board.get('mode'), board=board)
+                return
+            body = {'mode': self.args.qd_mode, 'expected_generation': board.get('generation'), 'expected_epoch': board.get('epoch'),
+                    'backend_instance': plumbing.get('backend_instance'), 'expected_revision': (plumbing.get('desired') or {}).get('revision'),
+                    'expected_reset_epoch': plumbing.get('reset_epoch')}
+            code, reply = self.api('/api/actuator/plumbing/settings', body)
+            with (self.out / 'qd-mode-attempts.jsonl').open('a') as handle:
+                handle.write(json.dumps({'virtual_ms': self.now, 'request': body, 'status': code, 'reply': reply}, default=str) + '\n')
+            return
         if stage == 'boot':
             if status['topology_stable'] and status['valves'] == [False, True, True, False, False] and phase in ('idle', 'cancelled'):
                 assert self.api('/api/command', 'StartFill')[0] == 403, 'Fill admitted before tests'
@@ -931,6 +965,8 @@ def main():
     p.add_argument('--profile-arg', action='append', default=[], help='extra flight_profile.py argument (repeatable)')
     p.add_argument('--operator-launch-retry', action=argparse.BooleanOptionalAction, default=True,
                    help='poll the Launch control at ~5 Hz wall and press Launch when enabled (default on)')
+    p.add_argument('--qd-mode', choices=['stepper', 'auxiliary'], default='stepper',
+                   help='actuator QD drive selected in Idle; auxiliary avoids the ~1500 s modelled stepper retraction')
     p.add_argument('--prepare-only', action='store_true')
     args = p.parse_args()
     if args.evidence is None:
