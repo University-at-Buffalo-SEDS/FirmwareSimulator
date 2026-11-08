@@ -892,7 +892,7 @@ def main():
     p.add_argument('--cohort', type=Path, default=BUILD / 'cohort')
     p.add_argument('--image', default=None, help='image id (default: flight-sim-build/IMAGE-ID)')
     p.add_argument('--tiles', type=Path, default=BUILD / 'tiles/north_america/tiles')
-    p.add_argument('--duration-ms', type=int, default=1_500_000)
+    p.add_argument('--duration-ms', type=int, default=2_400_000, help='topology cap; the real AB QD retraction alone takes ~600 s virtual')
     p.add_argument('--timeout', type=int, default=8 * 3600, help='wall-clock seconds')
     p.add_argument('--cpus', default='3')
     p.add_argument('--memory', default='16g')
