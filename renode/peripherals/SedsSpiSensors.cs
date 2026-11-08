@@ -17,6 +17,14 @@ namespace Antmicro.Renode.Peripherals.Sensors
         {
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
+            profile = SedsFlightProfile.FromEnvironment();
+            if(profile != null)
+            {
+                launchPath = Environment.GetEnvironmentVariable("SEDS_FLIGHT_LAUNCH") ?? "";
+                profileClock = new LimitTimer(machine.ClockSource, 1000, this, "flightProfileClock",
+                    limit: 1, direction: Antmicro.Renode.Time.Direction.Ascending, enabled: true, eventEnabled: true);
+                profileClock.LimitReached += () => profileClockMs++;
+            }
             Connections = new Dictionary<int, IGPIO> { {0, new GPIO()}, {1, new GPIO()}, {2, new GPIO()} };
             // BMP390 datasheet 3.7.5.3: non-latched DRDY self-clears after
             // 2.5ms, independently of a data-register read. Firmware uses 0x42.
@@ -187,7 +195,98 @@ namespace Antmicro.Renode.Peripherals.Sensors
             registers[Key(Device.Barometer, 0x39)] = 0x40;
             registers[Key(Device.Barometer, 0x3c)] = 0xd4;
             registers[Key(Device.Barometer, 0x3d)] = 0x30;
+            if(profile != null)
+            {
+                // Flight-profile trim set: the firmware's datasheet compensation
+                // then reduces to P = raw / 128 Pa (PAR_P1 = 2^-7, every other
+                // pressure term zero) and T = (raw - 6.4e6) / 65536 C, so the
+                // 24-bit raw sample can carry 0..131071 Pa at 1/128 Pa.
+                registers[Key(Device.Barometer, 0x36)] = 0x00;
+                registers[Key(Device.Barometer, 0x37)] = 0x60;
+                registers[Key(Device.Barometer, 0x3c)] = 0x00;
+                registers[Key(Device.Barometer, 0x3d)] = 0x00;
+            }
         }
+
+        // ---- Flight-profile stimulus -------------------------------------
+        // Enabled only when SEDS_FLIGHT_PROFILE names a profile CSV (see
+        // scripts/flight_profile.py). Before the launch anchor exists the
+        // model reports the profile's first (on-pad) row. The anchor file
+        // (SEDS_FLIGHT_LAUNCH) holds the virtual millisecond of T0 on the
+        // simulation clock; this model keeps its own 1 kHz virtual clock from
+        // machine creation, matching SedsSimulationClock's time base.
+        private void LatchBarometer()
+        {
+            var row = profile.Sample(ProfileTime());
+            var pressure = (uint)Math.Max(0, Math.Min(0xffffff, Math.Round(row[SedsFlightProfile.Pressure] * 128.0)));
+            var temperature = (uint)Math.Max(0, Math.Min(0xffffff, Math.Round(6400000.0 + row[SedsFlightProfile.Temperature] * 65536.0)));
+            latchedBarometer[0] = (byte)pressure; latchedBarometer[1] = (byte)(pressure >> 8); latchedBarometer[2] = (byte)(pressure >> 16);
+            latchedBarometer[3] = (byte)temperature; latchedBarometer[4] = (byte)(temperature >> 8); latchedBarometer[5] = (byte)(temperature >> 16);
+            profileReads++;
+        }
+
+        private void LatchAccelerometer()
+        {
+            var row = profile.Sample(ProfileTime());
+            // FC26 firmware value = raw * lsb_to_g, where lsb_to_g =
+            // 1.5 * 2^(range+1) / 32768 * FC26_LINEAR_SCALE (Core/Inc/accelerometer.h)
+            // and the result is consumed as m/s^2 (EKF subtracts GRAVITY_SI).
+            // Model the board as calibrated by that factor: raw = f / lsb.
+            // A 16-bit sample therefore saturates near 59 m/s^2 (~6.0 g) at the
+            // configured 24 g range setting; saturation is recorded.
+            var range = Get(Device.Accelerometer, 0x41) & 3;
+            var lsb = 1.5 * (1 << (range + 1)) / 32768.0 * 2.4607705003298646087;
+            EncodeAxes(latchedAccelerometer, 0, 0, row[SedsFlightProfile.SpecificForceZ], lsb, ref accelerometerSaturations);
+            profileReads++;
+        }
+
+        private void LatchGyroscope()
+        {
+            var row = profile.Sample(ProfileTime());
+            // BMI088 gyro: range register 0x0F, 0 => 2000 dps ... 4 => 125 dps, 32767 = full scale.
+            var full = 2000.0 / (1 << Math.Min(4, (int)(Get(Device.Gyroscope, 0x0f) & 7)));
+            EncodeAxes(latchedGyroscope, row[SedsFlightProfile.GyroX], row[SedsFlightProfile.GyroY], row[SedsFlightProfile.GyroZ], full / 32767.0, ref gyroscopeSaturations);
+        }
+
+        private static void EncodeAxes(byte[] output, double x, double y, double z, double unitsPerLsb, ref ulong saturations)
+        {
+            var axes = new[] { x, y, z };
+            for(var i = 0; i < 3; i++)
+            {
+                var raw = Math.Round(axes[i] / unitsPerLsb);
+                if(raw > 32767 || raw < -32768) saturations++;
+                var value = (short)Math.Max(-32768, Math.Min(32767, raw));
+                output[2 * i] = (byte)value;
+                output[2 * i + 1] = (byte)(value >> 8);
+            }
+        }
+
+        private double ProfileTime()
+        {
+            if(launchAnchorMs < 0 && profileClockMs >= nextAnchorPollMs)
+            {
+                nextAnchorPollMs = profileClockMs + 50;
+                launchAnchorMs = SedsFlightProfile.ReadAnchor(launchPath);
+            }
+            return launchAnchorMs < 0 ? 0.0 : Math.Max(0.0, (double)profileClockMs - launchAnchorMs);
+        }
+
+        public string GetFlightProfileState()
+        {
+            return string.Format("profile={0} anchor_ms={1} clock_ms={2} reads={3} accel_saturations={4} gyro_saturations={5}",
+                profile == null ? "off" : profile.Path, launchAnchorMs, profileClockMs, profileReads, accelerometerSaturations, gyroscopeSaturations);
+        }
+
+        private readonly SedsFlightProfile profile;
+        private readonly string launchPath;
+        private readonly LimitTimer profileClock;
+        private ulong profileClockMs;
+        private ulong nextAnchorPollMs;
+        private long launchAnchorMs = -1;
+        private ulong profileReads, accelerometerSaturations, gyroscopeSaturations;
+        private readonly byte[] latchedBarometer = new byte[6];
+        private readonly byte[] latchedAccelerometer = new byte[6];
+        private readonly byte[] latchedGyroscope = new byte[6];
 
         private byte ReadRegister(Device selected, byte register)
         {
@@ -205,6 +304,24 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 barometerPulse.Enabled = false;
                 SetBarometerInterrupt(false);
                 return status;
+            }
+            if(profile != null)
+            {
+                if(selected == Device.Barometer && register >= 0x04 && register <= 0x09)
+                {
+                    if(register == 0x04) LatchBarometer();
+                    return latchedBarometer[register - 0x04];
+                }
+                if(selected == Device.Accelerometer && register >= 0x12 && register <= 0x17)
+                {
+                    if(register == 0x12) LatchAccelerometer();
+                    return latchedAccelerometer[register - 0x12];
+                }
+                if(selected == Device.Gyroscope && register >= 0x02 && register <= 0x07)
+                {
+                    if(register == 0x02) LatchGyroscope();
+                    return latchedGyroscope[register - 0x02];
+                }
             }
             // Stable approximately-resting raw samples.
             if(selected == Device.Barometer && register >= 0x04 && register <= 0x09)
@@ -241,6 +358,94 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private readonly ulong disconnectAfter;
     }
 
+    // Time-indexed flight profile (scripts/flight_profile.py CSV). One parsed
+    // copy per path is shared by every machine in the Renode process.
+    public sealed class SedsFlightProfile
+    {
+        public const int Altitude = 0, Velocity = 1, Pressure = 2, Temperature = 3, SpecificForceZ = 4,
+            GyroX = 5, GyroY = 6, GyroZ = 7, Latitude = 8, Longitude = 9, AltitudeMsl = 10, Columns = 11;
+
+        public static SedsFlightProfile FromEnvironment()
+        {
+            var path = Environment.GetEnvironmentVariable("SEDS_FLIGHT_PROFILE");
+            if(string.IsNullOrEmpty(path)) return null;
+            lock(Cache)
+            {
+                SedsFlightProfile loaded;
+                if(!Cache.TryGetValue(path, out loaded))
+                {
+                    loaded = new SedsFlightProfile(path);
+                    Cache[path] = loaded;
+                }
+                return loaded;
+            }
+        }
+
+        private SedsFlightProfile(string path)
+        {
+            Path = path;
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            var times = new List<double>();
+            var rows = new List<double[]>();
+            string[] header = null;
+            foreach(var raw in System.IO.File.ReadLines(path))
+            {
+                var line = raw.Trim();
+                if(line.Length == 0 || line[0] == '#') continue;
+                var parts = line.Split(',');
+                if(header == null) { header = parts; continue; }
+                Func<string, double> column = name => double.Parse(parts[Array.IndexOf(header, name)], culture);
+                times.Add(column("t_ms"));
+                rows.Add(new[] { column("alt_agl_m"), column("vel_mps"), column("pressure_pa"), column("temp_c"),
+                    column("specific_force_z_mps2"), column("gyro_x_dps"), column("gyro_y_dps"), column("gyro_z_dps"),
+                    column("lat"), column("lon"), column("alt_msl_m") });
+                if(rows.Count > 1000000) throw new FormatException("flight profile too large");
+            }
+            if(rows.Count < 2) throw new FormatException("flight profile needs at least two rows");
+            for(var i = 1; i < times.Count; i++)
+                if(times[i] <= times[i - 1]) throw new FormatException("flight profile times must increase");
+            this.times = times.ToArray();
+            this.rows = rows.ToArray();
+        }
+
+        public string Path { get; private set; }
+
+        // Linear interpolation at t milliseconds after T0; clamps at both ends.
+        public double[] Sample(double t)
+        {
+            if(t <= times[0]) return rows[0];
+            if(t >= times[times.Length - 1]) return rows[rows.Length - 1];
+            var index = Array.BinarySearch(times, t);
+            if(index >= 0) return rows[index];
+            var upper = ~index;
+            var lower = upper - 1;
+            var w = (t - times[lower]) / (times[upper] - times[lower]);
+            var result = new double[Columns];
+            for(var i = 0; i < Columns; i++) result[i] = rows[lower][i] + w * (rows[upper][i] - rows[lower][i]);
+            return result;
+        }
+
+        // Virtual millisecond of T0 on the simulation clock, or -1 if absent.
+        public static long ReadAnchor(string path)
+        {
+            if(string.IsNullOrEmpty(path)) return -1;
+            try
+            {
+                if(!System.IO.File.Exists(path)) return -1;
+                var text = System.IO.File.ReadAllText(path).Trim();
+                long value;
+                return text.Length <= 20 && long.TryParse(text, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out value) ? value : -1;
+            }
+            catch(System.IO.IOException) { return -1; }
+            catch(UnauthorizedAccessException) { return -1; }
+        }
+
+        private readonly double[] times;
+        private readonly double[][] rows;
+        private static readonly Dictionary<string, SedsFlightProfile> Cache = new Dictionary<string, SedsFlightProfile>();
+    }
+
     public sealed class SedsNeoM9N : ISPIPeripheral
     {
         public SedsNeoM9N(IMachine machine, ulong failureEvery = 0, ulong disconnectAfter = ulong.MaxValue,
@@ -259,6 +464,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
             altitude = altitudeM.ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture);
             this.failureEvery = failureEvery;
             this.disconnectAfter = disconnectAfter;
+            // Optional flight profile: position/altitude follow the trajectory
+            // after the launch anchor (see SedsFlightSensorBus).
+            profile = SedsFlightProfile.FromEnvironment();
+            launchPath = Environment.GetEnvironmentVariable("SEDS_FLIGHT_LAUNCH") ?? "";
             updateTimer = new LimitTimer(machine.ClockSource, 1000, this,
                 "gpsFix", limit: 1000, enabled: true, eventEnabled: true);
             updateTimer.LimitReached += () => {
@@ -326,6 +535,16 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 .AddSeconds(elapsedSeconds);
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             var time = utc.ToString("HHmmss", culture) + ".00";
+            var coordinates = this.coordinates;
+            var altitude = this.altitude;
+            if(profile != null)
+            {
+                if(launchAnchorMs < 0) launchAnchorMs = SedsFlightProfile.ReadAnchor(launchPath);
+                var nowMs = (double)elapsedSeconds * 1000.0;
+                var row = profile.Sample(launchAnchorMs < 0 ? 0.0 : Math.Max(0.0, nowMs - launchAnchorMs));
+                coordinates = FormatCoordinate(row[SedsFlightProfile.Latitude], true) + "," + FormatCoordinate(row[SedsFlightProfile.Longitude], false);
+                altitude = row[SedsFlightProfile.AltitudeMsl].ToString("0.0", culture);
+            }
             EnqueueNmea("GNGGA," + time + "," + coordinates + (validFix ? ",1,12,0.8," : ",0,00,99.9,") + altitude + ",M,-34.0,M,,");
             EnqueueNmea("GNRMC," + time + (validFix ? ",A," : ",V,") + coordinates + ",0.0,0.0,"
                 + utc.ToString("ddMMyy", culture) + (validFix ? ",,,A" : ",,,N"));
@@ -352,6 +571,9 @@ namespace Antmicro.Renode.Peripherals.Sensors
             foreach(var character in sentence) output.Enqueue((byte)character);
         }
 
+        private readonly SedsFlightProfile profile;
+        private readonly string launchPath;
+        private long launchAnchorMs = -1;
         private readonly string stimulusPath;
         private bool validFix;
         private readonly string coordinates;

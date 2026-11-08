@@ -16,6 +16,7 @@ namespace Antmicro.Renode.Peripherals.UART
         public SedsStm32Uart(IMachine machine, uint frequency = 170000000)
         {
             this.frequency = frequency;
+            this.machine = machine;
             IRQ = new GPIO();
             transmitTimer = new LimitTimer(machine.ClockSource, frequency, this,
                 "uartTx", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
@@ -23,7 +24,10 @@ namespace Antmicro.Renode.Peripherals.UART
                 if(transmitFifo.TryDequeue(out var value))
                 {
                     transmittedBytes++;
-                    CharReceived?.Invoke(value);
+                    // A cut link still clocks the byte out of the MCU; it is
+                    // lost on the wire, so the firmware cannot tell.
+                    if(LinkCut()) droppedTransmit++;
+                    else CharReceived?.Invoke(value);
                 }
                 if(transmitFifo.IsEmpty)
                 {
@@ -125,6 +129,7 @@ namespace Antmicro.Renode.Peripherals.UART
             // Host PTYs deliver bursts in wall time. Put bytes onto the
             // configured virtual wire before exposing RXNE or DMA requests.
             if((control1 & 5) != 5 || baudRate == 0) return;
+            if(LinkCut()) { droppedReceive++; return; }
             receiveWire.Enqueue(value);
             if(!receiveTimer.Enabled)
             {
@@ -185,6 +190,70 @@ namespace Antmicro.Renode.Peripherals.UART
                 || (idle && (control1 & 16) != 0)
                 || (overrun && (control3 & 1) != 0));
         }
+
+        // ---- Optional external link gate ----------------------------------
+        // SEDS_UART_GATE="<machine>:<peripheral>:<file>" selects one UART. While
+        // the file contains "1" the wire is cut in both directions (bytes the
+        // MCU transmits and host bytes towards it are discarded); "0" or a
+        // missing file restores it. The file is polled at most every 50 ms of
+        // host time. A "<file>.status" sidecar records cut transitions and
+        // dropped byte counts.
+        private bool LinkCut()
+        {
+            if(GateSpec.Length == 0) return false;
+            if(!gateResolved)
+            {
+                var parts = GateSpec.Split(new[] { ':' }, 3);
+                string machineName, localName;
+                if(parts.Length != 3) { gateResolved = true; return false; }
+                if(!Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation.TryGetMachineName(machine, out machineName)
+                    || !machine.TryGetLocalName(this, out localName)) return false;
+                gateResolved = true;
+                if(machineName == parts[0] && localName == parts[1]) gatePath = parts[2];
+            }
+            if(gatePath == null) return false;
+            var nowMs = gateWatch.ElapsedMilliseconds;
+            if(nowMs >= gateNextPollMs)
+            {
+                gateNextPollMs = nowMs + 50;
+                var cut = false;
+                try { cut = System.IO.File.Exists(gatePath) && System.IO.File.ReadAllText(gatePath).Trim() == "1"; }
+                catch(System.IO.IOException) { cut = gateCut; }
+                catch(UnauthorizedAccessException) { cut = gateCut; }
+                if(cut != gateCut)
+                {
+                    gateCut = cut;
+                    gateTransitions++;
+                    WriteGateStatus();
+                }
+                else if(nowMs >= gateNextStatusMs) WriteGateStatus();
+            }
+            return gateCut;
+        }
+
+        private void WriteGateStatus()
+        {
+            gateNextStatusMs = gateWatch.ElapsedMilliseconds + 1000;
+            try
+            {
+                var next = gatePath + ".status.next";
+                System.IO.File.WriteAllText(next, string.Format("cut={0} transitions={1} dropped_tx={2} dropped_rx={3} virtual_ms={4}\n",
+                    gateCut ? 1 : 0, gateTransitions, droppedTransmit, droppedReceive,
+                    (long)machine.LocalTimeSource.ElapsedVirtualTime.TotalMilliseconds));
+                System.IO.File.Copy(next, gatePath + ".status", true);
+                System.IO.File.Delete(next);
+            }
+            catch(System.IO.IOException) { }
+            catch(UnauthorizedAccessException) { }
+        }
+
+        private static readonly string GateSpec = Environment.GetEnvironmentVariable("SEDS_UART_GATE") ?? "";
+        private readonly IMachine machine;
+        private readonly System.Diagnostics.Stopwatch gateWatch = System.Diagnostics.Stopwatch.StartNew();
+        private bool gateResolved, gateCut;
+        private string gatePath;
+        private long gateNextPollMs, gateNextStatusMs;
+        private ulong gateTransitions, droppedTransmit, droppedReceive;
 
         public event Action<byte> CharReceived;
         public GPIO IRQ { get; private set; }

@@ -95,3 +95,35 @@ cancellation without Fire. This negative run does not retry the one-way QD
 operation or stand in for a fresh positive flight run. Every run uses disposable
 accounts, calibration, receipt files, pressure/mass fixtures and simulated GPIO.
 No physical valve, deployment or ignition test is performed.
+
+## Setup-to-landing flight simulation
+
+`scripts/test-operational-flight-sim.py` extends the flight variant through a
+complete flight. Inputs are built by `scripts/build-flight-sim-stack.py`
+(`firmware gs tiles image`): Release FC/RF/PB images from source via each
+board's own `build.py build --release` with pinned SDK/LaunchCore sources, the
+fill-system cohort, the flight GS backend (`--features firmware_sim` only)
+with its web UI, synthetic placeholder map tiles, and this checkout's Renode
+models on the runtime image.
+
+After the ordinary fill/Armed/GPS/QD/Launch sequence, the controller writes
+the virtual T0 to `diagnostics/flight/launch-anchor.txt`. With
+`SEDS_FLIGHT_PROFILE` set, `SedsFlightSensorBus` replays the deterministic
+profile from `scripts/flight_profile.py` (BMP390 pressure/temperature through
+a dedicated trim set, BMI088 accelerometer in the FC26 board's calibrated
+units, gyro), and `SedsNeoM9N` reports the profile position and altitude. The
+accelerometer saturates near 6 g at the firmware's configured range because
+of `FC26_LINEAR_SCALE`; saturations are counted, and the profile's true and
+sensed maxima are recorded. Parachute openings in the profile are open-loop.
+
+Comms loss: `SEDS_UART_GATE=rf:usart1:<file>` cuts the RF radio UART to the
+GS PTY in both directions while the file contains `1`; every MCU keeps
+running. The controller cuts it after T+`--comms-loss-after-s` for
+`--comms-loss-s` virtual seconds.
+
+`--ui-driver CMD` starts once the GS origin is reachable on 127.0.0.1, with
+`GS_ORIGIN`, `GS_USER`, `GS_PASSWORD`, `EVIDENCE_DIR`, `STATUS_FILE` and
+`TIMELINE_FILE` set. `timeline.jsonl` gets one row per FC state change (the
+real `sm` variable via memory probes), GS flight-state, mission-phase or
+notification change and comms event; `status.json` holds the current step.
+`result.json` lists per-check pass/fail.
