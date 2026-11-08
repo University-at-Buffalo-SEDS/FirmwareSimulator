@@ -447,7 +447,7 @@ class Run:
         self.cut = {'state': 'nominal', 'start_ms': None, 'end_ms': None}
         self.qd_checked_ms = -10**9
         self.qd_mode_set = False
-        self.qd_query_wall = self.qd_policy_wall = 0.0
+        self.qd_query_wall = self.qd_policy_wall = self.qd_cycle_wall = 0.0
         self.seen_notifications = set()
         self.seen_messages = set()
         self.result = {
@@ -743,32 +743,29 @@ class Run:
             with (self.out / 'retract-attempts.jsonl').open('a') as handle:
                 handle.write(json.dumps({'virtual_ms': self.now, 'status': code, 'response': reply, 'qd': status.get('qd')}, default=str) + '\n')
         elif stage == 'qd':
-            # Launch needs fresh same-operation retraction proof and fresh tank
-            # data. Those GS freshness windows are wall-clock (5 s plumbing
-            # proof, 2 s pressure) while the bay runs ~10-20x slower than real
-            # time, so act like an operator: refresh the actuator readback every
-            # 2 s wall, poll the Launch control at ~5 Hz wall, and press Launch
-            # the moment it is enabled.
+            # GS launch admission needs every required board's state proof and the
+            # actuator retraction proof to be younger than 5 s of WALL time
+            # (board_abort.rs PROOF_TTL, actuator_plumbing FRESH_MS), while the bay
+            # runs ~10-20x slower than real time. Act like an operator: refresh
+            # board state and the actuator readback together, then press Launch at
+            # 4 Hz for 8 s wall, idle 7 s, repeat.
             wall = time.monotonic()
-            if wall - self.qd_query_wall >= 2.0:
-                self.qd_query_wall = wall
+            cycle = (wall - self.qd_cycle_wall) % 15.0 if self.qd_cycle_wall else None
+            if self.qd_cycle_wall == 0.0 or wall - self.qd_cycle_wall >= 15.0:
+                self.qd_cycle_wall = wall
+                self.api('/api/board_abort/refresh', {})
                 self.api('/api/actuator/plumbing/query', {})
-            if wall - self.qd_policy_wall < (0.2 if self.args.operator_launch_retry else 2.0):
+                cycle = 0.0
+            if cycle is None or cycle > 8.0 or wall - self.qd_policy_wall < 0.25:
                 return
             self.qd_policy_wall = wall
-            code, policy = self.api('/api/action_policy')
-            control = next((c for c in (policy or {}).get('controls', []) if c.get('cmd') == 'Launch'), None) if code == 200 else None
-            record = {'virtual_ms': self.now, 'wall_ms': int(time.time() * 1000), 'qd': status.get('qd'), 'launch_control': control}
-            if control and control.get('enabled'):
-                code, reply = self.api('/api/command', 'Launch')
-                record.update(launch_status=code, launch_response=reply)
-                if code == 200:
-                    self.stage = 'fire'
-                    self.milestone('launch_sent', qd=status.get('qd'))
-            if record.get('launch_status') is not None or self.now - self.qd_checked_ms >= 2000:
-                self.qd_checked_ms = self.now
-                with (self.out / 'launch-attempts.jsonl').open('a') as handle:
-                    handle.write(json.dumps(record, default=str) + '\n')
+            code, reply = self.api('/api/command', 'Launch')
+            record = {'virtual_ms': self.now, 'wall_ms': int(time.time() * 1000), 'qd': status.get('qd'), 'status': code, 'response': reply}
+            with (self.out / 'launch-attempts.jsonl').open('a') as handle:
+                handle.write(json.dumps(record, default=str) + '\n')
+            if code == 200:
+                self.stage = 'fire'
+                self.milestone('launch_sent', qd=status.get('qd'))
         if self.stage in ('qd', 'fire'):
             clock = self.gs.get('launch_clock') or {}
             if clock.get('kind') == 't_plus':
@@ -965,8 +962,6 @@ def main():
     p.add_argument('--ui-driver', default=None, help='shell command started when the GS origin is known')
     p.add_argument('--ui-grace-s', type=float, default=120.0)
     p.add_argument('--profile-arg', action='append', default=[], help='extra flight_profile.py argument (repeatable)')
-    p.add_argument('--operator-launch-retry', action=argparse.BooleanOptionalAction, default=True,
-                   help='poll the Launch control at ~5 Hz wall and press Launch when enabled (default on)')
     p.add_argument('--qd-mode', choices=['stepper', 'auxiliary'], default='stepper',
                    help='actuator QD drive selected in Idle; auxiliary avoids the ~1500 s modelled stepper retraction')
     p.add_argument('--prepare-only', action='store_true')
