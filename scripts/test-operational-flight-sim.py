@@ -378,6 +378,11 @@ def prepare(args):
             gps['stimulus_path'] = '/diagnostics/gps.fix'
             gps['position'] = {'latitude': profile['launch_site'][0], 'longitude': profile['launch_site'][1], 'altitude_m': profile['pad_msl_m']}
             add_probes(layout, symbols, [('rf_gps_has_fix_word', 'g_neom9n_has_fix', 0)], miss)
+        if name == 'actuator':
+            # QD retraction progress: one step per TIM1 update interrupt (30 us nominal).
+            add_probes(layout, symbols, [('ab_retract_steps_remaining', 'timer_steps_remaining', 0),
+                                         ('ab_retract_active_word', 'g_plumbing_retract_active', 0),
+                                         ('ab_local_ticks', '_tx_timer_system_clock', 0)], miss)
         if name == 'flight':
             add_probes(layout, symbols, [('fc_state', 'sm', 0), ('fc_config_flags', 'g_conf', 0),
                                          ('fc_deployment_pulses', 'g_deployment_pulse_completions', 0),
@@ -552,6 +557,16 @@ class Run:
             self.event('fc_state', fc_probe=self.fc_word, launch_requested=bool(flags & OPT_LAUNCH_REQUESTED),
                        drogue_flag=bool(flags & OPT_DROGUE), main_flag=bool(flags & OPT_MAIN))
             self.write_result()
+
+    def observe_actuator(self):
+        sample, row = self.probes.latest('actuator')
+        if not row or 'ab_retract_steps_remaining' not in row or sample == getattr(self, 'ab_sample', None):
+            return
+        self.ab_sample = sample
+        if self.stage in ('retract', 'qd') and sample % 10 == 0:
+            with (self.out / 'qd-retraction-probe.jsonl').open('a') as handle:
+                handle.write(json.dumps({'virtual_ms': self.now, 'probe_sample': sample, **{k: row.get(k) for k in
+                             ('ab_retract_steps_remaining', 'ab_retract_active_word', 'ab_local_ticks')}}) + '\n')
 
     def observe_gs(self, full=True):
         changed = []
@@ -795,6 +810,7 @@ class Run:
                     continue
                 # Stimuli that must not depend on GS responsiveness come first.
                 self.observe_fc_probe()
+                self.observe_actuator()
                 self.comms()
                 try:
                     code, status = self.api('/api/gse/status')
