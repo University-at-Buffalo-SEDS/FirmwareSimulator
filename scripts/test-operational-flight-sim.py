@@ -144,12 +144,23 @@ def mass_samples(mass):
     return ','.join(str(v) for v in values)
 
 
-def nm_symbols(board: Path, layout: dict) -> set[str]:
+def nm_symbols(board: Path, layout: dict) -> dict[str, int]:
     elf = board / layout['artifacts']['elf']
     cache = (elf.parent / 'CMakeCache.txt').read_text()
     nm = re.search(r'^CMAKE_NM:FILEPATH=(.*)$', cache, re.M)[1]
     text = subprocess.check_output([nm, '-n', str(elf)], text=True)
-    return {parts[-1] for line in text.splitlines() if len(parts := line.split()) >= 3}
+    return {parts[-1]: int(parts[0], 16) for line in text.splitlines() if len(parts := line.split()) >= 3}
+
+
+def load_layout(board: Path) -> dict:
+    """sim/board.json with artifacts pointed at the build subdirectory that exists."""
+    layout = json.loads((board / 'sim/board.json').read_text())
+    subdir = 'Release_Script' if (board / 'build/Release_Script/CMakeCache.txt').exists() else 'Release'
+    for key, value in layout.get('artifacts', {}).items():
+        parts = Path(value).parts
+        if len(parts) >= 3 and parts[0] == 'build':
+            layout['artifacts'][key] = str(Path('build', subdir, *parts[2:]))
+    return layout
 
 
 def add_probes(layout, symbols, definitions, missing):
@@ -343,18 +354,18 @@ def prepare(args):
         shutil.copyfile(config / f'{name}.json', diagnostics / 'state' / f'{name}.json')
         (diagnostics / 'state' / f'{name}.json').chmod(0o660)
     topo = topology(args.duration_ms)
-    loader = args.cohort / 'ActuatorBoard26/sim/run_full.py'
-    spec = importlib.util.spec_from_file_location('layout_fixture', loader)
-    suite = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(suite)
     missing = {}
     for node in topo['nodes']:
         name = node['name']
         board = args.cohort / REPOS[name]
-        layout = suite.load_layout_for_build(board, 'Release_Script' if (board / 'build/Release_Script/CMakeCache.txt').exists() else 'Release')
-        layout['execution']['memory_probe_warmup_samples'] = 3
-        layout['execution']['memory_probes'] = [p for p in layout['execution'].get('memory_probes', []) if p['name'] in BASE_PROBES]
+        layout = load_layout(board)
         symbols = nm_symbols(board, layout)
+        layout['execution']['memory_probe_warmup_samples'] = 3
+        # Keep only the small transport probe set the Release images retain.
+        layout['execution']['memory_probes'] = [p for p in layout['execution'].get('memory_probes', [])
+                                                if p['name'] in BASE_PROBES and p.get('symbol') in symbols]
+        if 'hal_tick_address' in layout['execution'] and 'uwTick' in symbols:
+            layout['execution']['hal_tick_address'] = symbols['uwTick']
         miss = missing.setdefault(name, [])
         if name == 'valve':
             sensor = next(p for p in layout['peripherals'] if p.get('bus') == 'adc3')
@@ -495,7 +506,7 @@ class Run:
         self.milestone('gs_origin_ready', origin=self.origin)
         if self.args.ui_driver:
             env = {'PLAYWRIGHT_MODULE': str(WP.parent / 'fill-ui-readiness-20261105/browser-tools/node_modules/playwright'),
-                   **os.environ, 'GS_ORIGIN': self.origin, 'GS_USER': USER, 'GS_PASSWORD': PASSWORD, 'EVIDENCE_DIR': str(self.out),
+                   'UI_TIMEOUT_S': str(int(self.args.timeout)), **os.environ, 'GS_ORIGIN': self.origin, 'GS_USER': USER, 'GS_PASSWORD': PASSWORD, 'EVIDENCE_DIR': str(self.out),
                    'STATUS_FILE': str(self.status_path), 'TIMELINE_FILE': str(self.timeline_path)}
             self.ui = subprocess.Popen(self.args.ui_driver, shell=True, env=env, stdout=(self.out / 'ui-driver.log').open('w'),
                                        stderr=subprocess.STDOUT, start_new_session=True)
