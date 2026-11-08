@@ -434,6 +434,7 @@ class Run:
         self.fc_word = {}
         self.gs = {}
         self.cut = {'state': 'nominal', 'start_ms': None, 'end_ms': None}
+        self.qd_checked_ms = -10**9
         self.seen_notifications = set()
         self.seen_messages = set()
         self.result = {
@@ -592,7 +593,7 @@ class Run:
                     with (self.out / 'notifications.jsonl').open('a') as handle:
                         handle.write(json.dumps({'virtual_ms': self.now, 't_plus_ms': self.tplus_ms(), 'notification': note}, default=str) + '\n')
                     lowered = text.lower()
-                    if any(k in lowered for k in ('drogue', 'main', 'reef', 'deploy', 'parachute', 'landed', 'flight', 'apogee')):
+                    if any(k in lowered for k in ('drogue', 'main parachute', 'reef', 'deploy', 'parachute', 'landed', 'in flight', 'apogee', 'contact')):
                         self.result['deployment_notifications'].append({'virtual_ms': self.now, 't_plus_ms': self.tplus_ms(), 'notification': note})
                         changed.append(('gs_notification', {'notification': note}))
             if self.t0 is not None:
@@ -679,13 +680,25 @@ class Run:
                 self.stage = 'qd'
                 self.milestone('qd_retract_sent')
         elif stage == 'qd':
-            if str(status.get('qd', '')).startswith('Settling') or status.get('qd') == 'Ready':
+            # Launch needs fresh same-operation retraction proof: ask the
+            # actuator for its readback (the UI's "Check readiness"), and send
+            # one Launch only when the interlock reports it allowed.
+            if self.now - self.qd_checked_ms < 2000:
+                return
+            self.qd_checked_ms = self.now
+            self.api('/api/actuator/plumbing/query', {})
+            code, plumbing = self.api('/api/actuator/plumbing/status')
+            interlock = (plumbing or {}).get('retraction_interlock') or {} if code == 200 else {}
+            record = {'virtual_ms': self.now, 'qd': status.get('qd'), 'interlock': interlock,
+                      'motion_remaining_ms': ((plumbing or {}).get('motion') or {}).get('minimum_delay_remaining_ms') if code == 200 else None}
+            if interlock.get('allowed'):
                 code, reply = self.api('/api/command', 'Launch')
-                with (self.out / 'launch-attempts.jsonl').open('a') as handle:
-                    handle.write(json.dumps({'virtual_ms': self.now, 'status': code, 'response': reply, 'qd': status.get('qd')}) + '\n')
+                record.update(launch_status=code, launch_response=reply)
                 if code == 200:
                     self.stage = 'fire'
-                    self.milestone('launch_sent', qd=status.get('qd'))
+                    self.milestone('launch_sent', qd=status.get('qd'), interlock=interlock)
+            with (self.out / 'launch-attempts.jsonl').open('a') as handle:
+                handle.write(json.dumps(record, default=str) + '\n')
         elif stage == 'fire':
             clock = self.gs.get('launch_clock') or {}
             if clock.get('kind') == 't_plus':
