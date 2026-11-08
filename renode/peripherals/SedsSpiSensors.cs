@@ -531,8 +531,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
 
         private void FillNmea()
         {
+            // SEDS_GPS_UTC_OFFSET_MS aligns receiver UTC with the GS network
+            // epoch when the host clock starts later than this machine.
             var utc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-                .AddSeconds(elapsedSeconds);
+                .AddSeconds(elapsedSeconds).AddMilliseconds(GpsUtcOffsetMs);
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             var time = utc.ToString("HHmmss", culture) + ".00";
             var coordinates = this.coordinates;
@@ -571,6 +573,13 @@ namespace Antmicro.Renode.Peripherals.Sensors
             foreach(var character in sentence) output.Enqueue((byte)character);
         }
 
+        private static readonly long GpsUtcOffsetMs = ParseOffset(Environment.GetEnvironmentVariable("SEDS_GPS_UTC_OFFSET_MS"));
+        private static long ParseOffset(string text)
+        {
+            long value;
+            return long.TryParse(text, System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture, out value) && Math.Abs(value) <= 3600000 ? value : 0;
+        }
         private readonly SedsFlightProfile profile;
         private readonly string launchPath;
         private long launchAnchorMs = -1;

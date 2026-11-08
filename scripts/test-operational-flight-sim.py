@@ -417,6 +417,7 @@ def prepare(args):
                '-e', 'SEDS_FLIGHT_PROFILE=/diagnostics/flight/flight-profile.csv',
                '-e', 'SEDS_FLIGHT_LAUNCH=/diagnostics/flight/launch-anchor.txt',
                '-e', 'SEDS_UART_GATE=rf:usart1:/diagnostics/flight/radio-gate.txt',
+               '-e', f'SEDS_GPS_UTC_OFFSET_MS={args.gps_utc_offset_ms}',
                '-v', f'{config}:/simulation:ro', '-v', f'{diagnostics}:/diagnostics',
                '-v', f'{out / "gs-data"}:/opt/groundstation/data', '-v', f'{out / "gs-backend-data"}:/opt/groundstation/backend/data']
     for node, repo in REPOS.items():
@@ -447,7 +448,7 @@ class Run:
         self.cut = {'state': 'nominal', 'start_ms': None, 'end_ms': None}
         self.qd_checked_ms = -10**9
         self.qd_mode_set = False
-        self.qd_query_wall = self.qd_policy_wall = self.qd_cycle_wall = 0.0
+        self.qd_query_wall = self.qd_policy_wall = self.qd_cycle_wall = self.qd_plumbing_wall = 0.0
         self.seen_notifications = set()
         self.seen_messages = set()
         self.result = {
@@ -743,29 +744,40 @@ class Run:
             with (self.out / 'retract-attempts.jsonl').open('a') as handle:
                 handle.write(json.dumps({'virtual_ms': self.now, 'status': code, 'response': reply, 'qd': status.get('qd')}, default=str) + '\n')
         elif stage == 'qd':
-            # GS launch admission needs every required board's state proof and the
-            # actuator retraction proof to be younger than 5 s of WALL time
-            # (board_abort.rs PROOF_TTL, actuator_plumbing FRESH_MS), while the bay
-            # runs ~10-20x slower than real time. Act like an operator: refresh
-            # board state and the actuator readback together, then press Launch at
-            # 4 Hz for 8 s wall, idle 7 s, repeat.
+            # GS launch admission needs every required board's state proof
+            # (board_abort.rs PROOF_TTL) and the actuator retraction proof
+            # (actuator_plumbing FRESH_MS) younger than 5 s of WALL time, while
+            # the bay runs ~10-20x slower than real time. Each 15 s wall cycle:
+            # one board-state refresh, then watch /api/board_abort at 5 Hz;
+            # query the actuator only once board proofs are clean, and press
+            # Launch only when both gates hold together.
             wall = time.monotonic()
-            cycle = (wall - self.qd_cycle_wall) % 15.0 if self.qd_cycle_wall else None
             if self.qd_cycle_wall == 0.0 or wall - self.qd_cycle_wall >= 15.0:
                 self.qd_cycle_wall = wall
+                self.qd_plumbing_wall = 0.0
                 self.api('/api/board_abort/refresh', {})
-                self.api('/api/actuator/plumbing/query', {})
-                cycle = 0.0
-            if cycle is None or cycle > 8.0 or wall - self.qd_policy_wall < 0.25:
+            if wall - self.qd_policy_wall < 0.2 or wall - self.qd_cycle_wall > 12.0:
                 return
             self.qd_policy_wall = wall
-            code, reply = self.api('/api/command', 'Launch')
-            record = {'virtual_ms': self.now, 'wall_ms': int(time.time() * 1000), 'qd': status.get('qd'), 'status': code, 'response': reply}
-            with (self.out / 'launch-attempts.jsonl').open('a') as handle:
-                handle.write(json.dumps(record, default=str) + '\n')
-            if code == 200:
-                self.stage = 'fire'
-                self.milestone('launch_sent', qd=status.get('qd'))
+            code, snapshot = self.api('/api/board_abort')
+            if code != 200 or not isinstance(snapshot, dict):
+                return
+            missing = snapshot.get('missing_required_state') or []
+            retraction = snapshot.get('retraction') or {}
+            record = {'virtual_ms': self.now, 'wall_ms': int(time.time() * 1000), 'missing': missing, 'retraction': retraction.get('phase')}
+            if not missing and not retraction.get('allowed') and wall - self.qd_plumbing_wall >= 2.0:
+                self.qd_plumbing_wall = wall
+                self.api('/api/actuator/plumbing/query', {})
+            if not missing and retraction.get('allowed'):
+                code, reply = self.api('/api/command', 'Launch')
+                record.update(status=code, response=reply)
+                if code == 200:
+                    self.stage = 'fire'
+                    self.milestone('launch_sent', qd=status.get('qd'))
+            if 'status' in record or self.now - self.qd_checked_ms >= 2000:
+                self.qd_checked_ms = self.now
+                with (self.out / 'launch-attempts.jsonl').open('a') as handle:
+                    handle.write(json.dumps(record, default=str) + '\n')
         if self.stage in ('qd', 'fire'):
             clock = self.gs.get('launch_clock') or {}
             if clock.get('kind') == 't_plus':
@@ -964,6 +976,8 @@ def main():
     p.add_argument('--profile-arg', action='append', default=[], help='extra flight_profile.py argument (repeatable)')
     p.add_argument('--qd-mode', choices=['stepper', 'auxiliary'], default='stepper',
                    help='actuator QD drive selected in Idle; auxiliary avoids the ~1500 s modelled stepper retraction')
+    p.add_argument('--gps-utc-offset-ms', type=int, default=-5000,
+                   help='NEO-M9N NMEA UTC offset; runs 3/4 measured RF GPS publications ~+4.95 s ahead of GS network UTC')
     p.add_argument('--prepare-only', action='store_true')
     args = p.parse_args()
     if args.evidence is None:
