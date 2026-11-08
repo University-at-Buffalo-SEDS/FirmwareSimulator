@@ -675,10 +675,21 @@ class Run:
             fix = antenna.get('rocket') if code == 200 and isinstance(antenna, dict) else None
             if fix and fix.get('source') == 'RF' and not fix.get('stale') and fix.get('altitude_m') is not None:
                 self.milestone('rf_gps_lock', fix=fix)
-                code, reply = self.api('/api/command', 'RetractPlumbing')
-                assert code == 200, ('RetractPlumbing', code, reply)
+                self.stage = 'retract'
+        elif stage == 'retract':
+            # RetractPlumbing can be refused while the actuator readback is
+            # refreshing; refresh it and retry until the GS reports QD motion.
+            if status.get('qd') not in (None, 'NotStarted'):
                 self.stage = 'qd'
-                self.milestone('qd_retract_sent')
+                self.milestone('qd_retract_dispatched', qd=status.get('qd'))
+                return
+            if self.now - self.qd_checked_ms < 2000:
+                return
+            self.qd_checked_ms = self.now
+            self.api('/api/actuator/plumbing/query', {})
+            code, reply = self.api('/api/command', 'RetractPlumbing')
+            with (self.out / 'retract-attempts.jsonl').open('a') as handle:
+                handle.write(json.dumps({'virtual_ms': self.now, 'status': code, 'response': reply, 'qd': status.get('qd')}, default=str) + '\n')
         elif stage == 'qd':
             # Launch needs fresh same-operation retraction proof: ask the
             # actuator for its readback (the UI's "Check readiness"), and send
