@@ -61,7 +61,7 @@ FC_GLOBAL = ['Startup', 'Idle', 'PreFill', 'FillTest', 'NitrogenFill', 'NitrousF
              'Apogee', 'Descent', 'Reefing', 'Landed', 'Recovery', 'Aborted']
 FLIGHT_STATES = ['Launch', 'Ascent', 'Coast', 'Apogee', 'Descent', 'Reefing', 'Landed']
 OPT_LAUNCH_REQUESTED, OPT_DROGUE, OPT_MAIN = 1 << 9, 1 << 10, 1 << 11
-ACCEL_FULL_SCALE = 32767 * 1.5 * 16 / 32768 * 2.4607705003298646  # m/s^2, see SedsSpiSensors.cs
+ACCEL_FULL_SCALE = 32767 * 1.5 * 16 / 32768 * 9.80665  # m/s^2, BMI088 +/-24 g (SedsSpiSensors.cs)
 
 
 # ---------------------------------------------------------------- utilities
@@ -265,7 +265,7 @@ class Forwarder:
 
 
 # ---------------------------------------------------------------- topology
-def topology(duration_ms):
+def topology(duration_ms, wall_freshness_scale=30):
     def node(name):
         return {'name': name, 'layout': f'/simulation/{name}.json', 'firmware_root': f'/nodes/{name}'}
     return {
@@ -302,6 +302,9 @@ def topology(duration_ms):
                     'GS_STATION_DISCOVERY_BIND': '127.0.0.1:0', 'GS_VIDEO_DISCOVERY_BIND': '127.0.0.1:0', 'GS_SIM_MODE': '0',
                     'GS_COMMS_LINK_CONFIG': '/simulation/comms.json', 'GS_LAYOUT_PATH': '/opt/groundstation/backend/layout/layout.json',
                     'GS_HEARTBEAT_PERIOD_MS': '500', 'GS_SIM_NETWORK_EPOCH_MS': '1767225600000',
+                    # firmware_sim build only: stretch the wall-clock board/retraction
+                    # launch proofs for a bay that runs 10-20x slower than real time.
+                    'GS_SIM_WALL_FRESHNESS_SCALE': str(wall_freshness_scale),
                     'GS_NETWORK_VARIABLE_CACHE': '/diagnostics/state/network-variables.json', 'GS_USERS_FILE': '/simulation/users.json',
                     'GS_GSE_CONFIG': '/diagnostics/state/gse.json', 'GS_GSE_QUALIFICATION': '/diagnostics/state/qualification.json',
                     'GS_FILL_TARGETS_CONFIG': '/simulation/fill-targets.json', 'GS_CHECKLISTS_FILE': '/diagnostics/state/checklists.json',
@@ -354,7 +357,7 @@ def prepare(args):
     for name in ('checklists', 'calibration', 'gse'):
         shutil.copyfile(config / f'{name}.json', diagnostics / 'state' / f'{name}.json')
         (diagnostics / 'state' / f'{name}.json').chmod(0o660)
-    topo = topology(args.duration_ms)
+    topo = topology(args.duration_ms, args.wall_freshness_scale)
     missing = {}
     for node in topo['nodes']:
         name = node['name']
@@ -395,7 +398,14 @@ def prepare(args):
                                          ('fc_stack_error_count', 'g_thread_stack_error_count', 0),
                                          ('fc_stack_error_thread', 'g_thread_stack_error_thread', 0),
                                          ('fc_stack_error_start', 'g_thread_stack_error_start', 0),
-                                         ('fc_stack_error_end', 'g_thread_stack_error_end', 0)], miss)
+                                         ('fc_stack_error_end', 'g_thread_stack_error_end', 0),
+                                         ('fc_hardfault_count', 'g_hardfault_count', 0),
+                                         ('fc_commands_processed', 'g_network_flight_commands_processed', 0),
+                                         # Per-thread stack low-water marks (bytes free / remaining).
+                                         ('fc_tlmt_stack_free_min', 'g_telemetry_stack_free_min', 0),
+                                         ('fc_eval_stack_free_min', 'g_evaluation_stack_free_min', 0),
+                                         ('fc_dist_stack_free_min', 'g_distribution_stack_free_min', 0),
+                                         ('fc_recv_stack_remaining', 'g_recovery_stack_remaining', 0)], miss)
         (config / f'{name}.json').write_text(json.dumps(layout))
     (config / 'comms.json').write_text(json.dumps({'version': 1,
         'av_bay': {'interface': 'serial', 'port': '/dev/ttyAMA0', 'baud_rate': 115200, 'protocol': 'raw_uart'},
@@ -558,6 +568,15 @@ class Run:
             self.result['fc_fault'] = {'virtual_ms': self.now, 'probe_sample': sample, **{k: row.get(k) for k in row if k.startswith(('fc_startup', 'fc_stack'))}}
             self.event('fc_fault', fault=self.result['fc_fault'])
             self.write_result()
+        low = self.result.setdefault('fc_stack_low_water', {})
+        for key in ('fc_tlmt_stack_free_min', 'fc_eval_stack_free_min', 'fc_dist_stack_free_min', 'fc_recv_stack_remaining'):
+            value = row.get(key)
+            if value and (key not in low or value < low[key]['bytes']):
+                low[key] = {'bytes': value, 'virtual_ms': self.now, 'probe_sample': sample, 'fc_state': self.fc_state}
+        for key in ('fc_stack_error_count', 'fc_hardfault_count'):
+            if row.get(key) and not self.result.get('fc_fault_counter_' + key):
+                self.result['fc_fault_counter_' + key] = {'virtual_ms': self.now, 'probe_sample': sample, **row}
+                self.event('fc_fault_counter', counter=key, row=row)
         word = row['fc_state']
         local = word & 0xff
         state = FC_LOCAL[local] if local < len(FC_LOCAL) else f'invalid:{local}'
@@ -821,6 +840,8 @@ class Run:
         c['gs_reverted_to_in_flight'] = {'pass': bool(reverted) and bool(landed), 'first': reverted[0] if reverted else None,
                                          'fc_state_at_restore': restore_state and restore_state.get('fc_state')}
         c['fc_in_descent_or_reefing_at_restore'] = {'pass': bool(restore_state) and restore_state.get('fc_state') in ('Descent', 'Reefing')}
+        c['fc_no_stack_or_hard_fault'] = {'pass': not any(k.startswith('fc_fault_counter_') for k in self.result) and not self.result.get('fc_fault'),
+                                          'low_water': self.result.get('fc_stack_low_water')}
         self.result['checks'] = c
         return c
 
@@ -978,6 +999,8 @@ def main():
                    help='actuator QD drive selected in Idle; auxiliary avoids the ~1500 s modelled stepper retraction')
     p.add_argument('--gps-utc-offset-ms', type=int, default=-5000,
                    help='NEO-M9N NMEA UTC offset; runs 3/4 measured RF GPS publications ~+4.95 s ahead of GS network UTC')
+    p.add_argument('--wall-freshness-scale', type=int, default=30,
+                   help='GS_SIM_WALL_FRESHNESS_SCALE for the firmware_sim GS (1 = operational windows)')
     p.add_argument('--prepare-only', action='store_true')
     args = p.parse_args()
     if args.evidence is None:

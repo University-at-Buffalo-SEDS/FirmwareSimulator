@@ -76,10 +76,12 @@ class FlightProfileTest(unittest.TestCase):
             self.assertAlmostEqual(alt, row['alt_agl_m'], delta=0.05)
 
     def test_accelerometer_scale_and_saturation(self):
-        lsb = 1.5 * 16 / 32768 * 2.4607705003298646087   # range 0x03, FC26_LINEAR_SCALE
+        lsb = 1.5 * 16 / 32768 * profile.G   # BMI088 range 0x03 (+/-24 g), datasheet scale
         self.assertAlmostEqual(round(profile.G / lsb) * lsb, profile.G, delta=lsb)
         full_scale = 32767 * lsb
-        self.assertTrue(5.9 * profile.G < full_scale < 6.1 * profile.G)
+        self.assertTrue(23.9 * profile.G < full_scale < 24.1 * profile.G)
+        # The whole profile, boost included, is measurable without saturation.
+        self.assertLess(self.summary['expected_maxima']['max_specific_force_mps2'], full_scale)
 
     def test_csv_written(self):
         with tempfile.TemporaryDirectory() as tmp:

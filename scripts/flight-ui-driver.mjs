@@ -82,7 +82,7 @@ const checks = {
   phases_seen: [], profile_switch_in_flight: false, flight_cards_on_top: false,
   drogue_notification: null, main_notification: null, mini_map_positions: new Set(),
   comms_loss_landed_seen: false, comms_loss_reverted: false, map_switch_after_landing: 0,
-  maxima_text: [],
+  maxima_text: [], profiles_by_phase: {}, maxima_by_phase: {},
 };
 
 await page.goto(origin + '/dashboard');
@@ -110,6 +110,11 @@ while (Date.now() < deadline && !done()) {
     log('phase', s);
     await shot(`phase-${s.phase}${s.phase_text && s.phase_text.includes('contact lost') ? '-comms-loss' : ''}`);
   }
+  if (s.phase && s.profile) {
+    const seen = checks.profiles_by_phase[s.phase] ||= [];
+    if (!seen.includes(s.profile)) { seen.push(s.profile); log('profile', {phase: s.phase, profile: s.profile, first_cards: s.first_cards}); await shot(`profile-${s.phase}-${s.profile}`); }
+  }
+  if (s.phase && s.maxima.length) checks.maxima_by_phase[s.phase] = s.maxima;
   if (s.phase === 'in_flight' && s.profile === 'in_flight') {
     if (!checks.profile_switch_in_flight) { checks.profile_switch_in_flight = true; log('profile_in_flight', s); await shot('dashboard-in-flight-profile'); }
     const top = s.first_cards.slice(0, 6);
@@ -170,6 +175,7 @@ const result = {
     drogue_notification: !!checks.drogue_notification,
     main_notification: !!checks.main_notification,
     in_flight_profile: checks.profile_switch_in_flight && checks.flight_cards_on_top,
+    profile_follows_phase: Object.entries(checks.profiles_by_phase).filter(([phase, profiles]) => profiles.includes(phase)).length >= 3,
     mini_map_moved: checks.mini_map_positions.size >= 2,
     comms_loss_landed_and_reverted: checks.comms_loss_landed_seen && checks.comms_loss_reverted,
     map_switch_after_landing: checks.map_switch_after_landing >= 1,

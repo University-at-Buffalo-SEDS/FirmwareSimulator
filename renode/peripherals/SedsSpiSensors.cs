@@ -228,16 +228,21 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private void LatchAccelerometer()
         {
             var row = profile.Sample(ProfileTime());
-            // FC26 firmware value = raw * lsb_to_g, where lsb_to_g =
-            // 1.5 * 2^(range+1) / 32768 * FC26_LINEAR_SCALE (Core/Inc/accelerometer.h)
-            // and the result is consumed as m/s^2 (EKF subtracts GRAVITY_SI).
-            // Model the board as calibrated by that factor: raw = f / lsb.
-            // A 16-bit sample therefore saturates near 59 m/s^2 (~6.0 g) at the
-            // configured 24 g range setting; saturation is recorded.
-            var range = Get(Device.Accelerometer, 0x41) & 3;
-            var lsb = 1.5 * (1 << (range + 1)) / 32768.0 * 2.4607705003298646087;
+            // BMI088 datasheet scale: full scale 1.5 * 2^(range+1) g over a
+            // signed 16-bit sample (FC firmware accl_lsb_to_mps2 reads the
+            // range back and uses the same scale in m/s^2). Range 0x03 is
+            // +/-24 g (~235 m/s^2); saturation is still recorded.
+            var lsb = AccelerometerLsbMps2();
             EncodeAxes(latchedAccelerometer, 0, 0, row[SedsFlightProfile.SpecificForceZ], lsb, ref accelerometerSaturations);
             profileReads++;
+        }
+
+        // ACC_RANGE (0x41) resets to 0x01 (+/-6 g) on the real part.
+        private double AccelerometerLsbMps2()
+        {
+            byte stored;
+            var range = registers.TryGetValue(Key(Device.Accelerometer, 0x41), out stored) ? stored & 3 : 1;
+            return 1.5 * (1 << (range + 1)) / 32768.0 * 9.80665;
         }
 
         private void LatchGyroscope()
@@ -268,7 +273,8 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 nextAnchorPollMs = profileClockMs + 50;
                 launchAnchorMs = SedsFlightProfile.ReadAnchor(launchPath);
             }
-            return launchAnchorMs < 0 ? 0.0 : Math.Max(0.0, (double)profileClockMs - launchAnchorMs);
+            // No anchor yet, or before it: the pad (Sample(t < 0)), never row 0.
+            return launchAnchorMs < 0 ? -1.0 : (double)profileClockMs - launchAnchorMs;
         }
 
         public string GetFlightProfileState()
@@ -327,7 +333,11 @@ namespace Antmicro.Renode.Peripherals.Sensors
             if(selected == Device.Barometer && register >= 0x04 && register <= 0x09)
                 return new byte[] { 0x00, 0x80, 0x65, 0x00, 0x6a, 0x31 }[register - 0x04];
             if(selected == Device.Accelerometer && register >= 0x12 && register <= 0x17)
-                return new byte[] { 0, 0, 0, 0, 0x00, 0x40 }[register - 0x12];
+            {
+                // At rest: +1 g on z at the configured range.
+                var z = (short)Math.Round(9.80665 / AccelerometerLsbMps2());
+                return new byte[] { 0, 0, 0, 0, (byte)z, (byte)(z >> 8) }[register - 0x12];
+            }
             if(selected == Device.Gyroscope && register >= 0x02 && register <= 0x07)
                 return 0;
             byte value;
@@ -406,13 +416,26 @@ namespace Antmicro.Renode.Peripherals.Sensors
                 if(times[i] <= times[i - 1]) throw new FormatException("flight profile times must increase");
             this.times = times.ToArray();
             this.rows = rows.ToArray();
+            // Before ignition the vehicle rests on the pad: the first row's
+            // position/pressure/temperature, no motion, and +1 g specific
+            // force. Row 0 is already the ignition instant (full thrust).
+            pad = (double[])this.rows[0].Clone();
+            pad[Velocity] = 0.0;
+            pad[SpecificForceZ] = 9.80665;
+            pad[GyroX] = pad[GyroY] = pad[GyroZ] = 0.0;
         }
+
+        private readonly double[] pad;
+
+        // Pad (at rest) state for any time before T0, including no anchor yet.
+        public double[] Pad { get { return pad; } }
 
         public string Path { get; private set; }
 
         // Linear interpolation at t milliseconds after T0; clamps at both ends.
         public double[] Sample(double t)
         {
+            if(t < 0) return pad;
             if(t <= times[0]) return rows[0];
             if(t >= times[times.Length - 1]) return rows[rows.Length - 1];
             var index = Array.BinarySearch(times, t);
@@ -543,7 +566,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
             {
                 if(launchAnchorMs < 0) launchAnchorMs = SedsFlightProfile.ReadAnchor(launchPath);
                 var nowMs = (double)elapsedSeconds * 1000.0;
-                var row = profile.Sample(launchAnchorMs < 0 ? 0.0 : Math.Max(0.0, nowMs - launchAnchorMs));
+                var row = profile.Sample(launchAnchorMs < 0 ? -1.0 : nowMs - launchAnchorMs);
                 coordinates = FormatCoordinate(row[SedsFlightProfile.Latitude], true) + "," + FormatCoordinate(row[SedsFlightProfile.Longitude], false);
                 altitude = row[SedsFlightProfile.AltitudeMsl].ToString("0.0", culture);
             }
