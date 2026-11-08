@@ -677,7 +677,9 @@ class Run:
                 return
             body = {'mode': self.args.qd_mode, 'expected_generation': board.get('generation'), 'expected_epoch': board.get('epoch'),
                     'backend_instance': plumbing.get('backend_instance'), 'expected_revision': (plumbing.get('desired') or {}).get('revision'),
-                    'expected_reset_epoch': plumbing.get('reset_epoch')}
+                    'expected_reset_epoch': plumbing.get('reset_epoch'),
+                    # Stepper -> auxiliary must explicitly release the idle stepper holding torque.
+                    'release_stepper': board.get('mode') == 'stepper' and self.args.qd_mode == 'auxiliary'}
             code, reply = self.api('/api/actuator/plumbing/settings', body)
             with (self.out / 'qd-mode-attempts.jsonl').open('a') as handle:
                 handle.write(json.dumps({'virtual_ms': self.now, 'request': body, 'status': code, 'reply': reply}, default=str) + '\n')
