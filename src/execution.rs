@@ -1094,9 +1094,12 @@ fn render_script(
     // H5 bootloader + application startup includes clock, SD-card absence, and
     // TIM6 timebase initialization. Give the factory flow enough virtual time
     // to reach the same scheduler hook without lengthening the allocator soak.
+    // A factory-flashed G4 board starts with blank persistent storage and
+    // provisions it before ThreadX starts; the Valve Board needs 20-40 ms of
+    // virtual time for that, so 200 ms leaves 5x margin and still flags a hang.
     let minimum_factory_ms = match layout.architecture {
         ArchitectureKind::Stm32h5 => 1_000,
-        ArchitectureKind::Stm32g4 => 10,
+        ArchitectureKind::Stm32g4 => 200,
         _ => 50,
     };
     let factory_ms = minimum_factory_ms;
@@ -2022,6 +2025,46 @@ mod tests {
         assert!(factory.contains("sysbus LoadBinary @firmware-flash.bin 0x08000000"));
         assert!(factory.contains("cpu SetRegister 13 0x2001c000"));
         assert!(factory.contains("cpu PC 0x08000001"));
+    }
+
+    #[test]
+    fn g4_factory_flow_has_time_to_provision_blank_persistent_storage() {
+        // A factory-flashed Valve Board starts with an erased persistent
+        // region. Its boot provisions the boot identity and then reads every
+        // critical key back through the strict LaunchCore reader, which takes
+        // 20-40 ms of virtual time at the model's 100 MIPS before ThreadX
+        // schedules. A 10 ms budget stopped it in strict_erased.
+        let board = layout("stm32g4", "[]");
+        let script = render_script(
+            &board,
+            std::path::Path::new("platform.repl"),
+            std::path::Path::new("overlay.repl"),
+            ExecutionArtifacts {
+                elf: std::path::Path::new("firmware.elf"),
+                bootloader_elf: std::path::Path::new("bootloader.elf"),
+                factory: std::path::Path::new("factory.bin"),
+                firmware_image: std::path::Path::new("firmware-flash.bin"),
+            },
+            ExecutionScenario {
+                firmware_reset: (0x2001_bff0, 0x0800_4001, 0x0800_4200),
+                factory_reset: (0x2001_c000, 0x0800_0001),
+                trace: std::path::Path::new("trace.bin"),
+                ota: None,
+                power_cut_after: None,
+            },
+        );
+        let factory = script.split("_factory\"").nth(1).unwrap();
+        let seconds: f64 = factory
+            .split("emulation RunFor \"")
+            .nth(1)
+            .and_then(|rest| rest.split("s\"").next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            seconds >= 0.2,
+            "G4 factory flow runs for {seconds}s, less than 5x the measured blank-storage boot"
+        );
     }
 
     #[test]
