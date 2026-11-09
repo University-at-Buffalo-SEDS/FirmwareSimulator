@@ -539,8 +539,13 @@ namespace Antmicro.Renode.Peripherals.Sensors
                     count = stream.ReadBlock(text, 0, text.Length);
                 if(count > 16) throw new FormatException("oversized GPS fix fixture");
                 var value = new string(text, 0, count).Trim();
-                if(value != "0" && value != "1") throw new FormatException("invalid GPS fix fixture");
+                // 0: no fix, 1: valid fix, 2: u-blox power-up state, no fix and a
+                // placeholder date (1980-01-06) with the receiver's free-running
+                // clock counted from its power-up, as a cold receiver reports
+                // before it has decoded any satellite time.
+                if(value != "0" && value != "1" && value != "2") throw new FormatException("invalid GPS fix fixture");
                 validFix = value == "1";
+                placeholderTime = value == "2";
             }
             catch(System.IO.IOException) { RejectStimulus(); }
             catch(UnauthorizedAccessException) { RejectStimulus(); }
@@ -556,8 +561,10 @@ namespace Antmicro.Renode.Peripherals.Sensors
         {
             // SEDS_GPS_UTC_OFFSET_MS aligns receiver UTC with the GS network
             // epoch when the host clock starts later than this machine.
-            var utc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-                .AddSeconds(elapsedSeconds).AddMilliseconds(GpsUtcOffsetMs);
+            var utc = placeholderTime
+                ? new DateTime(1980, 1, 6, 0, 0, 0, DateTimeKind.Utc).AddSeconds(elapsedSeconds)
+                : new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                    .AddSeconds(elapsedSeconds).AddMilliseconds(GpsUtcOffsetMs);
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             var time = utc.ToString("HHmmss", culture) + ".00";
             var coordinates = this.coordinates;
@@ -608,6 +615,7 @@ namespace Antmicro.Renode.Peripherals.Sensors
         private long launchAnchorMs = -1;
         private readonly string stimulusPath;
         private bool validFix;
+        private bool placeholderTime;
         private readonly string coordinates;
         private readonly string altitude;
 

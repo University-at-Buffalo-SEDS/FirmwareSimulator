@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 class GpsNmeaModelTests(unittest.TestCase):
     def test_valid_bounded_one_hz_stream_and_reset_time(self):
         source=(ROOT/'renode/peripherals/SedsSpiSensors.cs').read_text()
-        model=source[source.index('    public sealed class SedsNeoM9N'):source.index('    // MCP3564R')]
+        model=source[source.index('    // Time-indexed flight profile') if '    // Time-indexed flight profile' in source else source.index('    public sealed class SedsFlightProfile'):source.index('    // MCP3564R')]
         code=r'''
 using System;
 using System.Collections.Generic;
@@ -103,10 +103,16 @@ class Program {
   System.IO.File.WriteAllText(file,"1");missingClock.Fire();Check(Read(missing),"000001.00","010126");
   missing.Reset();Check(Read(missing),"000001.00","010126");
   System.IO.File.Delete(file);missingClock.Fire();Check(Read(missing),"000002.00","010126");Require(missing.StimulusRejected==2,"missing later input retains last good");
+  // u-blox power-up: no fix, placeholder date, receiver clock from power-up; then a real fix.
+  System.IO.File.WriteAllText(file,"2");var cold=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),stimulusPath:file);var coldClock=LimitTimer.Last;
+  Check(Read(cold),"000000.00","060180",fix:false);
+  coldClock.Fire();Check(Read(cold),"000001.00","060180",fix:false);
+  System.IO.File.WriteAllText(file,"1");coldClock.Fire();Check(Read(cold),"000002.00","010126");
+  System.IO.File.Delete(file);
   var ordinary=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine());
   var nofile=new Antmicro.Renode.Peripherals.Sensors.SedsNeoM9N(new Machine(),stimulusPath:"");
   Require(Read(ordinary)==Read(nofile),"empty fixture path preserves exact default NMEA bytes");
-  Console.WriteLine("PASS: real GPS model, bounded1Hz/checksums/UTC, raw nofix-to-fix input and last-good rejection");
+  Console.WriteLine("PASS: real GPS model, bounded1Hz/checksums/UTC, raw nofix-to-fix input, cold placeholder date and last-good rejection");
  }
 }
 '''
