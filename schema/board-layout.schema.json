@@ -206,6 +206,15 @@
       },
       "additionalProperties": false
     },
+    "dfu_factory_flash": {
+      "type": "object",
+      "description": "Physical flash as 'dfu-util -s <base>:leave -D <factory>' leaves it: only the erase pages the factory image covers are rewritten, and the firmware starts with the ROM loader's FLASH_SR bits.",
+      "properties": {
+        "retained_image": {"type": "string", "minLength": 1},
+        "handoff_flash_status": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+      },
+      "additionalProperties": false
+    },
     "peripherals": {
       "type": "array",
       "items": {

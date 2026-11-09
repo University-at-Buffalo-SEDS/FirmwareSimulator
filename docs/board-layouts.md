@@ -48,6 +48,35 @@ Define `memory.ram_regions` from the exact part/BSP linker map, including separa
 
 Exact-MCU validation also checks the physical flash base, SRAM address window, total capacity, erase size, and programming alignment. A family-compatible but different part cannot silently reuse one of these platforms.
 
+## DFU factory flash
+
+Boards that are flashed only through the STM32 ROM DFU loader
+(`dfu-util -a 0 -s 0x08000000:leave -D <board>.factory.bin`) do not start from
+a factory image placed on a blank part. Set `dfu_factory_flash` to start from
+the state that command leaves:
+
+```json
+"dfu_factory_flash": {"handoff_flash_status": 32768}
+```
+
+DfuSe erases and programs only the erase pages the factory image covers, so
+every later page (the second metadata copy, the persistent store) keeps what the
+part held before: a blank part by default, or `retained_image`, a
+firmware-root-relative image of the whole part. `:leave` jumps to the image
+without a reset, so the flash controller status register starts with
+`handoff_flash_status` (STM32G4 FLASH_SR: 0x8000 OPTVERR, 0x80 PGSERR). HAL
+reports any error bit that is set when an erase or program starts as a failure
+of that operation, which is what first-boot storage provisioning meets on these
+boards. A later reset clears the bits.
+
+`scripts/test-av-bay-flow.py` runs RF, Power Board and Flight Computer from
+their layouts with the GroundStation on the RF radio, starts the GroundStation
+recording and checks it with `scripts/check-av-bay-flow.py`: RF and PB
+BOARD_HEALTH report no failed router service (word 6 bits 16..23), FC telemetry
+reaches the ground through RF, and RF BOARD_HEALTH and FC packets keep arriving
+over at least 60 s of firmware time. The firmware assertions also require
+`service_faults` to stay 0 on RF and PB.
+
 ## Firmware-driven OTA
 
 Set `ota.firmware_driven` and provide both `artifacts.ota` and at least one

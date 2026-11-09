@@ -1686,12 +1686,17 @@ fn prepare(topology_path: &Path, board_only: bool) -> Result<PreparedBay> {
         let firmware_image = node_scratch.join("firmware-flash.bin");
         fs::write(
             &firmware_image,
-            crate::elf::validated_factory_image(
-                &root.join(&layout.artifacts.factory),
-                &elf,
-                &layout.memory,
-                firmware_vtor,
-                &format!("node {} firmware", node.name),
+            crate::elf::node_flash_image(
+                crate::elf::validated_factory_image(
+                    &root.join(&layout.artifacts.factory),
+                    &elf,
+                    &layout.memory,
+                    firmware_vtor,
+                    &format!("node {} firmware", node.name),
+                )?,
+                &layout,
+                &root,
+                &format!("node {}", node.name),
             )?,
         )
         .with_context(|| format!("writing node {} flash image", node.name))?;
@@ -1786,7 +1791,7 @@ fn prepare(topology_path: &Path, board_only: bool) -> Result<PreparedBay> {
         boot_captures.push((boot_path, marker.clone()));
         let board_initialization = crate::execution::render_board_initialization_script(&layout);
         script += &format!(
-            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\ncpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` {}\n",
+            "mach create \"{}\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} 0x{:08x}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` {}\n",
             safe(&node.name),
             configured_platform.display(),
             overlay.display(),
@@ -1799,6 +1804,7 @@ fn prepare(topology_path: &Path, board_only: bool) -> Result<PreparedBay> {
             elf.display(),
             firmware_image.display(),
             layout.memory.flash_base,
+            crate::elf::dfu_handoff_script(&layout),
             firmware_msp,
             firmware_pc,
             firmware_vtor,

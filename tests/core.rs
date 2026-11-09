@@ -293,6 +293,7 @@ fn crash_snapshot_exposes_cortex_m_fault_state() {
         ota: OtaConfig::default(),
         board: BoardConfig::default(),
         peripherals: vec![],
+        dfu_factory_flash: None,
     };
     let diagnostic =
         CrashDiagnostic::capture(&layout, 7, "peripheral_execution", "bus fault".into());

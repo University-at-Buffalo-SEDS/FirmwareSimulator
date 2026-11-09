@@ -257,9 +257,21 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
     let firmware_image = scratch.path().join("firmware-flash.bin");
     fs::write(
         &firmware_image,
-        crate::elf::flash_image(&elf, &layout.memory, "firmware")?,
+        crate::elf::node_flash_image(
+            crate::elf::flash_image(&elf, &layout.memory, "firmware")?,
+            layout,
+            root,
+            "firmware",
+        )?,
     )
     .context("writing firmware flash image")?;
+    let factory_flash = scratch.path().join("factory-flash.bin");
+    fs::write(
+        &factory_flash,
+        crate::elf::node_flash_image(factory_bytes, layout, root, "factory")?,
+    )
+    .context("writing factory flash image")?;
+    let factory = factory_flash;
     let platform = materialize_platform(layout, root, scratch.path())?;
     let peripheral_overlay = scratch.path().join("peripherals.repl");
     fs::write(&peripheral_overlay, render_peripheral_overlay(layout)?)
@@ -1146,7 +1158,7 @@ fn render_script(
         layout.memory.flash_base
     );
     format!(
-        "mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n",
+        "mach create \"{}_firmware\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu VectorTableOffset 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\"` 'self.InfoLog(\"SEDS_FIRMWARE_BOOT_REACHED\")'\n{}{}{}{}echo \"SEDS_REG FIRMWARE_PC\"\ncpu PC\necho \"SEDS_REG FIRMWARE_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FIRMWARE_LR\"\ncpu GetRegister 14\nmach clear\nmach create \"{}_factory\"\nmachine LoadPlatformDescription @{}\nmachine LoadPlatformDescription @{}\n{}{}{}sysbus LoadSymbolsFrom @{}\nsysbus LoadSymbolsFrom @{}\nsysbus LoadBinary @{} {}\nphysicalFlash EndHostLoading\n{}{}cpu SetRegister 13 0x{:08x}\ncpu PC 0x{:08x}\ncpu AddHook `sysbus GetSymbolAddress \"{}\" 0` 'self.InfoLog(\"SEDS_FACTORY_BOOT_REACHED\")'\n{}{}{}emulation RunFor \"{}s\"\n{}echo \"SEDS_FLASH_OPERATIONS\"\nphysicalFlash GetOperationCount\necho \"SEDS_FLASH_EVENT_TRACE\"\nphysicalFlash GetOperationTrace\necho \"SEDS_REG FACTORY_PC\"\ncpu PC\necho \"SEDS_REG FACTORY_SP\"\ncpu GetRegister 13\necho \"SEDS_REG FACTORY_LR\"\ncpu GetRegister 14\necho \"SEDS_EXECUTION_COMPLETE\"\n",
         name,
         platform.display(),
         peripheral_overlay.display(),
@@ -1157,6 +1169,7 @@ fn render_script(
         firmware_image.display(),
         layout.memory.flash_base,
         firmware_reset_macro,
+        crate::elf::dfu_handoff_script(layout),
         firmware_msp,
         firmware_pc,
         firmware_vtor,
@@ -1176,6 +1189,7 @@ fn render_script(
         factory.display(),
         layout.memory.flash_base,
         factory_reset_macro,
+        crate::elf::dfu_handoff_script(layout),
         factory_msp,
         factory_pc,
         factory_symbol,

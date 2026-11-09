@@ -243,6 +243,73 @@ pub fn validated_factory_image(
     Ok(image)
 }
 
+/// Physical flash after a DfuSe factory flash: `retained` (or a blank part)
+/// with every erase page the factory image touches erased and reprogrammed.
+pub fn dfu_factory_flash(
+    factory: &[u8],
+    retained: Option<&[u8]>,
+    memory: &MemoryLayout,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let size = usize::try_from(memory.flash_size).context("flash size")?;
+    let page = usize::try_from(memory.erase_size).context("erase size")?;
+    ensure!(
+        page > 0 && size % page == 0,
+        "{label} flash size is not a whole number of erase pages"
+    );
+    ensure!(
+        factory.len() <= size,
+        "{label} factory image is larger than physical flash"
+    );
+    let mut flash = match retained {
+        Some(image) => {
+            ensure!(
+                image.len() == size,
+                "{label} retained flash image must be exactly {size} bytes"
+            );
+            image.to_vec()
+        }
+        None => vec![0xff; size],
+    };
+    let erased = factory.len().div_ceil(page) * page;
+    flash[..erased].fill(0xff);
+    flash[..factory.len()].copy_from_slice(factory);
+    Ok(flash)
+}
+
+/// The physical flash a node starts from: the factory image on a blank part,
+/// or the DFU factory flash state when the layout asks for it.
+pub fn node_flash_image(
+    factory: Vec<u8>,
+    layout: &crate::layout::BoardLayout,
+    root: &Path,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let Some(dfu) = &layout.dfu_factory_flash else {
+        return Ok(factory);
+    };
+    let retained = dfu
+        .retained_image
+        .as_ref()
+        .map(|path| {
+            fs::read(root.join(path))
+                .with_context(|| format!("reading {label} retained flash {}", path.display()))
+        })
+        .transpose()?;
+    dfu_factory_flash(&factory, retained.as_deref(), &layout.memory, label)
+}
+
+/// Monitor commands that hand the firmware the loader's flash status.
+pub fn dfu_handoff_script(layout: &crate::layout::BoardLayout) -> String {
+    match &layout.dfu_factory_flash {
+        Some(dfu) if dfu.handoff_flash_status != 0 => format!(
+            "physicalFlash InheritStatus 0x{:08x}\n",
+            dfu.handoff_flash_status
+        ),
+        _ => String::new(),
+    }
+}
+
 fn program_header_offset(
     phoff: usize,
     phentsize: usize,
@@ -581,5 +648,35 @@ mod tests {
         let image = flash_image(&path, &memory(), "firmware").unwrap();
         assert_eq!(&image[0x5000..0x5004], &[1, 2, 3, 4]);
         assert!(image[..0x5000].iter().all(|byte| *byte == 0xff));
+    }
+
+    #[test]
+    fn dfu_factory_flash_rewrites_only_the_pages_the_image_covers() {
+        let memory = crate::layout::MemoryLayout {
+            flash_base: 0x0800_0000,
+            flash_size: 0x2000,
+            ram_regions: vec![],
+            bootloader_size: 0x800,
+            slot_a_base: 0x0800_0800,
+            slot_a_size: 0x800,
+            slot_b_base: None,
+            slot_b_size: None,
+            delta_base: None,
+            delta_size: None,
+            persistent_data_base: Some(0x0800_1800),
+            persistent_data_size: Some(0x800),
+            erase_size: 0x800,
+            write_alignment: 8,
+            sedsnet_pool: 0,
+        };
+        let retained = vec![0x5a; 0x2000];
+        let factory = vec![0x11; 0x900];
+        let flash = super::dfu_factory_flash(&factory, Some(&retained), &memory, "t").unwrap();
+        assert!(flash[..0x900].iter().all(|&b| b == 0x11));
+        assert!(flash[0x900..0x1000].iter().all(|&b| b == 0xff));
+        assert!(flash[0x1000..].iter().all(|&b| b == 0x5a));
+        let blank = super::dfu_factory_flash(&factory, None, &memory, "t").unwrap();
+        assert!(blank[0x900..].iter().all(|&b| b == 0xff));
+        assert!(super::dfu_factory_flash(&factory, Some(&retained[..16]), &memory, "t").is_err());
     }
 }

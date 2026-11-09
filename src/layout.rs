@@ -31,6 +31,27 @@ pub struct BoardLayout {
     pub board: BoardConfig,
     #[serde(default)]
     pub peripherals: Vec<PeripheralSpec>,
+    /// Physical flash as a DFU factory flash leaves it, instead of a factory
+    /// image placed on a blank part.
+    #[serde(default)]
+    pub dfu_factory_flash: Option<DfuFactoryFlash>,
+}
+
+/// `dfu-util -s <base>:leave -D <factory>` through the STM32 ROM DfuSe loader.
+/// The loader erases and programs only the erase pages the factory image
+/// covers; every other page (later metadata, the persistent store) keeps what
+/// the part held before. `:leave` then jumps to the image without a reset, so
+/// the firmware starts with the loader's flash controller status.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DfuFactoryFlash {
+    /// Firmware-root-relative image of the whole part before the DFU flash.
+    /// Omitted means a blank part.
+    #[serde(default)]
+    pub retained_image: Option<PathBuf>,
+    /// FLASH_SR bits the firmware inherits at the handoff.
+    #[serde(default)]
+    pub handoff_flash_status: u32,
 }
 impl BoardLayout {
     pub fn load(path: &Path) -> Result<Self> {

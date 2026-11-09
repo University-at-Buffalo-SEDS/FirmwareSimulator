@@ -84,6 +84,13 @@ namespace Antmicro.Renode.Peripherals.MTD
             hostLoadingEnded = true;
         }
 
+        // A DFU ':leave' hands control to the image without a reset, so the
+        // firmware starts with whatever sticky status the ROM loader left.
+        public void InheritStatus(uint bits)
+        {
+            status |= bits;
+        }
+
         public void Reset()
         {
             for(activeBank = 0; activeBank < 2; activeBank++)
