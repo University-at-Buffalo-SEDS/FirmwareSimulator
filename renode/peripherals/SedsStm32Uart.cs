@@ -192,7 +192,7 @@ namespace Antmicro.Renode.Peripherals.UART
         }
 
         // ---- Optional external link gate ----------------------------------
-        // SEDS_UART_GATE="<machine>:<peripheral>:<file>" selects one UART. While
+        // SEDS_UART_GATE="<machine>:<peripheral>:<file>[;...]" selects UARTs. While
         // the file contains "1" the wire is cut in both directions (bytes the
         // MCU transmits and host bytes towards it are discarded); "0" or a
         // missing file restores it. The file is polled at most every 50 ms of
@@ -203,13 +203,16 @@ namespace Antmicro.Renode.Peripherals.UART
             if(GateSpec.Length == 0) return false;
             if(!gateResolved)
             {
-                var parts = GateSpec.Split(new[] { ':' }, 3);
                 string machineName, localName;
-                if(parts.Length != 3) { gateResolved = true; return false; }
                 if(!Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation.TryGetMachineName(machine, out machineName)
                     || !machine.TryGetLocalName(this, out localName)) return false;
                 gateResolved = true;
-                if(machineName == parts[0] && localName == parts[1]) gatePath = parts[2];
+                // Several gates may be listed, separated by ';'.
+                foreach(var entry in GateSpec.Split(';'))
+                {
+                    var parts = entry.Split(new[] { ':' }, 3);
+                    if(parts.Length == 3 && machineName == parts[0] && localName == parts[1]) { gatePath = parts[2]; break; }
+                }
             }
             if(gatePath == null) return false;
             var nowMs = gateWatch.ElapsedMilliseconds;

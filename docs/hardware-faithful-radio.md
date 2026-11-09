@@ -62,6 +62,15 @@ It then asserts the following, numbered by the bench fault list:
 10. All seven boards stay launch-proof fresh (`readback_current`, age at most 5 s) in at least 98 % of samples.
     Launch never reports missing fresh board state.
 
+The dilated station clock starts at the simulation network epoch (`FAKETIME="@2026-01-01 00:00:00 x<1/pace>"`).
+Host wall time and the boards' network time then share one base, which the RRLS clock comparison relies on.
+
+`SEDS_UART_GATE` accepts several `machine:peripheral:file` entries separated by `;`.
+`stale_auto_abort` uses `gateway:usart2` to take the Gateway Board's Pico-Fi link to the station down, alongside its CAN cut.
+
+The harness stops a run whose virtual clock makes no progress for 900 s of wall time.
+Several runs with RF 74e78f4 stalled in Renode's `RunFor` of the tenth sample; see "Known issue" below.
+
 Use `--rrls` to add a hosted RRLS on the same medium (`--scenario pairing` drives UI pairing over the radio).
 `--gs-env` passes extra station variables.
 
@@ -99,3 +108,11 @@ Differences from the bench that remain:
 - The refusal mix differs: control_budget on the Pi, large_frame_reservation in the sim.
 
 That refusal mix suggests the snapshot came from a station older than aed4351.
+
+## Known issue
+
+About 40 % of the faithful runs with RF 74e78f4 and the RF modem model (`--rfd-modem 0=`) hung in Renode.
+- The hang came right after `SEDS_BAY_SAMPLE_DONE 9`: every machine was resumed, but `RunFor` never returned.
+- The station stayed responsive.
+- The cause is not yet known.
+- Runs with the older RF, and other runs with the same heads, completed.

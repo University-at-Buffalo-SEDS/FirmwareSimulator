@@ -44,7 +44,7 @@ def build_config(a):
     for sub in ('', 'temp', 'state', 'flight'):
         (diag / sub).mkdir(mode=0o770, exist_ok=True); (diag / sub).chmod(0o770)
     F.atomic(diag / 'pressure.raw', '0'); F.atomic(diag / 'loadcell.raw', F.mass_samples(0)); F.atomic(diag / 'gps.fix', str(a.gps_initial))
-    F.atomic(diag / 'flight/radio-gate.txt', '0')
+    F.atomic(diag / 'flight/radio-gate.txt', '0'); F.atomic(diag / 'flight/gb-pico-gate.txt', '0')
     key, users = F.fixture_user(); (config / 'users.json').write_text(json.dumps(users))
     gse = {'nitrogen_target_psi': 500, 'pressure_step_psi': 50, 'pressure_ceiling_psi': 900, 'maximum_zero_offset_psi': 20,
            'dry_self_test_confirmed': False, 'grouped_panel': True, 'turbocharge_max_added_mass_kg': 0.5, 'turbocharge_pressure_deadband_psi': 12}
@@ -83,7 +83,9 @@ def build_config(a):
         # freshness TTLs) age at the boards' rate. No freshness stretching.
         env.pop('GS_SIM_WALL_FRESHNESS_SCALE', None)
         env['LD_PRELOAD'] = '/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1'
-        env['FAKETIME'] = '+0 x%.6f' % (1.0 / a.faithful_time)
+        # Start the dilated station clock at the simulation network epoch (GS_SIM_NETWORK_EPOCH_MS,
+        # 2026-01-01T00:00:00Z) so host wall time and the boards' network time share one base.
+        env['FAKETIME'] = '@2026-01-01 00:00:00 x%.6f' % (1.0 / a.faithful_time)
         env['FAKETIME_DONT_FAKE_MONOTONIC'] = '0'
     for kv in a.gs_env:
         k, v = kv.split('=', 1); env[k] = v
@@ -165,7 +167,7 @@ def build_config(a):
     cmd = ['docker', 'run', '--rm', '--name', name, '--cpus', str(a.cpus), '--memory', '20g', '--memory-swap', '20g', '--pids-limit', '768',
            '--ulimit', 'core=0', '--network', net, '--group-add', str(os.getgid()),
            '-e', 'TMPDIR=/diagnostics/temp', '-e', 'FIRMWARE_SIM_DIAGNOSTICS_DIR=/diagnostics',
-           '-e', 'SEDS_UART_GATE=rf:usart1:/diagnostics/flight/radio-gate.txt',
+           '-e', 'SEDS_UART_GATE=rf:usart1:/diagnostics/flight/radio-gate.txt;gateway:usart2:/diagnostics/flight/gb-pico-gate.txt',
            '-v', f'{config}:/simulation:ro', '-v', f'{diag}:/diagnostics',
            '-v', f'{out / "gs-data"}:/opt/groundstation/data', '-v', f'{out / "gs-backend-data"}:/opt/groundstation/backend/data']
     if a.radio_trace:
@@ -285,10 +287,14 @@ class Sim:
                 if self.origin is None:
                     if not self.connect(): time.sleep(.3); continue
                     worker = threading.Thread(target=self._scenario, args=(scenario,), daemon=True); worker.start()
+                if not hasattr(self, 'last_progress'): self.last_progress = time.monotonic()
                 try:
                     self.snapshot()
                 except Exception as e:  # GS restarting
                     time.sleep(.3); continue
+                if self.now != prev_v: self.last_progress = time.monotonic()
+                elif time.monotonic() - getattr(self, 'last_progress', time.monotonic()) > 900:
+                    raise TimeoutError('virtual clock stalled for 900 s of wall time')
                 self.plant(max(0, min(self.now - prev_v, 500))); prev_v = self.now
                 if worker is not None and not worker.is_alive() and self.result['phase'] != 'running':
                     break
@@ -1348,7 +1354,12 @@ def sc_stale_auto_abort(sim):
         return [x.get('message', '') if isinstance(x, dict) else str(x) for x in lst]
     def retired(): return [t for t in notes() if 'Stale automatic Abort retired' in t]
     sim.wait_ready(timeout_ms=a.ready_timeout_ms)  # may time out on the faithful radio; the scenario proceeds
-    wait_until_v(sim, s0 * 1000, 'GB CAN cut')
+    wait_until_v(sim, s0 * 1000, 'GB offline')
+    # GB fully offline: its Pico-Fi UART to the station is gated (SEDS_UART_GATE) and its CAN is cut.
+    F.atomic(sim.diag / 'flight/gb-pico-gate.txt', '1'); sim.log_action('gb_pico_gate', cut=True)
+    def gb_back():
+        wait_until_v(sim, s1 * 1000, 'GB back'); F.atomic(sim.diag / 'flight/gb-pico-gate.txt', '0'); sim.log_action('gb_pico_gate', cut=False)
+    threading.Thread(target=gb_back, daemon=True).start()
     snap = sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') == 15, 60000, 'automatic abort raised')
     v_abort = sim.vclock()
     sim.check('GB offline raises the automatic abort', snap is not None)
