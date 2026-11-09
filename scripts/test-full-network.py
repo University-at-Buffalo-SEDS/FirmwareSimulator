@@ -1135,15 +1135,19 @@ def sc_gps_time(sim):
     """RF GPS cold start (placeholder date, no fix) then a valid fix; every board must follow station/GPS UTC
     without a backward step (fixture: --gps-initial 2)."""
     a = sim.a; boards = present_boards(sim)
+    code, body = sim.api('/api/command', 'StartWritingNow'); sim.log_action('start_recording', http=code, body=body)
     sim.faithful = (sim.out / 'faithful.jsonl').open('a')
     v0 = sim.vclock(); w0 = None
     while sim.vclock() - v0 < a.phase_a_ms and not sim.stop.is_set():
         r = gs_view(sim); w0 = w0 or r['wall'] * 1000; sim.wait_v(5000)
-    sim.log_action('gps_fix_on'); F.atomic(sim.diag / 'gps.fix', '1'); w_fix = time.time() * 1000
+    # Window bounds on the station's own wall clock (the recording's timestamp_ms): under the time-dilated
+    # station that is the network epoch plus virtual time, otherwise host wall time.
+    gs_wall = (lambda: 1767225600000 + sim.vclock()) if a.faithful_time else (lambda: time.time() * 1000)
+    sim.log_action('gps_fix_on'); F.atomic(sim.diag / 'gps.fix', '1'); w_fix = gs_wall()
     v1 = sim.vclock()
     while sim.vclock() - v1 < a.gps_fix_ms and not sim.stop.is_set():
         gs_view(sim); sim.wait_v(5000)
-    w_end = time.time() * 1000; sim.log_action('gps_phase_end')
+    w_end = gs_wall() + 60000; sim.log_action('gps_phase_end')
     rows = board_clock_rows(sim)
     cold = clock_report(rows, 0, w_fix, boards); fix = clock_report(rows, w_fix, w_end, boards)
     sim.result['clock_cold'] = cold; sim.result['clock_fix'] = fix
