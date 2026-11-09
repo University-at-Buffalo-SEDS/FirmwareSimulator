@@ -545,6 +545,70 @@ mod assertion_format_tests {
     }
 }
 
+/// GroundStation keeps board abort history and the launch clock as durable
+/// state and refuses to guess their location outside its repository root.
+/// Give each host its own copy in the run's scratch directory unless the
+/// topology names one.
+fn host_state_env(host: &HostNode, scratch: &Path) -> Vec<(String, PathBuf)> {
+    let state = scratch.join(format!("{}-state", safe(&host.name)));
+    [
+        (
+            "GS_BOARD_ABORT_HISTORY_DIR",
+            state.join("board_abort_history"),
+        ),
+        ("GS_LAUNCH_CLOCK_STATE", state.join("launch-clock.json")),
+    ]
+    .into_iter()
+    .filter(|(name, _)| !host.env.contains_key(*name))
+    .map(|(name, path)| (name.to_string(), path))
+    .collect()
+}
+
+#[cfg(test)]
+mod host_state_tests {
+    use super::*;
+    fn host(name: &str, env: &[(&str, &str)]) -> HostNode {
+        HostNode {
+            name: name.into(),
+            binary: "gs".into(),
+            cwd: None,
+            args: Vec::new(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            network_variable_cache: None,
+            serial_links: Vec::new(),
+        }
+    }
+    #[test]
+    fn station_hosts_keep_abort_history_and_launch_clock_in_scratch() {
+        // GroundStation refuses to start outside its repository root unless
+        // both durable state paths are explicit.
+        let scratch = Path::new("/scratch");
+        let gs = host_state_env(&host("groundstation", &[]), scratch);
+        let rrls = host_state_env(&host("rrls", &[]), scratch);
+        let names: Vec<_> = gs.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            names,
+            ["GS_BOARD_ABORT_HISTORY_DIR", "GS_LAUNCH_CLOCK_STATE"]
+        );
+        assert!(gs.iter().all(|(_, path)| path.starts_with(scratch)));
+        assert!(gs.iter().zip(&rrls).all(|((_, a), (_, b))| a != b));
+    }
+    #[test]
+    fn layout_state_paths_are_not_replaced() {
+        let explicit = host(
+            "groundstation",
+            &[
+                ("GS_BOARD_ABORT_HISTORY_DIR", "/state/history"),
+                ("GS_LAUNCH_CLOCK_STATE", "/state/clock.json"),
+            ],
+        );
+        assert!(host_state_env(&explicit, Path::new("/scratch")).is_empty());
+    }
+}
+
 struct HostRuntime {
     name: String,
     child: Child,
@@ -595,6 +659,15 @@ fn spawn_host_node(
     command.env("GS_NETWORK_VARIABLE_CACHE", variable_cache);
     command.env("FIRMWARE_SIM_SAMPLE_FILE", sample_path);
     command.env("GS_SIM_CLOCK_FILE", scratch.join("virtual-clock.txt"));
+    for (name, path) in host_state_env(host, scratch) {
+        // Create only the parent: GroundStation creates the history journal
+        // itself and refuses an existing directory that lacks one.
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating host state directory {}", parent.display()))?;
+        }
+        command.env(name, path);
+    }
     let stdout_path = scratch.join(format!("{}-stdout.log", safe(&host.name)));
     let stderr_path = scratch.join(format!("{}-stderr.log", safe(&host.name)));
     let open_log = |path: &Path| {
