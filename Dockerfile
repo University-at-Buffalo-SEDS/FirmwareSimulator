@@ -100,7 +100,7 @@ ENV RENODE=/opt/renode/renode
 ENV GS_STATION_MODE=hitl
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libudev1 dosfstools mtools \
+    && apt-get install -y --no-install-recommends ca-certificates libudev1 dosfstools mtools libfaketime \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/firmware-sim /usr/local/bin/firmware-sim
 COPY --from=uart-tests /uart-check /opt/firmware-sim/uart-check

@@ -105,11 +105,52 @@ class Program
         Assert(System.Text.Encoding.ASCII.GetString(got.ToArray())=="+++"&&!plain.Snapshot().Contains("modem"),"transparent station changed");
         Console.WriteLine("RADIO_RFD_MODEM_COMMAND_MODE_PASS");
     }
+    // RFD ASYNC broadcast: 1 + GLOBAL_RETRIES copies of each packet hold the air;
+    // the receiver gets one copy. DUTY_CYCLE holds the sender off afterwards.
+    static void BroadcastCopiesAndDutyCycle()
+    {
+        foreach(var (retries, duty) in new[]{(0u,100u),(10u,100u),(10u,50u)})
+        {
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES",retries.ToString());
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_DUTY_CYCLE",duty.ToString());
+            Fresh();var m=new Machine();var tx=new SedsRadioHostPort(m);var rx=new SedsRadioHostPort(m);
+            // 64 kbit/s, 50 ms SER_BRK idle cutoff, 160 bits of framing per copy.
+            var medium=Medium(rate:64000,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160);
+            medium.AttachHost(0,tx);medium.AttachHost(1,rx);var got=new List<byte>();rx.CharReceived+=got.Add;
+            // One 40-byte frame every 20 ms of host time for 2 s: idle gaps under 50 ms
+            // never close a packet, so only MAX_DATA or a pause seals one.
+            ulong t=0;var sent=0;
+            for(var k=0;k<100;k++){foreach(var b in Enumerable.Range(0,40))tx.WriteChar((byte)b);sent+=40;t+=20000;Advance(t);}
+            Advance(t+30000000);
+            var copies=1+retries;var air=medium.CompletedAirBits;var packets=medium.ReadCounter(0,9);
+            Assert(got.Count==sent && medium.ReadCounter(0,4)==0,"payload lost or refused: "+got.Count+"/"+sent);
+            Assert(air==((ulong)sent*8+160UL*packets)*copies,"air bits do not count every broadcast copy");
+            Console.WriteLine("RADIO_RFD_BROADCAST_COPIES retries="+retries+" duty="+duty+" packets="+packets+" air_bits="+air);
+            if(retries==10&&duty==100)
+            {
+                // A paced host frame every 155 ms (100 ms burst + 55 ms gap): with
+                // 11 copies each 40-byte packet holds about 8 ms * 11 = 88 ms of air.
+                Fresh();m=new Machine();tx=new SedsRadioHostPort(m);rx=new SedsRadioHostPort(m);
+                medium=Medium(rate:64000,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160);medium.AttachHost(0,tx);medium.AttachHost(1,rx);
+                t=0;for(var k=0;k<64;k++){foreach(var b in Enumerable.Range(0,40))tx.WriteChar((byte)b);t+=155000;Advance(t);}
+                Advance(t+2000000);
+                Assert(medium.ReadCounter(0,9)==64,"one SER_BRK-gapped host frame per packet: "+medium.ReadCounter(0,9));
+            }
+            if(duty==50)
+            {
+                Assert(Clock.NowUs>=air*1000000/64000*2-1000000,"duty cycle did not hold the sender off the air");
+            }
+        }
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES",null);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_DUTY_CYCLE",null);
+        Console.WriteLine("RADIO_RFD_BROADCAST_COPIES_DUTY_PASS");
+    }
     static void Main()
     {
         var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");
         if(schedule!=null){PacketizationLatency(schedule);return;}
         ModemCommandMode();
+        BroadcastCopiesAndDutyCycle();
         // An idle-delimited UART packet stays complete while another modem
         // owns the air. A later UART write cannot reopen that packet.
         foreach(var packetIdle in new ulong[]{10000,50000})

@@ -93,6 +93,13 @@ namespace Antmicro.Renode.Peripherals.UART
             }
             for(var i = 0; i < MaxNodes; i++)
                 for(var j = 0; j < MaxNodes; j++) links[i,j] = i != j;
+            // Opt-in RFD900x ASYNC air model: every packet to the broadcast
+            // DESTID goes on air 1 + GLOBAL_RETRIES times (receivers keep the
+            // first copy), and DUTY_CYCLE (percent) holds the sender off the air
+            // for duration*(100/duty-1) after each packet. Packetization stays
+            // the scenario's SER_BRK_DETMS (idleUs) and MAX_DATA (maxBurst).
+            globalRetries = EnvBounded("FIRMWARE_SIM_RFD_GLOBAL_RETRIES", 0, 0, 100);
+            dutyCycle = EnvBounded("FIRMWARE_SIM_RFD_DUTY_CYCLE", 100, 1, 100);
             // Opt-in RFD900x ASYNC command-mode model per station, for example
             // FIRMWARE_SIM_RFD_MODEM="0=6:SER_BRK_DETMS=20,19:RTSCTS=1". Stations
             // without an entry stay transparent, exactly as before.
@@ -136,6 +143,16 @@ namespace Antmicro.Renode.Peripherals.UART
                     modem.Set(number, name, value);
                 }
             lock(sync) { modemConfig[index] = modem; if(nodes[index] != null) nodes[index].Modem = modem; }
+        }
+
+        private static uint EnvBounded(string name, uint fallback, uint min, uint max)
+        {
+            var text = Environment.GetEnvironmentVariable(name);
+            if(string.IsNullOrEmpty(text)) return fallback;
+            uint value;
+            if(!uint.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value) || value < min || value > max)
+                throw new RecoverableException(name + " must be " + min + ".." + max);
+            return value;
         }
 
         // Resetting one MCU does not power-cycle this external radio medium.
@@ -209,7 +226,8 @@ namespace Antmicro.Renode.Peripherals.UART
         // Counters are monotonic for one attachment. Queue lengths and peak
         // lengths include an in-flight TX burst and scheduled UART RX bytes.
         // 0 TX depth,1 RX depth,2 TX peak,3 RX peak,4 refused TX bytes,
-        // 5 dropped RX bytes,6 lost-link bytes,7 air TX bytes,8 delivered bytes.
+        // 5 dropped RX bytes,6 lost-link bytes,7 air TX bytes,8 delivered bytes,
+        // 9 air packets (each counted once, however many broadcast copies).
         public ulong ReadCounter(int index, int counter)
         {
             lock(sync)
@@ -226,6 +244,7 @@ namespace Antmicro.Renode.Peripherals.UART
                     case 6: return n.LostLink;
                     case 7: return n.AirTx;
                     case 8: return n.Delivered;
+                    case 9: return n.AirPackets;
                     default: throw new RecoverableException("Unknown radio counter");
                 }
             }
@@ -242,7 +261,7 @@ namespace Antmicro.Renode.Peripherals.UART
                     if(nodes[i] == null) continue;
                     if(!first) b.Append(','); first = false;
                     b.Append("{\"index\":").Append(i).Append(",\"counters\":[");
-                    for(var c = 0; c < 9; c++) { if(c != 0) b.Append(','); b.Append(ReadCounter(i,c)); }
+                    for(var c = 0; c < 10; c++) { if(c != 0) b.Append(','); b.Append(ReadCounter(i,c)); }
                     b.Append(']');
                     if(nodes[i].Modem != null) b.Append(",\"modem\":").Append(nodes[i].Modem.Json());
                     b.Append('}');
@@ -347,7 +366,7 @@ namespace Antmicro.Renode.Peripherals.UART
                 if(active != null && now >= active.EndUs)
                 {
                     var sender = nodes[active.Sender];
-                    if(sender != null) { sender.PendingTx -= active.Bytes.Length; sender.AirTx += (ulong)active.Bytes.Length; }
+                    if(sender != null) { sender.PendingTx -= active.Bytes.Length; sender.AirTx += (ulong)active.Bytes.Length; sender.AirPackets++; sender.HoldUs = active.EndUs + active.HoldUs; }
                     completedAirBits += active.Bits;
                     for(var i = 0; i < MaxNodes; i++)
                     {
@@ -388,7 +407,7 @@ namespace Antmicro.Renode.Peripherals.UART
                     {
                         var i = (cursor + step) % MaxNodes;
                         var n = nodes[i];
-                        if(n == null || n.Packets.Count == 0) continue;
+                        if(n == null || n.Packets.Count == 0 || now < n.HoldUs) continue;
                         var packet = n.Packets.Peek();
                         if(now < packet.LastReadyUs
                             || (packet.Count < maxBurst && now < packet.LastReadyUs + idleUs)) continue;
@@ -397,9 +416,10 @@ namespace Antmicro.Renode.Peripherals.UART
                         var ready = packet.Count;
                         var bytes = new byte[ready];
                         for(var j = 0; j < ready; j++) bytes[j] = n.Tx.Dequeue().Value;
-                        var bits = (ulong)ready * 8 + overheadBits;
+                        var bits = ((ulong)ready * 8 + overheadBits) * (1 + globalRetries);
                         var duration = (bits * 1000000 + airRate - 1) / airRate;
-                        active = new Burst { Sender = i, Bytes = bytes, Bits = bits, EndUs = now + duration,
+                        var hold = dutyCycle >= 100 ? 0UL : duration * (100 - dutyCycle) / dutyCycle;
+                        active = new Burst { Sender = i, Bytes = bytes, Bits = bits, EndUs = now + duration, HoldUs = hold,
                             Recipients = (Node[])nodes.Clone() };
                         cursor = (i + 1) % MaxNodes;
                         break;
@@ -610,10 +630,10 @@ namespace Antmicro.Renode.Peripherals.UART
             public TxPacket PacketTail;
             public readonly Queue<TimedByte> Rx = new Queue<TimedByte>();
             public int PendingTx;
-            public ulong InputReady, OutputReady, PeakTx, PeakRx, RefusedTx, DroppedRx, LostLink, AirTx, Delivered;
+            public ulong InputReady, OutputReady, PeakTx, PeakRx, RefusedTx, DroppedRx, LostLink, AirTx, Delivered, AirPackets, HoldUs;
         }
         private sealed class TxPacket { public int Count; public ulong LastReadyUs; }
-        private sealed class Burst { public int Sender; public byte[] Bytes; public ulong Bits, EndUs; public Node[] Recipients; }
+        private sealed class Burst { public int Sender; public byte[] Bytes; public ulong Bits, EndUs, HoldUs; public Node[] Recipients; }
         private struct Delivery
         {
             public Delivery(Node node, byte value) { Node = node; Value = value; }
@@ -713,6 +733,7 @@ namespace Antmicro.Renode.Peripherals.UART
         private readonly uint airRate, uartBaud, overheadBits;
         private readonly int txFifo, rxFifo, maxBurst;
         private readonly ulong idleUs, turnUs;
+        private readonly uint globalRetries, dutyCycle;
         private LimitTimer timer;
         private Burst active;
         private int cursor;

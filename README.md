@@ -111,6 +111,7 @@ The organization package administrator must make the `firmwaresimulator` contain
 - [Board layouts](docs/board-layouts.md)
 - [Peripheral models](docs/peripherals.md)
 - [Hardware fidelity and explicit limits](docs/hardware-fidelity.md)
+- [Hardware-faithful RFD radio and station time](docs/hardware-faithful-radio.md)
 - [Crash and register debugging](docs/debugging.md)
 - [Adding MCU architectures and HAL backends](docs/adding-architectures.md)
 
