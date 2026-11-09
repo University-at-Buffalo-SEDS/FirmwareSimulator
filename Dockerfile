@@ -22,8 +22,13 @@ RUN git init /groundstation \
          cargo update --manifest-path /groundstation/Cargo.toml -p SEDSnet; \
        fi \
     && cargo tree --locked --manifest-path /groundstation/Cargo.toml -p SEDSnet --depth 0 > /groundstation/sedsnet-source-proof.txt \
-    && cargo build --locked --manifest-path /groundstation/Cargo.toml \
-         -p groundstation_backend --release --features hitl_mode
+    && if grep -q '^hitl_mode *=' /groundstation/backend/Cargo.toml; then \
+         cargo build --locked --manifest-path /groundstation/Cargo.toml \
+           -p groundstation_backend --release --features hitl_mode; \
+       else \
+         cargo build --locked --manifest-path /groundstation/Cargo.toml \
+           -p groundstation_backend --release --features firmware_sim; \
+       fi
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS uart-tests
 RUN apt-get update && apt-get install -y --no-install-recommends dosfstools mtools && rm -rf /var/lib/apt/lists/*
@@ -90,6 +95,9 @@ ENV SIM_ARCH=all
 ENV FIRMWARE_SIM_ROOT=/opt/firmware-sim
 ENV FIRMWARE_SIM_CONTAINER=1
 ENV RENODE=/opt/renode/renode
+# One GroundStation binary holds every station mode; the bundled backend starts
+# in HITL (a backend built with the legacy hitl_mode feature ignores this).
+ENV GS_STATION_MODE=hitl
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libudev1 dosfstools mtools \

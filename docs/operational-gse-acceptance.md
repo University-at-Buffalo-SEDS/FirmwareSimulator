@@ -3,11 +3,18 @@
 Machine-readable run records are kept in the external artifact archive described in [qualification status](qualification-status.md).
 
 Use `Dockerfile.operational-sequences` with a source-only `gs`, `sdk` and `sim`
-context and the SDK verifier/provenance files. The backend is explicitly compiled
-with `test_fire_mode,firmware_sim`, without `hitl_mode` or `testing`. The recipe
-contract rejects other policy feature combinations. The runtime controller also
-requires startup flags `testing=false hitl_mode=false test_fire_mode=true` and an
-ordinary qualification response from `/api/gse/status`.
+context and the SDK verifier/provenance files. GroundStation builds one backend
+binary that holds every station mode, so the recipe compiles it with
+`--features firmware_sim` only and the image starts it in test fire with
+`ENV GS_STATION_MODE=test_fire`. A backend that still has the legacy
+`test_fire_mode` Cargo feature is detected from its `backend/Cargo.toml` and
+compiled with `test_fire_mode,firmware_sim` instead (it ignores
+`GS_STATION_MODE`). The recipe contract rejects any other feature set,
+`hitl_mode` or `testing`, and any other start mode. The controller also sets
+`GS_STATION_MODE=test_fire` in the GS environment and requires the startup flags
+`testing=false hitl_mode=false test_fire_mode=true` (the backend prints its
+station mode there) and an ordinary qualification response from
+`/api/gse/status`.
 
 `scripts/test-operational-gse.py` takes a frozen MCU cohort, a linked topology
 template, an immutable image ID and a NEW evidence directory. It uses only the
@@ -73,7 +80,8 @@ T0 refinement (30ms in this run), preserving the same recording session.
 ## Ordinary flight variant
 
 `Dockerfile.operational-flight` enables only `firmware_sim`; ordinary operational
-policy stays active. Run the controller with `--flight --positive-fill --fire`
+policy stays active. The controller starts the GS with `GS_STATION_MODE=normal`
+and the recipe contract rejects any other start mode. Run the controller with `--flight --positive-fill --fire`
 against a separately frozen seven-board cohort. The fixture initially supplies
 raw no-fix NMEA, verifies that QD is blocked after filling, then enables a real
 NMEA fix and waits for RF GPS telemetry. QD must receive its actual actuator

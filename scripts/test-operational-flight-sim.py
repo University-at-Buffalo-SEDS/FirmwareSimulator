@@ -300,6 +300,9 @@ def topology(duration_ms, wall_freshness_scale=30):
             'env': {'RUST_LOG': 'info', 'GS_DEBUG_PRINTS': '0', 'GS_SIMULATED_SERIAL_PTY': '1', 'GS_BIND_ADDRESS': '0.0.0.0:3000',
                     'GS_HTTPS_BIND_ADDRESS': 'off', 'GS_VIDEO_MANAGED': '0', 'GS_VIDEO_DISCOVERY': '0',
                     'GS_STATION_DISCOVERY_BIND': '127.0.0.1:0', 'GS_VIDEO_DISCOVERY_BIND': '127.0.0.1:0', 'GS_SIM_MODE': '0',
+                    # One binary holds every station mode; start the ordinary one (older
+                    # backends ignore this and are checked by the startup line below).
+                    'GS_STATION_MODE': 'normal',
                     'GS_COMMS_LINK_CONFIG': '/simulation/comms.json', 'GS_LAYOUT_PATH': '/opt/groundstation/backend/layout/layout.json',
                     'GS_HEARTBEAT_PERIOD_MS': '500', 'GS_SIM_NETWORK_EPOCH_MS': '1767225600000',
                     # firmware_sim build only: stretch the wall-clock board/retraction

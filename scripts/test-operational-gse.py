@@ -9,12 +9,28 @@ from pathlib import Path
 import argparse,base64,hashlib,hmac,importlib.util,json,os,re,shutil,subprocess,time,urllib.request,urllib.error
 
 def ordinary_recipe(text, flight=False):
-    """Fail closed if a simulator builder silently selects policy-bypassing modes."""
+    """Fail closed if a simulator builder silently selects policy-bypassing modes.
+
+    GroundStation now builds one binary (`--features firmware_sim`) and picks the
+    station mode at start from GS_STATION_MODE. A recipe may keep a fallback
+    build with the legacy `test_fire_mode,firmware_sim` features for backends
+    that still have them. The test-fire recipe must start the one binary in
+    test fire; the flight recipe must not select any station mode."""
     commands=[part for part in text.replace('\\\n',' ').split('&&') if 'cargo build' in part and 'groundstation_backend' in part]
-    if len(commands)!=1:raise ValueError('Expected one explicit backend release command')
-    features=re.search(r'--features\s+([\w,]+)',commands[0])
-    if not features or set(features[1].split(','))!=({'firmware_sim'} if flight else {'test_fire_mode','firmware_sim'}):
-        raise ValueError('Operational acceptance requires test_fire_mode,firmware_sim only')
+    if not 1<=len(commands)<=2:raise ValueError('Expected one explicit backend release command, plus an optional legacy fallback')
+    one_binary=frozenset({'firmware_sim'})
+    allowed={one_binary} if flight else {one_binary,frozenset({'test_fire_mode','firmware_sim'})}
+    found=[]
+    for command in commands:
+        features=re.search(r'--features\s+([\w,]+)',command)
+        found.append(frozenset(features[1].split(','))if features else None)
+    if any(f not in allowed for f in found) or len(set(found))!=len(found):
+        raise ValueError('Operational acceptance requires firmware_sim'+('' if flight else ' (or legacy test_fire_mode,firmware_sim)')+' only')
+    modes=set(re.findall(r'GS_STATION_MODE=(\w+)',text))
+    if flight:
+        if modes-{'normal'}:raise ValueError('The flight build must start in the normal station mode')
+    elif one_binary in found and modes!={'test_fire'}:
+        raise ValueError('The one-binary build must start with GS_STATION_MODE=test_fire')
 
 def raw_pressure(pressure):return max(0,min(4095,round(pressure*3103/2000)))
 def plant_pressure(previous,dt_ms,valves):
@@ -132,8 +148,8 @@ def prepare(args):
     if not args.flight:topology['links']=[link for link in topology['links']if link['name']in('fill_pico','fill_can')]
     host=topology['host_nodes'][0]
     if not args.flight:host['serial_links']=[s for s in host['serial_links']if s['link']=='fill_pico']
-    host['env']={'RUST_LOG':'info','GS_DEBUG_PRINTS':'0','GS_SIMULATED_SERIAL_PTY':'1','GS_BIND_ADDRESS':'127.0.0.1:0','GS_HTTPS_BIND_ADDRESS':'off','GS_VIDEO_MANAGED':'0','GS_VIDEO_DISCOVERY':'0','GS_STATION_DISCOVERY_BIND':'127.0.0.1:0','GS_VIDEO_DISCOVERY_BIND':'127.0.0.1:0','GS_SIM_MODE':'0','GS_COMMS_LINK_CONFIG':'/simulation/comms.json','GS_LAYOUT_PATH':'/opt/groundstation/backend/layout/layout_test_fire.json','GS_HEARTBEAT_PERIOD_MS':'500','GS_SIM_NETWORK_EPOCH_MS':'1767225600000','GS_NETWORK_VARIABLE_CACHE':'/diagnostics/state/network-variables.json','GS_USERS_FILE':'/simulation/users.json','GS_GSE_CONFIG':'/simulation/gse.json','GS_GSE_QUALIFICATION':'/diagnostics/state/qualification.json','GS_FILL_TARGETS_CONFIG':'/simulation/fill-targets.json','GS_CHECKLISTS_FILE':'/diagnostics/state/checklists.json','GS_LOADCELL_CALIBRATION_PATH':'/diagnostics/state/calibration.json','GS_CALIBRATION_CONFIG_PATH':'/diagnostics/state/calibration-config.json'}
-    if args.flight:host['env']['GS_LAYOUT_PATH']='/opt/groundstation/backend/layout/layout.json'
+    host['env']={'RUST_LOG':'info','GS_DEBUG_PRINTS':'0','GS_SIMULATED_SERIAL_PTY':'1','GS_BIND_ADDRESS':'127.0.0.1:0','GS_HTTPS_BIND_ADDRESS':'off','GS_VIDEO_MANAGED':'0','GS_VIDEO_DISCOVERY':'0','GS_STATION_DISCOVERY_BIND':'127.0.0.1:0','GS_VIDEO_DISCOVERY_BIND':'127.0.0.1:0','GS_SIM_MODE':'0','GS_STATION_MODE':'test_fire','GS_COMMS_LINK_CONFIG':'/simulation/comms.json','GS_LAYOUT_PATH':'/opt/groundstation/backend/layout/layout_test_fire.json','GS_HEARTBEAT_PERIOD_MS':'500','GS_SIM_NETWORK_EPOCH_MS':'1767225600000','GS_NETWORK_VARIABLE_CACHE':'/diagnostics/state/network-variables.json','GS_USERS_FILE':'/simulation/users.json','GS_GSE_CONFIG':'/simulation/gse.json','GS_GSE_QUALIFICATION':'/diagnostics/state/qualification.json','GS_FILL_TARGETS_CONFIG':'/simulation/fill-targets.json','GS_CHECKLISTS_FILE':'/diagnostics/state/checklists.json','GS_LOADCELL_CALIBRATION_PATH':'/diagnostics/state/calibration.json','GS_CALIBRATION_CONFIG_PATH':'/diagnostics/state/calibration-config.json'}
+    if args.flight:host['env'].update(GS_LAYOUT_PATH='/opt/groundstation/backend/layout/layout.json',GS_STATION_MODE='normal')
     shutil.copyfile(config/'checklists.json',diagnostics/'state/checklists.json');shutil.copyfile(config/'calibration.json',diagnostics/'state/calibration.json')
     for p in (diagnostics/'state').iterdir():p.chmod(0o660)
     topology['host_nodes']=[host]

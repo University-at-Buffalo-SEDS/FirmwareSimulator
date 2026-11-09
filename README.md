@@ -124,7 +124,12 @@ bash scripts/test-image.sh firmware-simulator:local
 ```
 
 The image builds the GroundStation backend from dev with its version4 SEDSnet
-selector. Reproducible release checks can supply `GROUNDSTATION_REF` and
+selector. GroundStation's one binary holds every station mode: the image builds
+it with `--features firmware_sim` and starts it in HITL through
+`ENV GS_STATION_MODE=hitl` (override the variable in a host node's `env` to pick
+`normal`, `test_fire` or `testing`). A GroundStation ref that still has the
+legacy `hitl_mode` Cargo feature is built with `--features hitl_mode` as before.
+Reproducible release checks can supply `GROUNDSTATION_REF` and
 `GROUNDSTATION_SEDSNET_RELEASE` as Docker build arguments. Test AMD64 and ARM64
 images on their native hosts before publishing the combined release manifest.
 

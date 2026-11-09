@@ -11,8 +11,28 @@ class Contracts(unittest.TestCase):
  def test_builder_requires_ordinary_policy_features(self):
   recipe=(p.parents[1]/'Dockerfile.operational-sequences').read_text();fixture.ordinary_recipe(recipe)
   self.assertIn('COPY sim/renode/peripherals/SedsSpiSensors.cs /opt/firmware-sim/renode/peripherals/SedsSpiSensors.cs',recipe)
-  for features in ['hitl_mode','test_fire_mode,firmware_sim,testing','test_fire_mode','test_fire_mode,firmware_sim,hitl_mode']:
+  self.assertIn('ENV GS_STATION_MODE=test_fire\n',recipe)
+  for features in ['hitl_mode','test_fire_mode,firmware_sim,testing','test_fire_mode','test_fire_mode,firmware_sim,hitl_mode','firmware_sim']:
    with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('--release --features test_fire_mode,firmware_sim','--release --features '+features))
+  # The one-binary build: no policy features, test fire chosen at start.
+  for features in ['hitl_mode','firmware_sim,testing','firmware_sim,hitl_mode','test_fire_mode,firmware_sim','raspberry_pi,firmware_sim']:
+   with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('--release --features firmware_sim','--release --features '+features))
+  for mode in ['hitl','testing','normal']:
+   with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('ENV GS_STATION_MODE=test_fire','ENV GS_STATION_MODE='+mode))
+  with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('ENV GS_STATION_MODE=test_fire\n',''))
+ def test_legacy_and_one_binary_recipes_are_each_accepted_alone(self):
+  legacy='cargo update -p SEDSnet && cargo build --locked --release --features test_fire_mode,firmware_sim -p groundstation_backend && cp a b'
+  fixture.ordinary_recipe(legacy)
+  one='ENV GS_STATION_MODE=test_fire\nRUN cargo build --locked --release --features firmware_sim -p groundstation_backend && cp a b'
+  fixture.ordinary_recipe(one)
+  with self.assertRaises(ValueError):fixture.ordinary_recipe(one.replace('GS_STATION_MODE=test_fire','GS_STATION_MODE=hitl'))
+  with self.assertRaises(ValueError):fixture.ordinary_recipe(one,flight=True)
+  fixture.ordinary_recipe(one.replace('ENV GS_STATION_MODE=test_fire\n',''),flight=True)
+ def test_controller_starts_the_backend_in_the_checked_mode(self):
+  prepare=next(n for n in ast.parse(p.read_text()).body if isinstance(n,ast.FunctionDef)and n.name=='prepare')
+  source=ast.get_source_segment(p.read_text(),prepare)
+  self.assertIn("'GS_STATION_MODE':'test_fire'",source)
+  self.assertIn("GS_STATION_MODE='normal'",source)
  def test_flight_builder_retains_ordinary_policy_and_requires_full_radio_cohort(self):
   recipe=(p.parents[1]/'Dockerfile.operational-flight').read_text()
   fixture.ordinary_recipe(recipe,flight=True)
@@ -22,6 +42,8 @@ class Contracts(unittest.TestCase):
   with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe,flight=False)
   for features in ['testing,firmware_sim','hitl_mode,firmware_sim','test_fire_mode,firmware_sim']:
    with self.assertRaises(ValueError):fixture.ordinary_recipe(recipe.replace('--release --features firmware_sim','--release --features '+features),flight=True)
+  for mode in ['hitl','test_fire','testing']:
+   with self.assertRaises(ValueError):fixture.ordinary_recipe('ENV GS_STATION_MODE='+mode+'\n'+recipe,flight=True)
  def test_flight_proof_requires_actual_evaluation_not_just_command_acceptance(self):
   with tempfile.TemporaryDirectory()as root:
    d=Path(root)/'bay-live-test';d.mkdir();p=d/'memory-probes.txt'
