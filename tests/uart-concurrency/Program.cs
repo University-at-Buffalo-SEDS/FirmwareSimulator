@@ -12,9 +12,14 @@ class Program
 {
     const int Count = 500000;
     static byte Pattern(int i) => (byte)(i * 73 + (i >> 8));
+    // SEDS_UART_GATE is read once, when the model's type initializes, so it is
+    // set before any UART exists. No gate file exists until CheckLinkGate.
+    static readonly string GatePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"uart-gate-{Environment.ProcessId}.txt");
     static void Main()
     {
+        Environment.SetEnvironmentVariable("SEDS_UART_GATE", $"other:usart1:/nonexistent;bench:usart2:{GatePath}");
         CheckByteRegisters();
+        CheckLinkGate();
         CheckIdleAndOverrun();
         CheckG4FifoDepth();
         CheckConcurrentEnqueueDuringTimerDisable();
@@ -117,6 +122,45 @@ class Program
             if(uart.ReadByte(0x24) != value) throw new Exception("RX FIFO overwrote accepted bytes");
         Console.WriteLine("PASS: G4 eight-byte FIFO headroom and bounded overrun");
     }
+    // SEDS_UART_GATE cuts the selected UART (machine and peripheral names) in
+    // both directions while its file reads "1", and reports it in a sidecar.
+    static void CheckLinkGate()
+    {
+        // The stub timers are named, so the UART constructed last owns them.
+        var uart = new SedsStm32Uart(new Machine("bench", "usart2"));
+        uart.WriteDoubleWord(0, 13); uart.WriteDoubleWord(0x0c, 1476);
+        var sent = new System.Collections.Generic.List<byte>();
+        uart.CharReceived += value => sent.Add(value);
+        void Transmit(SedsStm32Uart u, byte value) { u.WriteDoubleWord(0x28, value); LimitTimer.For("uartTx").Fire(); }
+        bool Receive(SedsStm32Uart u, byte value)
+        {
+            u.WriteChar(value); LimitTimer.For("uartRx").Fire();
+            return (u.ReadDoubleWord(0x1c) & 32) != 0 && u.ReadDoubleWord(0x24) == value;
+        }
+        Transmit(uart, 1);
+        if(!Receive(uart, 2) || sent.Count != 1) throw new Exception("gate without its file cut the link");
+        System.IO.File.WriteAllText(GatePath, "1");
+        Thread.Sleep(80);  // the file is polled at most every 50 ms
+        Transmit(uart, 3);
+        if(sent.Count != 1) throw new Exception("cut link delivered a transmitted byte");
+        if(Receive(uart, 4)) throw new Exception("cut link delivered a received byte");
+        // Written on each transition (drop counts are refreshed every second).
+        var status = System.IO.File.ReadAllText(GatePath + ".status");
+        if(!status.StartsWith("cut=1 transitions=1 ")) throw new Exception($"gate status: {status}");
+        System.IO.File.WriteAllText(GatePath, "0");
+        Thread.Sleep(80);
+        Transmit(uart, 6);
+        if(sent.Count != 2 || sent[1] != 6 || !Receive(uart, 7)) throw new Exception("restored link lost bytes");
+        System.IO.File.WriteAllText(GatePath, "1");
+        var other = new SedsStm32Uart(new Machine("bench", "usart1"));
+        other.WriteDoubleWord(0, 13); other.WriteDoubleWord(0x0c, 1476);
+        var otherSent = 0;
+        other.CharReceived += _ => otherSent++;
+        Transmit(other, 5);
+        if(otherSent != 1 || !Receive(other, 8)) throw new Exception("gate cut a UART it does not select");
+        System.IO.File.Delete(GatePath); System.IO.File.Delete(GatePath + ".status");
+        Console.WriteLine("PASS: SEDS_UART_GATE cuts only the selected UART, both ways, and reports it");
+    }
     static void CheckConcurrentEnqueueDuringTimerDisable()
     {
         var uart = new SedsStm32Uart(new Machine());
@@ -133,8 +177,34 @@ class Program
 }
 namespace Antmicro.Renode.Core
 {
-    public interface IMachine { object ClockSource { get; } }
-    public class Machine : IMachine { public object ClockSource => null; }
+    public interface IMachine
+    {
+        object ClockSource { get; }
+        TimeSource LocalTimeSource { get; }
+        bool TryGetLocalName(object peripheral, out string name);
+    }
+    public class Machine : IMachine
+    {
+        public Machine(string name = "machine-0", string peripheral = "usart1") { Name = name; Peripheral = peripheral; }
+        public readonly string Name, Peripheral;
+        public object ClockSource => null;
+        public TimeSource LocalTimeSource { get; } = new TimeSource();
+        public bool TryGetLocalName(object peripheral, out string name) { name = Peripheral; return true; }
+    }
+    public class TimeSource { public TimeSpan ElapsedVirtualTime { get; set; } }
+    public class Emulation
+    {
+        public bool TryGetMachineName(IMachine machine, out string name)
+        {
+            name = (machine as Machine)?.Name;
+            return name != null;
+        }
+    }
+    public class EmulationManager
+    {
+        public static EmulationManager Instance { get; } = new EmulationManager();
+        public Emulation CurrentEmulation { get; } = new Emulation();
+    }
     public class GPIO { public bool IsSet; public void Set(bool value) { IsSet=value; } }
 }
 namespace Antmicro.Renode.Peripherals.Bus
