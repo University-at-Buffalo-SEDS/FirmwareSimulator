@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Full seven-board linked simulation (see docs/hardware-faithful-radio.md for --radio rfd-faithful
---faithful-time and the faithful, mode_switch, rrls_faithful, gps_time and vb_stale scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
+--faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, vb_stale and stale_auto_abort scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
 umbilical) with the one-binary GS (+firmware_sim) started in a runtime station mode
 (GS_STATION_MODE=hitl|test_fire|normal; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
 recorder (virtual-time stamped API snapshots) and scripted scenarios.
@@ -109,7 +109,8 @@ def build_config(a):
                               'GS_LOADCELL_CALIBRATION_PATH': 'loadcells.json', 'GS_STATION_POSITIONS_PATH': 'station-positions.json',
                               'GS_CHECKLISTS_FILE': 'checklists.json', 'GS_MISSION_SETTINGS_PATH': 'mission-settings.json'}.items():
             rr['env'][k_] = '/tmp/simulator-rrls-' + filename
-        for k_ in ('GS_LAYOUT_PATH', 'GS_SIM_ROUTER_TIME_DIVISOR', 'GS_SIM_NETWORK_EPOCH_MS', 'GS_HEARTBEAT_PERIOD_MS', 'GS_SIM_WALL_FRESHNESS_SCALE'):
+        for k_ in ('GS_LAYOUT_PATH', 'GS_SIM_ROUTER_TIME_DIVISOR', 'GS_SIM_NETWORK_EPOCH_MS', 'GS_HEARTBEAT_PERIOD_MS', 'GS_SIM_WALL_FRESHNESS_SCALE',
+                   'LD_PRELOAD', 'FAKETIME', 'FAKETIME_DONT_FAKE_MONOTONIC'):
             if k_ in env: rr['env'][k_] = env[k_]
         topo['host_nodes'].append(rr)
         radio_link['endpoints'].append({'node': 'rrls', 'peripheral': 'radio'})
@@ -1243,7 +1244,7 @@ def sc_rrls_faithful(sim):
         rf = sim.rows().get('RF') or {}; op = rf.get('operation') or {}
         if op.get('action') == 'query' and (op.get('age_ms') or 10**9) <= (sim.vclock() - v2) * a.faithful_time + 2000: got = sim.vclock(); break
         time.sleep(.2)
-    sim.check('(2) RRLS-issued recovery query is seen at the primary within 1 s', got is not None and got - v2 <= 1000, http=c, body=str(b)[:300], after_v_ms=(got - v2) if got else None)
+    sim.check('(2) RRLS-issued recovery query is seen at the primary within 1 s', c == 200 and got is not None and got - v2 <= 1000, http=c, body=str(b)[:300], after_v_ms=(got - v2) if got else None)
     # (3b) broken direct path
     wait_until_v(sim, S['cut0'] * 1000, 'direct path broken'); cut = []
     while sim.vclock() < S['cut1'] * 1000:
@@ -1291,6 +1292,15 @@ def sc_mode_switch(sim):
     try: sim.ws = WsWatch(sim, sim.origin, sim.token, tag='ws-modes')
     except Exception as e: sim.log_action('ws_failed', error=repr(e))
     sim.faithful = (sim.out / 'faithful.jsonl').open('a')
+    # Refused while a sequence is actively moving valves: the startup valve sequence right after boot.
+    seen_active = None
+    while sim.vclock() < 25000 and not sim.stop.is_set():
+        c, g = sim.api('/api/gse/status')
+        ph = (g or {}).get('phase') if c == 200 else None
+        if ph and ph not in ('idle', 'cancelled', 'passed', 'paused', 'fault') and seen_active is None:
+            seen_active = ph; switch_refused(sim, f'sequence actively moving valves (phase {ph})')
+        time.sleep(.2)
+    if seen_active is None: sim.log_action('no_active_sequence_observed_at_startup')
     wait_until_v(sim, 30000, 'startup sequence finished'); gs_view(sim)
     sim.check('switch at Idle right after the startup sequence finished', switch_round_trip(sim, 'idle-after-startup-sequence'))
     wait_until_v(sim, (S['dq0'] + 8) * 1000, 'DAQ missing')
@@ -1303,18 +1313,80 @@ def sc_mode_switch(sim):
     sim.check('switch while Aborted, a board aborted and the AV-bay ABORT undeliverable', switch_round_trip(sim, 'aborted-undeliverable'), aborted_boards=ab,
               radio_budget=((sim.st().get('netdiag') or {}).get('radio_tx_budget') or {}).get('pending_control_bytes'))
     c, b = sim.api('/api/gse/abort/clear', {}); sim.log_action('clear_abort', http=c, body=b)
+    sim.wait_v(3000)
+    sim.check('switch at Idle after the abort is cleared', switch_round_trip(sim, 'after-abort-clear'), clear_http=c)
     wait_until_v(sim, (S['cut1'] + 5) * 1000, 'direct radio restored')
     for cmd in ('Dump',):
-        sim.command(cmd); sim.wait_v(1500)
+        sim.command(cmd); sim.wait_v(3000); sim.command(cmd); sim.wait_v(3000)
         gs = sim.api('/api/gse/status')[1]
         sim.log_action('manual_state', manual=(gs or {}).get('manual_control'), valves=(gs or {}).get('valves'))
-        switch_refused(sim, f'manual control ({cmd})')
-        sim.command(cmd); sim.wait_v(3000)
+        sim.check(f'switch at Idle after a manual valve command ({cmd}) completed', switch_round_trip(sim, f'after-manual-{cmd}'))
     gs_view(sim)
     if sim.ws: (sim.out / 'ws-counts.json').write_text(json.dumps(sim.ws.counts, indent=1))
 
 
 SCENARIOS['mode_switch'] = sc_mode_switch
+
+
+AV_BAY = ['RF', 'FC', 'PB']
+
+
+def sc_stale_auto_abort(sim):
+    """Normal mode at Idle on the faithful RFD radio. A GB CAN cut (sched gbc0..gbc1) raises the automatic ABORT
+    while the radio is saturated. GS 0715aec retires an automatic Abort by age only once its cause has cleared.
+    - restored (gbc1 - gbc0 < 30): GB is back before the 30 s mark; the abort is retired with its cause cleared and
+      the AV bay never aborts afterwards;
+    - offline (gbc1 - gbc0 >= 60): the abort keeps being delivered past 30 s (no retirement by age); an operator
+      Clear still retires it, and the AV bay never aborts afterwards."""
+    a = sim.a; s0, s1 = a.sched['gbc0'], a.sched['gbc1']; offline = (s1 - s0) >= 60
+    def notes():
+        code, n = sim.api('/api/notifications')
+        lst = n if isinstance(n, list) else ((n or {}).get('notifications') or []) if code == 200 else []
+        return [x.get('message', '') if isinstance(x, dict) else str(x) for x in lst]
+    def retired(): return [t for t in notes() if 'Stale automatic Abort retired' in t]
+    sim.wait_ready(timeout_ms=a.ready_timeout_ms)  # may time out on the faithful radio; the scenario proceeds
+    wait_until_v(sim, s0 * 1000, 'GB CAN cut')
+    snap = sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') == 15, 60000, 'automatic abort raised')
+    v_abort = sim.vclock()
+    sim.check('GB offline raises the automatic abort', snap is not None)
+    if snap is None: return
+    clean = [b for b in AV_BAY if b not in sim.aborted_set(sim.st())]
+    sim.log_action('av_bay_clean_at_abort', boards=clean, offline_case=offline)
+    if not offline:
+        wait_until_v(sim, s1 * 1000 + 2000, 'GB back')
+        wait_until_v(sim, v_abort + 40000, 'abort older than 30 s')
+        r = retired()
+        sim.check('restored GB: the automatic Abort is retired by age with its cause cleared', bool(r) and any('clear' in t.lower() for t in r), retired=r[-3:])
+    else:
+        wait_until_v(sim, v_abort + 40000, 'abort older than 30 s, GB still offline')
+        r = retired()
+        code, diag = sim.api('/api/network_diagnostics')
+        sim.check('GB still offline: the automatic Abort is not retired by age past 30 s', not r, retired=r[-3:],
+                  pending_control_bytes=((diag or {}).get('radio_tx_budget') or {}).get('pending_control_bytes') if code == 200 else None)
+    v_clear = None
+    for _ in range(30):
+        code, body = sim.api('/api/gse/abort/clear', {})
+        sim.log_action('clear_gse_abort', http=code, body=body)
+        if code == 200:
+            v_clear = sim.vclock(); break
+        sim.wait_v(2000)
+    sim.check('Clear GSE abort accepted', v_clear is not None)
+    if v_clear is None: return
+    if offline:
+        sim.wait_v(5000); r = retired()
+        sim.check('GB still offline: operator Clear retires the automatic Abort', bool(r), retired=r[-3:])
+    clean = [b for b in AV_BAY if b not in sim.aborted_set(sim.st())]
+    late = set()
+    while sim.vclock() - v_clear < 60000 and not sim.stop.is_set():
+        late |= set(sim.aborted_set(sim.st())) & set(clean)
+        sim.wait_v(1000)
+    sim.check('no AV bay board aborts after the abort is retired/cleared', not late, late=sorted(late), clean_at_clear=clean)
+    code, diag = sim.api('/api/network_diagnostics')
+    sim.result['reliable_after'] = (diag or {}).get('reliable') if code == 200 else diag
+    sim.result['notifications_tail'] = notes()[-10:]
+
+
+SCENARIOS['stale_auto_abort'] = sc_stale_auto_abort
 
 
 if __name__ == '__main__':
@@ -1362,6 +1434,7 @@ if __name__ == '__main__':
     if a.sched.get('vbc0'): a.can_cut.append(f"VB:{a.sched['vbc0']}:{a.sched['vbc1']}")
     if a.sched.get('cut0'): a.radio_cut.append(f"{a.sched['cut0']}:{a.sched['cut1']}")
     if a.sched.get('dq0'): a.can_cut.append(f"DAQ:{a.sched['dq0']}:{a.sched['dq1']}")
+    if a.sched.get('gbc0'): a.can_cut.append(f"GB:{a.sched['gbc0']}:{a.sched['gbc1']}")
     if a.sched.get('hostrb'): a.gs_reboot.append(str(a.sched['hostrb'])); a.board_reboot.append(f"rrls:{a.sched['hostrb']}")
     import signal
     def _term(*_): raise KeyboardInterrupt('SIGTERM')
