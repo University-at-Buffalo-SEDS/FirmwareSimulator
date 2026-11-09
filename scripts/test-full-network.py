@@ -844,8 +844,7 @@ def station_mode_switch(sim, target, label):
     if ws:
         t_end = time.time() + 20
         while time.time() < t_end and not any(e['ty'] == 'StationModeChanged' for e in ws.events[n0:]): time.sleep(.2)
-        evs = [e for e in ws.events[n0:] if e['ty'] in ('StationModeChanged', 'ActionPolicy')][:4]
-        smc = next((e for e in evs if e['ty'] == 'StationModeChanged'), None)
+        smc = next((e for e in ws.events[n0:] if e['ty'] == 'StationModeChanged'), None)
         pol_after = next((e for e in ws.events[n0:] if e['ty'] == 'ActionPolicy' and smc and e['n'] and ws.events.index(e) > ws.events.index(smc)), None)
         sim.check(f'{label}: websocket announces StationModeChanged then a fresh ActionPolicy', smc is not None and pol_after is not None and (smc.get('data') or {}).get('layout_revision') == (st2 or {}).get('layout_revision'),
                   station_mode_changed=smc, ws_alive=ws.alive, policy_after=bool(pol_after))
@@ -1060,7 +1059,11 @@ SCENARIOS['faithful'] = sc_faithful
 def sc_vb_stale(sim):
     """VB offline ~30 s then back (scheduled --can-cut VB:s0:s1): no [S] stale-sensor warning during the outage or
     within 10 s of reconnecting; an injected F (invalid, raw 4095) fault inside the grace still warns."""
-    a = sim.a; s0, s1 = a.sched['vbc0'], a.sched['vbc1']
+    a = sim.a
+    if a.sched.get('vbrb'):  # VB power cycle (scheduled reboot); the outage is the reboot plus about 5 s of boot
+        s0 = a.sched['vbrb']; s1 = s0 + 5
+    else:
+        s0, s1 = a.sched['vbc0'], a.sched['vbc1']
     sim.ws = WsWatch(sim, sim.origin, sim.token, tag='ws-vb')
     def sensor_events(lo, hi, needle):
         return [e for e in sim.ws.events if e['ty'] in ('Warning', 'Notification', 'Error') and lo <= e['v'] <= hi and needle in json.dumps(e.get('data'))]
@@ -1431,6 +1434,7 @@ if __name__ == '__main__':
     if a.sched.get('can0'): a.can_cut.append(f"DAQ:{a.sched['can0']}:{a.sched['can1']}")
     if a.sched.get('gsrb'): a.gs_reboot.append(str(a.sched['gsrb']))
     if a.sched.get('abrb'): a.board_reboot.append(f"AB:{a.sched['abrb']}")
+    if a.sched.get('vbrb'): a.board_reboot.append(f"VB:{a.sched['vbrb']}")
     if a.sched.get('vbc0'): a.can_cut.append(f"VB:{a.sched['vbc0']}:{a.sched['vbc1']}")
     if a.sched.get('cut0'): a.radio_cut.append(f"{a.sched['cut0']}:{a.sched['cut1']}")
     if a.sched.get('dq0'): a.can_cut.append(f"DAQ:{a.sched['dq0']}:{a.sched['dq1']}")

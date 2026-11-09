@@ -73,7 +73,7 @@ More scenarios:
 | `rrls_faithful` | The RRLS on the same medium (`--rrls`, AV-bay nodes). Pairing over the radio finishes within about 1 s per step. The idle RRLS is seen alive at the primary. An RRLS-issued query reaches the primary within 1 s. There is no relay traffic on a healthy direct path. With the direct path cut, the relay engages at or below a 15 % air share and stops afterwards. The idle RRLS shows live data from every board, and its network clock stays within 1 s of the primary. |
 | `gps_time` | `--gps-initial 2`: a cold u-blox receiver (no fix, placeholder date). Every board keeps network UTC, none runs ahead of the station or steps backwards, before and after a valid fix. |
 | `stale_auto_abort` | A GB CAN cut (`gbc0`/`gbc1`) raises the Normal-mode automatic Abort while the radio is saturated. If GB returns before 30 s, the abort is retired by age with its cause cleared. If GB stays offline (60 s or more), it is not retired by age, and an operator Clear retires it. In both cases the AV bay never aborts afterwards. |
-| `vb_stale` | No Valve Board stale-sensor [S] warning during an outage (`vbc0`/`vbc1` VB CAN cut) or within 10 s of reconnecting. An injected F fault inside the grace still warns. |
+| `vb_stale` | No Valve Board stale-sensor [S] warning during an outage or within 10 s of the VB coming back. The outage is either a VB power cycle (`vbrb`, a scheduled reboot) or a VB CAN cut (`vbc0`/`vbc1`). An injected F fault inside the grace still warns. |
 
 ## Calibration
 
