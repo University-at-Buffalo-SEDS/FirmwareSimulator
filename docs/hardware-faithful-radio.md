@@ -78,11 +78,54 @@ More scenarios:
 
 | Scenario | What it asserts |
 | --- | --- |
-| `mode_switch` | Only an active sequence, cold flow, turbocharge, a pending Launch or T-minus may hold the mode (GS 0be3424 and 322cfd8). The in-process normal/hitl switch must succeed in each of these states: at Idle right after the startup sequence; with DAQ missing (scheduled `dq0`/`dq1` CAN cut); with a board recovery query pending; while Aborted with a board aborted and the AV-bay ABORT undeliverable (`cut0`/`cut1` GS-RF radio cut); after the abort is cleared; after a manual valve command completes. It must be refused while the startup sequence is still moving valves. T-minus, turbocharge and cold flow need a fill or launch sequence and are not covered. |
+| `mode_switch` | Only an active sequence, cold flow, turbocharge, a pending Launch or T-minus may hold the mode (GS 0be3424 and 322cfd8). The in-process normal/hitl switch must succeed in each of these states: at Idle right after the startup sequence; with DAQ missing (scheduled `dq0`/`dq1` CAN cut); with a board recovery query pending; while Aborted with a board aborted and the AV-bay ABORT undeliverable (`cut0`/`cut1` GS-RF radio cut); after the abort is cleared; after a manual valve command completes. It must be refused while the startup sequence is still moving valves. A pending Launch, the countdown, a running sequence, cold flow and Turbocharge are covered by `gse_flows`. |
 | `rrls_faithful` | The RRLS on the same medium (`--rrls`, AV-bay nodes). Pairing over the radio finishes within about 1 s per step. The idle RRLS is seen alive at the primary. An RRLS-issued query reaches the primary within 1 s. There is no relay traffic on a healthy direct path. With the direct path cut, the relay engages at or below a 15 % air share and stops afterwards. The idle RRLS shows live data from every board, and its network clock stays within 1 s of the primary. |
 | `gps_time` | `--gps-initial 2`: a cold u-blox receiver (no fix, placeholder date). Every board keeps network UTC, none runs ahead of the station or steps backwards, before and after a valid fix. |
 | `stale_auto_abort` | A GB CAN cut (`gbc0`/`gbc1`) raises the Normal-mode automatic Abort while the radio is saturated. If GB returns before 30 s, the abort is retired by age with its cause cleared. If GB stays offline (60 s or more), it is not retired by age, and an operator Clear retires it. In both cases the AV bay never aborts afterwards. An automatic Abort leaves the station's flight state alone, so the scenario detects it by `gse.automatic_abort_claimed` (an operator Abort shows as flight_state 15). |
+| `gse_flows` | Operator GSE flows (see below). |
 | `vb_stale` | No Valve Board stale-sensor [S] warning during an outage or within 10 s of the VB coming back. The outage is either a VB power cycle (`vbrb`, a scheduled reboot) or a VB CAN cut (`vbc0`/`vbc1`). An injected F fault inside the grace still warns. |
+
+## Operator GSE flows (`gse_flows`)
+
+`--scenario gse_flows --flows <list>` drives the station API exactly as the operator UI does, in the station
+mode under test (`--mode normal|hitl|test_fire`), all seven boards on the faithful radio. Each flow is a step, so a
+fault is recorded and the next flow still runs. The station's tank is the operational flight sim's valve-driven
+plant (`F.plant_pressure`, `F.plant_mass`) fed from the station's own AB/VB valve readbacks: nitrogen reaches the
+tank only after the nitrogen test starts, nitrous only after the fill starts. The scenario sets the nitrogen
+target to 50 psi, the ceiling to 150 psi, the cold-flow target to 40 psi and a 5 kg nitrous fill;
+`--gse-config` merges more `gse.json` settings. HITL fill runs use `--gse-config '{"pressure_ceiling_psi":900}'`: HITL fill admission checks the engine's default 750 psi nitrous target instead of the configured one (reported against GroundStation26 8d038eb), so a lower ceiling refuses every HITL fill.
+
+| Flow | What it asserts | Regression |
+| --- | --- | --- |
+| `isolation` | At prelaunch the self-test is held only by the isolation confirmation and `ValveSelfTest` is refused. `POST /api/gse/self-test-confirmation {"confirmed":true}` (the checkbox's request) is accepted, the station reports it confirmed and enables `ValveSelfTest`. | UI 790627f (the UI-side half is the frontend test below) |
+| `self_test` | The self-test runs and passes, every valve readback opens and closes, the confirmation is consumed, and a mode change is refused while it runs. | |
+| `nitrogen` | The stepped nitrogen test passes (dumped at its hold) with the mode change refused while it runs. On GroundStation26 8d038eb the dump never completes on this plant (reported), so the Normal fill flow uses `n2_override`. | GS 0be3424 |
+| `n2_override` | HITL: `/api/gse/status` has `nitrogen_override`, `StartFill` is refused before it, the override is available at rest, the dialog's `POST /api/gse/cold-flow/override` is accepted and `nitrogen_override.active` follows; `fill` then shows the gated fill running. Normal and test fire use the same route as the operational cold-flow override (after `self_test`). | GS c56bd8c, UI acbc3a2/d8e64fe |
+| `fill` | `StartFill` is accepted, the nitrous valve readback opens, the fill reaches its mass target, and a mode change is refused while it runs. | |
+| `turbocharge` | When the station offers Turbocharge, a mode change is refused while it runs, and Cancel fill ends it. Otherwise recorded under `not_reached`. | GS 0be3424 |
+| `cold_flow` | A further nitrogen test handed to cold flow at its hold; a mode change is refused while cold flow runs (the station names it as a running sequence), and cold flow cancels. | GS 0be3424 |
+| `manual_switch` | Two manual Dump commands, then a mode round trip succeeds (the manual-control latch does not hold it). | GS 322cfd8 |
+| `challenge` | A mode round trip at rest. | GS f061992 |
+| `rules_hitl` | HITL: a mode change is allowed in the NitrogenFill phase and while Aborted; after Launch in Armed it is refused for the pending Launch or the countdown (`launch-mode-gate.jsonl`), then the launch is reset. | GS 0be3424/322cfd8 |
+| `dismissals` | After an Abort every shown board has an active error, `dismissible` in HITL on every board and in no other mode (test fire hides AV-bay aborts). Alerts are acknowledged and the acknowledgement comes back on a new websocket. The UI keys a dismissal by (board, `timestamp_ms`); those keys must not change after a websocket reconnect, an AV-bay radio drop (`sched` `cut0`/`cut1`) or a station power cycle (`gsrb`). | GS 8215ce7, UI 5090cf4/69165ff/c280bb7 |
+
+Every mode switch (here and in `mode_switch`) also checks the review challenge and the confirmation receipt
+against a mirror of the UI's `station_mode_contract` (a challenge without `"version": 2` is what the UI rejected
+as "Unsupported mode challenge"), and saves the live replies to `contract-live/<label>/`. With
+`--ui-contract <Seds-Ground-Station-Frontend checkout>` the run then decodes each capture with the UI's own types
+(`cargo test live_station_mode`, log in `contract-live/<label>/ui-decode.log`).
+
+Frontend-only faults are covered in Seds-Ground-Station-Frontend against GroundStation26 contract fixtures:
+`isolation_checkbox_confirmation_reaches_the_station_as_the_backend_decodes_it` (the checkbox's request leaves the
+UI and matches `requests/gse-self-test-confirmation`) and
+`hitl_dismissals_cover_every_board_and_survive_a_reload_on_errors_and_connection_status` (on
+`board-abort/status-hitl`).
+
+Example (Renode hangs in about half of the runs; retry a run whose virtual clock stalls for 150 s):
+
+    scripts/test-full-network.py --scenario gse_flows --mode hitl --flows isolation,self_test,n2_override,fill,manual_switch \
+        --radio rfd-faithful --rfd-global-retries 1 --rfd-modem 0= --faithful-time 20 --ui-contract ../Seds-Ground-Station-Frontend \
+        --cohort <seven built boards> --image <firmware-sim image> --evidence runs/fill-hitl
 
 ## Calibration
 

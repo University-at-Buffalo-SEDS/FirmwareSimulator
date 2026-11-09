@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Full seven-board linked simulation (see docs/hardware-faithful-radio.md for --radio rfd-faithful
---faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, vb_stale and stale_auto_abort scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
+--faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, vb_stale, stale_auto_abort and gse_flows scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
 umbilical) with the one-binary GS (+firmware_sim) started in a runtime station mode
 (GS_STATION_MODE=hitl|test_fire|normal; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
 recorder (virtual-time stamped API snapshots) and scripted scenarios.
@@ -48,9 +48,16 @@ def build_config(a):
     key, users = F.fixture_user(); (config / 'users.json').write_text(json.dumps(users))
     gse = {'nitrogen_target_psi': 500, 'pressure_step_psi': 50, 'pressure_ceiling_psi': 900, 'maximum_zero_offset_psi': 20,
            'dry_self_test_confirmed': False, 'grouped_panel': True, 'turbocharge_max_added_mass_kg': 0.5, 'turbocharge_pressure_deadband_psi': 12}
+    targets = {'version': 1, 'fill_source': 'kg50', 'nitrogen': {'target_mass_kg': 0.5, 'target_pressure_psi': 500},
+               'nitrous': {'target_mass_kg': 8, 'target_pressure_psi': 750}}
+    if a.scenario == 'gse_flows':
+        # The operational flight sim's bench plant (F.plant_pressure, 130 psi regulator): a nitrogen test,
+        # cold flow and Turbocharge that the valve-driven plant can actually reach.
+        gse.update(nitrogen_target_psi=50, pressure_ceiling_psi=150, cold_flow_target_psi=40, turbocharge_max_added_mass_kg=0.3)
+        targets.update(nitrogen={'target_mass_kg': 10, 'target_pressure_psi': 50}, nitrous={'target_mass_kg': 5, 'target_pressure_psi': 100})
+    gse.update(a.gse_config)
     (config / 'gse.json').write_text(json.dumps(gse))
-    (config / 'fill-targets.json').write_text(json.dumps({'version': 1, 'fill_source': 'kg50', 'nitrogen': {'target_mass_kg': 0.5, 'target_pressure_psi': 500},
-                                                          'nitrous': {'target_mass_kg': 8, 'target_pressure_psi': 750}}))
+    (config / 'fill-targets.json').write_text(json.dumps(targets))
     items = [{'id': n, 'text': n, 'checked': False, 'complete_on': k, 'completed_by': None, 'completed_at_ms': None}
              for n, k in [('self-test', 'valve_self_test'), ('nitrogen', 'nitrogen_test')]]
     (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': True, 'checklists': [
@@ -272,6 +279,20 @@ class Sim:
         return snap
 
     def plant(self, dt):
+        if getattr(self, 'gse_plant', None) is not None:
+            # Valve-driven tank (operational flight sim model) from the station's actual valve readbacks.
+            # Supplies are connected only once the scenario says so (isolated during the dry self-test).
+            p = self.gse_plant; valves = (self.state.get('gse') or {}).get('valves')
+            if isinstance(valves, list) and len(valves) == 5 and all(type(v) is bool for v in valves):
+                fed = list(valves)
+                if not p['nitrogen']: fed[3] = False
+                while dt > 0:
+                    step = min(dt, 200); dt -= step
+                    self.pressure = F.plant_pressure(self.pressure, step, fed)
+                    self.mass = F.plant_mass(self.mass, step, valves, p['nitrous'], p['nitrogen'])
+            F.atomic(self.diag / 'pressure.raw', str(F.raw_pressure(self.pressure)))
+            F.atomic(self.diag / 'loadcell.raw', F.mass_samples(self.mass))
+            return
         if self.pressure_target is not None:
             step = self.pressure_rate * dt / 1000
             self.pressure = min(self.pressure_target, self.pressure + step) if self.pressure < self.pressure_target else max(self.pressure_target, self.pressure - step)
@@ -765,7 +786,7 @@ def sc_abort_probe(sim):
 # ------------------------------------------------------------------ websocket watcher (stdlib)
 class WsWatch:
     """Reads /ws on a forwarded origin and logs selected message types (virtual-time stamped)."""
-    KEEP = ('StationModeChanged', 'ActionPolicy', 'Notification', 'NetworkTime', 'Warning', 'Error')
+    KEEP = ('StationModeChanged', 'ActionPolicy', 'Notification', 'NetworkTime', 'Warning', 'Error', 'AlertAckState')
 
     def __init__(self, sim, origin, token, tag='ws'):
         import socket as _s, base64 as _b
@@ -810,7 +831,7 @@ class WsWatch:
                 self.counts[ty] = self.counts.get(ty, 0) + 1
                 if ty in self.KEEP:
                     row = {'v': self.sim.vclock(), 'ty': ty, 'n': self.counts[ty]}
-                    if ty in ('StationModeChanged', 'Notification', 'Warning', 'Error'): row['data'] = json.loads(text).get('data')
+                    if ty in ('StationModeChanged', 'Notification', 'Warning', 'Error', 'AlertAckState'): row['data'] = json.loads(text).get('data')
                     if ty == 'ActionPolicy':
                         try:
                             d = json.loads(text).get('data') or {}; row['launch'] = next((c for c in d.get('controls', []) if c.get('cmd') == 'Launch'), None); row['n_controls'] = len(d.get('controls', []))
@@ -837,10 +858,18 @@ def station_mode_switch(sim, target, label):
     binding.update(current_id=st['current']['id'], target_id=target)
     code, ch = sim.api('/api/station-modes/prepare', binding); sim.log_action('station_mode_prepare', label=label, http=code, body=ch if code != 200 else {k: ch.get(k) for k in ('summary', 'required_confirmation')})
     if code != 200: sim.check(f'{label}: prepare accepted', False, http=code, body=ch); return False
+    # The settings page reviews the change only if it can decode this challenge (GS f061992).
+    live = sim.out / 'contract-live' / label; live.mkdir(parents=True, exist_ok=True)
+    (live / 'snapshot.json').write_text(json.dumps(st, indent=1)); (live / 'prepare.json').write_text(json.dumps(ch, indent=1))
+    problems = ui_challenge_problems(ch, binding)
+    sim.check(f'{label}: the UI decodes the mode challenge', not problems, problems=problems, version=ch.get('version'))
     v0 = sim.vclock()
     code, rc = sim.api('/api/station-modes/confirm', {**binding, 'ticket': ch['ticket'], 'transition_id': ch['transition_id'], 'confirmation': ch['required_confirmation']})
     sim.log_action('station_mode_confirm', label=label, http=code, body=rc)
     if code != 200: sim.check(f'{label}: confirm accepted', False, http=code, body=rc); return False
+    (live / 'confirm.json').write_text(json.dumps(rc, indent=1))
+    problems = ui_receipt_problems(rc, binding, ch)
+    sim.check(f'{label}: the UI accepts the confirmation receipt', not problems, problems=problems)
     want = target.split('-')[0]; t_end = time.time() + 60; st2 = None
     while time.time() < t_end:
         c2, st2 = sim.api('/api/station-modes')
@@ -848,6 +877,7 @@ def station_mode_switch(sim, target, label):
         time.sleep(.2)
     sim.check(f'{label}: station reports {want} after switch', st2 and st2['current']['mode_id'] == want, current=(st2 or {}).get('current'), transition=(st2 or {}).get('transition'),
               layout_revision=(st2 or {}).get('layout_revision'), switched_v_ms=sim.vclock() - v0)
+    if st2: (live / 'after.json').write_text(json.dumps(st2, indent=1))
     code_l1, layout1 = sim.api('/api/layout')
     sim.check(f'{label}: /api/layout changes with the mode', code_l1 == 200 and json.dumps(layout1, sort_keys=True) != json.dumps(layout0, sort_keys=True),
               before_keys=sorted(layout0)[:12] if isinstance(layout0, dict) else str(layout0)[:200], after_keys=sorted(layout1)[:12] if isinstance(layout1, dict) else str(layout1)[:200])
@@ -1412,6 +1442,434 @@ def sc_stale_auto_abort(sim):
 SCENARIOS['stale_auto_abort'] = sc_stale_auto_abort
 
 
+# ------------------------------------------------------------------ operator GSE flows (gse_flows)
+# Each flow drives the GS API exactly as the operator UI does and checks what the station and the
+# boards did. They reproduce GS/UI faults found on hardware on 2026-11-09; see
+# docs/hardware-faithful-radio.md "Operator GSE flows".
+def ui_challenge_problems(ch, binding):
+    """Mirror of the UI's station_mode_contract::Challenge decode and matches() (Seds-Ground-Station-Frontend):
+    the review binding is flattened into the challenge together with its contract version."""
+    if not isinstance(ch, dict): return ['challenge is not a JSON object']
+    p = []
+    if ch.get('version') != 2:
+        p.append(f"version is {ch.get('version')!r}, not 2: the UI rejects it as 'Unsupported mode challenge'")
+    for k in ('backend_instance', 'principal_context', 'authority_id', 'revision', 'policy_epoch', 'current_id', 'target_id', 'ticket', 'transition_id', 'summary'):
+        if not isinstance(ch.get(k), str) or not ch.get(k): p.append(f'{k} missing')
+    for k in ('current', 'target'):
+        if not isinstance(ch.get(k), dict): p.append(f'{k} missing')
+    if 'required_confirmation' not in ch: p.append('required_confirmation missing')
+    if not isinstance(ch.get('expires_in_ms'), int) or not 1 <= ch['expires_in_ms'] <= 15000: p.append('expires_in_ms outside 1..15000')
+    for k, v in binding.items():
+        if ch.get(k) != v: p.append(f'{k} {ch.get(k)!r} differs from the reviewed {v!r}')
+    if (ch.get('current') or {}).get('id') != binding.get('current_id'): p.append('current.id differs from current_id')
+    if (ch.get('target') or {}).get('id') != binding.get('target_id'): p.append('target.id differs from target_id')
+    return p
+
+
+def ui_receipt_problems(rc, binding, ch):
+    """Mirror of the UI's station_mode_contract::Accepted::matches() for the confirmation receipt."""
+    if not isinstance(rc, dict): return ['receipt is not a JSON object']
+    p = []
+    if rc.get('version') != 2: p.append(f"version is {rc.get('version')!r}, not 2")
+    if rc.get('accepted') is not True: p.append('accepted is not true')
+    for k in ('backend_instance', 'principal_context', 'authority_id', 'policy_epoch', 'current_id', 'target_id'):
+        if rc.get(k) != binding.get(k): p.append(f'{k} differs from the request')
+    t = rc.get('transition') or {}
+    if t.get('id') != ch.get('transition_id'): p.append('transition.id differs from the challenge')
+    if t.get('target_id') != binding.get('target_id'): p.append('transition.target_id differs')
+    if t.get('state') != 'pending': p.append(f"transition.state is {t.get('state')!r}, not pending")
+    if t.get('error') is not None: p.append('transition.error is set')
+    return p
+
+
+GSE_REST = ('idle', 'cancelled', 'passed', 'paused', 'fault', None)
+
+
+def gse_now(sim):
+    code, g = sim.api('/api/gse/status')
+    return g if code == 200 and isinstance(g, dict) else {}
+
+
+def policy_control(sim, cmd, snap=None):
+    pol = (snap or {}).get('policy') if snap else None
+    if pol is None:
+        code, pol = sim.api('/api/action_policy')
+        if code != 200: return None
+    return next((c for c in (pol or {}).get('controls', []) if c.get('cmd') == cmd), None) if isinstance(pol, dict) else None
+
+
+def current_mode(sim):
+    code, st = sim.api('/api/station-modes')
+    return ((st or {}).get('current') or {}).get('mode_id') if code == 200 else None
+
+
+def other_mode(home):
+    return 'normal' if home == 'hitl' else 'hitl'
+
+
+def switch_round_trip_any(sim, label):
+    """home -> other -> home in process (UI review contract checked on every leg)."""
+    home = current_mode(sim) or sim.a.station_mode
+    def settle():
+        # Entering Normal or test fire runs the startup valve check about 2 s later; a switch that
+        # meets it is (correctly) refused, so let it finish first.
+        sim.wait_v(4000)
+        sim.wait_until(lambda s: (s.get('gse') or {}).get('phase') in GSE_REST, 30000, 'GSE at rest after the switch', quiet=True)
+    ok = station_mode_switch(sim, other_mode(home), f'{label}-to-{other_mode(home)}')
+    settle()
+    back = station_mode_switch(sim, home, f'{label}-to-{home}') if ok else False
+    settle()
+    return ok and back
+
+
+def mode_switch_refused(sim, label, words):
+    """The station refuses a mode change now: the target is offered as unavailable with a reason naming
+    one of `words`, and a review (prepare) is refused. Returns the reason."""
+    c, st = sim.api('/api/station-modes')
+    home = ((st or {}).get('current') or {}).get('mode_id') if c == 200 else None
+    target = other_mode(home)
+    opt = next((o for o in (st or {}).get('options', []) if o.get('id') == target), None) if c == 200 else None
+    binding = {k: st.get(k) for k in ('backend_instance', 'principal_context', 'authority_id', 'revision', 'policy_epoch')} if c == 200 else {}
+    binding.update(current_id=((st or {}).get('current') or {}).get('id'), target_id=target)
+    c2, b2 = sim.api('/api/station-modes/prepare', binding)
+    reason = ' '.join(str(x) for x in ((opt or {}).get('reason'), (st or {}).get('reason'), b2 if c2 != 200 else '') if x)
+    ok = bool(opt) and not opt.get('available') and c2 != 200 and any(w in reason.lower() for w in words)
+    sim.check(f'{label}: mode change refused', ok, want=words, available=(opt or {}).get('available'), reason=reason[:400], prepare_http=c2)
+    return reason
+
+
+def sequence_ran(sim, label, start_cmd, timeout_ms, block_words=('sequence',), on_snap=None):
+    """Operator command that starts a GSE sequence; waits until the engine leaves its active phases.
+    While it runs, a mode change must be refused (GS 0be3424/322cfd8). Returns (accepted, final gse, valves seen)."""
+    v0 = sim.vclock(); code, body = sim.command(start_cmd)
+    sim.check(f'{label}: {start_cmd} accepted', code == 200, http=code, body=body)
+    if code != 200: return False, gse_now(sim), []
+    seen, active, blocked = [], False, False
+    while sim.vclock() - v0 < timeout_ms and not sim.stop.is_set():
+        s = sim.st(); g = s.get('gse') or {}; ph = g.get('phase')
+        if s.get('v', 0) < v0: time.sleep(.05); continue
+        if isinstance(g.get('valves'), list) and (not seen or seen[-1] != g['valves']): seen.append(list(g['valves']))
+        if ph not in GSE_REST:
+            active = True
+            if not blocked:
+                blocked = True; mode_switch_refused(sim, f'{label} running ({ph})', block_words)
+        verdict = on_snap(g) if on_snap else False
+        if verdict == 'done': break
+        if verdict: continue
+        if active and ph in GSE_REST and ph != 'paused': break
+        time.sleep(.05)
+    g = gse_now(sim)
+    sim.log_action('sequence_end', label=label, phase=g.get('phase'), message=g.get('message'), valves_seen=seen[:40])
+    if not blocked: sim.check(f'{label}: mode change refused while it runs (sequence never observed active)', False)
+    return True, g, seen
+
+
+def flow_isolation(sim):
+    """UI 790627f: the isolation checkbox must reach the station and unlock the valve self-test."""
+    # Only the isolation checkbox may be what holds the self-test (not the Startup flight state).
+    s = sim.wait_until(lambda s: ((s.get('gse') or {}).get('request_gate') or {}).get('prelaunch') is True, 60000, 'prelaunch')
+    g = gse_now(sim); c = policy_control(sim, 'ValveSelfTest') or {}
+    sim.check('isolation: self-test held only by the isolation confirmation', s is not None and g.get('dry_self_test_confirmed') is False and
+              not c.get('enabled') and any(w in str(c.get('disabled_reason')).lower() for w in ('isolat', 'confirm')),
+              confirmed=g.get('dry_self_test_confirmed'), control=c, request_gate=g.get('request_gate'))
+    code, body = sim.command('ValveSelfTest')
+    sim.check('isolation: ValveSelfTest refused before isolation is confirmed', code != 200, http=code, body=body)
+    sim.wait_v(1500)  # past the station's 500 ms software-command de-duplication
+    # Exactly what the Actions tab posts for the checkbox (actions_tab.rs, POST /api/gse/self-test-confirmation).
+    code, body = sim.api('/api/gse/self-test-confirmation', {'confirmed': True})
+    sim.log_action('isolation_confirm', http=code, body=body)
+    sim.check('isolation: station accepted the confirmation', code == 200 and body == {'confirmed': True}, http=code, body=body)
+    s = sim.wait_until(lambda s: (s.get('gse') or {}).get('dry_self_test_confirmed') is True and (policy_control(sim, 'ValveSelfTest', s) or {}).get('enabled'),
+                       10000, 'isolation confirmed and ValveSelfTest enabled')
+    sim.check('isolation: station reports it confirmed and enables ValveSelfTest', s is not None,
+              confirmed=(sim.st().get('gse') or {}).get('dry_self_test_confirmed'), control=policy_control(sim, 'ValveSelfTest', sim.st()))
+
+
+def flow_self_test(sim):
+    ok, g, seen = sequence_ran(sim, 'self-test', 'ValveSelfTest', 120000)
+    # HITL keeps no qualification record and returns to idle with a completion message.
+    passed = g.get('phase') == 'passed' or bool((g.get('qualification') or {}).get('self_test')) or \
+        (g.get('phase') == 'idle' and 'self-test complete' in str(g.get('message')).lower())
+    sim.check('self-test: passes', ok and passed, phase=g.get('phase'), message=g.get('message'), qualification=g.get('qualification'))
+    moved = [i for i in range(5) if any(v[i] for v in seen) and any(not v[i] for v in seen)]
+    sim.check('self-test: every valve readback (AB/VB) opened and closed', moved == list(range(5)), moved=moved, seen=seen[:30])
+    sim.check('self-test: the isolation confirmation is consumed', g.get('dry_self_test_confirmed') is False, confirmed=g.get('dry_self_test_confirmed'))
+
+
+def cold_flow_at_hold(sim, g):
+    """Cold flow from the nitrogen-test hold: a mode change is refused while it runs; then cancel it."""
+    c, st = sim.api('/api/station-modes')
+    opt = next((o for o in (st or {}).get('options', []) if o.get('id') == 'hitl'), {}) if c == 200 else {}
+    sim.log_action('mode_change_at_hold_before_cold_flow', available=opt.get('available'), reason=opt.get('reason'))
+    code, body = sim.api('/api/gse/cold-flow/start', {}); sim.log_action('cold_flow_start', http=code, body=body)
+    sim.check('cold flow: starts from the nitrogen-test hold', code == 200, http=code, body=body, cold_flow=g.get('cold_flow'))
+    if code != 200: return
+    s = sim.wait_until(lambda s: ((s.get('gse') or {}).get('cold_flow') or {}).get('active') is True, 10000, 'cold flow active')
+    # The engine counts cold flow as a running sequence, so the station names either.
+    if s: mode_switch_refused(sim, 'cold flow running', ('cold flow', 'sequence'))
+    key = ((s or sim.st()).get('gse') or {}).get('cold_flow', {}).get('key')
+    code, body = sim.api('/api/gse/cold-flow/cancel', key); sim.log_action('cold_flow_cancel', http=code, body=body)
+    s = sim.wait_until(lambda s: not ((s.get('gse') or {}).get('cold_flow') or {}).get('active'), 60000, 'cold flow cancelled')
+    sim.check('cold flow: cancels', s is not None, cancel_http=code, cold_flow=(sim.st().get('gse') or {}).get('cold_flow'))
+
+
+def nitrogen_test(sim, label, at_hold):
+    """The stepped nitrogen test on the valve-driven plant; at its hold either dump (fill follows) or hand off to
+    cold flow."""
+    sim.gse_plant['nitrogen'] = True
+    st = {'held': False}
+    def hold(g):
+        live = [c for c in (g.get('sequence_progress') or {}).get('controls', []) if c.get('hold_choice')]
+        if st['held'] or not (live and g.get('phase') == 'paused'): return False
+        st['held'] = True
+        if at_hold == 'cold_flow':
+            cold_flow_at_hold(sim, g); return 'done'
+        if (live[0]['hold_choice'].get('dump') or {}).get('allowed'):
+            code, body = sim.api('/api/gse/sequences/dump', live[0]['key']); sim.log_action('nitrogen_hold_dump', http=code, body=body)
+            sim.wait_v(1000); return True
+        return False
+    ok, g, seen = sequence_ran(sim, label, 'NitrogenTest', 240000, on_snap=hold)
+    return ok, g, st['held']
+
+
+def flow_nitrogen(sim):
+    """Normal/test fire: the nitrogen test, dumped at its hold so the fill can follow."""
+    ok, g, held = nitrogen_test(sim, 'nitrogen test', 'dump')
+    passed = bool((g.get('qualification') or {}).get('nitrogen_test')) or g.get('nitrogen_passed') is True
+    sim.check('nitrogen test: passes', ok and passed and g.get('phase') == 'passed', phase=g.get('phase'), message=g.get('message'),
+              qualification=g.get('qualification'), held=held)
+
+
+def flow_cold_flow(sim):
+    """A further nitrogen test handed to cold flow at its hold (GS 0be3424: cold flow holds a mode change)."""
+    ok, g, held = nitrogen_test(sim, 'nitrogen test for cold flow', 'cold_flow')
+    sim.check('cold flow: the nitrogen test reached its hold', held, phase=g.get('phase'), message=g.get('message'))
+
+
+def flow_n2_override(sim):
+    """GS c56bd8c / UI acbc3a2: the HITL nitrogen-test override, then the gated fill is admitted. Normal and test
+    fire have the operational cold-flow override on the same route (needs the self-test's baseline)."""
+    sim.gse_plant['nitrogen'] = True
+    hitl = sim.a.station_mode == 'hitl'
+    g = gse_now(sim); no = g.get('nitrogen_override')
+    if hitl: sim.check('n2 override: /api/gse/status reports nitrogen_override', isinstance(no, dict), nitrogen_override=no)
+    code, body = sim.command('StartFill')
+    sim.check('n2 override: StartFill refused before the nitrogen test or its override', code != 200, http=code, body=body)
+    if hitl:
+        s = sim.wait_until(lambda s: ((s.get('gse') or {}).get('nitrogen_override') or {}).get('available') is True, 15000, 'override available')
+        sim.check('n2 override: available at rest', s is not None, nitrogen_override=(sim.st().get('gse') or {}).get('nitrogen_override'))
+    # Exactly what the override dialog posts (gse_panel.rs HitlNitrogenOverride / the cold-flow override).
+    code, body = sim.api('/api/gse/cold-flow/override', {'reason': 'fullnet gse_flows: known-good tank'})
+    sim.log_action('nitrogen_override', http=code, body=body)
+    sim.check('n2 override: station accepted the override', code == 200, http=code, body=body)
+    if hitl:
+        pred = lambda g: (g.get('nitrogen_override') or {}).get('active') is True and g.get('nitrogen_overridden') is True
+    else:
+        pred = lambda g: g.get('nitrogen_overridden') is True and bool((g.get('qualification') or {}).get('nitrogen_override'))
+    s = sim.wait_until(lambda s: pred(s.get('gse') or {}), 10000, 'override active')
+    g = (s or sim.st()).get('gse') or {}
+    sim.check('n2 override: /api/gse/status reports the override active', s is not None, nitrogen_override=g.get('nitrogen_override'),
+              nitrogen_overridden=g.get('nitrogen_overridden'), qualification=g.get('qualification'), phase=g.get('phase'))
+
+
+def flow_fill(sim):
+    """StartFill after self-test and nitrogen test (or its override): the nitrous valve opens on the boards
+    and the fill reaches its mass target on the loadcell plant."""
+    sim.gse_plant['nitrous'] = True
+    st = {'open': False, 'resumed': 0}
+    def watch(g):
+        if isinstance(g.get('valves'), list) and g['valves'][4]: st['open'] = True
+        if g.get('phase') == 'paused' and 'below target' in str(g.get('message')) and st['resumed'] < 3:
+            st['resumed'] += 1; sim.command('StartFill'); sim.wait_v(2000); return True
+        if (g.get('qualification') or {}).get('fill_target') and g.get('phase') in GSE_REST: return 'done'
+        # HITL keeps no qualification record: the settled-mass verdict ends the fill.
+        if g.get('phase') == 'paused' and 'settled within tolerance' in str(g.get('message')): return 'done'
+        return False
+    ok, g, seen = sequence_ran(sim, 'fill', 'StartFill', 240000, on_snap=watch)
+    sim.check('fill: nitrous valve readback opened', st['open'], valves_seen=seen[:30])
+    done = bool((g.get('qualification') or {}).get('fill_target')) or g.get('phase') == 'passed' or 'settled within tolerance' in str(g.get('message'))
+    sim.check('fill: reaches its mass target', ok and done, phase=g.get('phase'), message=g.get('message'), mass=sim.mass,
+              mission_stage=g.get('mission_stage'), qualification=g.get('qualification'))
+    # The station holds the settled fill: no valve fault or acknowledgement timeout afterwards.
+    v0 = sim.vclock(); bad = None
+    while sim.vclock() - v0 < 8000 and not sim.stop.is_set() and bad is None:
+        m = str((sim.st().get('gse') or {}).get('message'))
+        if any(w in m.lower() for w in ('timed out', 'fault', 'opposite state')): bad = m
+        time.sleep(.1)
+    sim.check('fill: settled fill holds without a valve fault', bad is None, message=bad or gse_now(sim).get('message'))
+
+
+def flow_turbocharge(sim):
+    c = policy_control(sim, 'Turbocharge')
+    if not (c or {}).get('enabled'):
+        sim.result.setdefault('not_reached', []).append({'flow': 'turbocharge', 'control': c}); return
+    code, body = sim.command('Turbocharge')
+    s = sim.wait_until(lambda s: ((s.get('gse') or {}).get('turbocharge') or {}).get('active') is True, 10000, 'turbocharge active')
+    if s is None:
+        sim.result.setdefault('not_reached', []).append({'flow': 'turbocharge', 'http': code, 'body': body, 'turbocharge': (sim.st().get('gse') or {}).get('turbocharge')}); return
+    mode_switch_refused(sim, 'turbocharge running', ('turbocharge',))
+    sim.command('CancelFill')
+    s = sim.wait_until(lambda s: not ((s.get('gse') or {}).get('turbocharge') or {}).get('active'), 60000, 'turbocharge ended')
+    sim.check('turbocharge: ends on Cancel fill', s is not None, turbocharge=(sim.st().get('gse') or {}).get('turbocharge'))
+
+
+def flow_manual_switch(sim):
+    """GS 322cfd8: after a completed manual valve command the manual-control latch no longer holds a mode
+    change; the round trip also checks the UI review contract (GS f061992) for this mode."""
+    for _ in range(2):
+        code, body = sim.command('Dump'); sim.wait_v(3000)
+    sim.wait_until(lambda s: (s.get('gse') or {}).get('phase') in GSE_REST, 30000, 'GSE at rest after manual Dump')
+    sim.check('mode change allowed after a completed manual valve command', switch_round_trip_any(sim, 'after-manual-dump'),
+              manual=gse_now(sim).get('manual_control'))
+
+
+def flow_challenge(sim):
+    sim.check('mode change allowed at rest (UI review contract)', switch_round_trip_any(sim, 'at-rest'))
+
+
+def flow_rules_hitl(sim):
+    """GS 0be3424/322cfd8 in HITL: allowed in a fill phase and while Aborted; refused by a pending Launch and
+    the countdown. The Abort comes last: its recovery is not needed by the other steps."""
+    ok = phase_to(sim, 4, 'to NitrogenFill')
+    sim.check('rules: HITL reaches NitrogenFill', ok, flight_state=(sim.st().get('rec') or {}).get('flight_state'))
+    if ok: sim.check('mode change allowed in the NitrogenFill phase', switch_round_trip_any(sim, 'nitrogen-fill-phase'))
+    ok = phase_to(sim, 6, 'to Armed')
+    sim.check('rules: HITL reaches Armed', ok, flight_state=(sim.st().get('rec') or {}).get('flight_state'))
+    if ok: launch_gate(sim)
+    latch_all(sim, 'rules abort', expect=BOARDS)
+    sim.check('mode change allowed while Aborted', switch_round_trip_any(sim, 'aborted'))
+    r = sim.recovery('reset_startup', boards=BOARDS, label='rules reset all')
+    if not r.get('success'): recover_all_needing(sim, 'rules leftovers')
+    verify_clear(sim, 'rules after abort', timeout_ms=45000)
+
+
+def launch_gate(sim):
+    """Launch in Armed: the mode change is refused for the pending Launch or the countdown
+    (launch-mode-gate.jsonl), then the launch is reset and the station returns to Idle."""
+    rows, launched = (sim.out / 'launch-mode-gate.jsonl').open('a'), False
+    for attempt in range(5):
+        sim.api('/api/board_abort/refresh', {}); sim.wait_v(1500)
+        v0 = sim.vclock(); code, body = sim.command('Launch')
+        if code == 200: launched = True; break
+    sim.check('rules: Launch accepted in Armed', launched, http=code, body=body)
+    if not launched: return
+    seen = []
+    while sim.vclock() - v0 < 25000 and not sim.stop.is_set():
+        c, st = sim.api('/api/station-modes'); c2, clk = sim.api('/api/launch_clock')
+        opt = next((o for o in (st or {}).get('options', []) if o.get('id') == 'normal'), {}) if c == 200 else {}
+        row = {'v': sim.vclock() - v0, 'available': opt.get('available'), 'reason': opt.get('reason'), 'clock': (clk or {}).get('kind') if c2 == 200 else None}
+        rows.write(json.dumps(row) + '\n'); rows.flush()
+        if not seen or (seen[-1]['available'], seen[-1]['reason'], seen[-1]['clock']) != (row['available'], row['reason'], row['clock']): seen.append(row)
+        time.sleep(.05)
+    pending = any('launch command is pending' in str(r['reason']).lower() for r in seen)
+    countdown = any('countdown' in str(r['reason']).lower() for r in seen)
+    leak = [r for r in seen if r['available'] and r['clock'] in ('t_minus', 'TMinus')]
+    sim.check('Launch pending or countdown refuses the mode change', (pending or countdown) and not leak, pending=pending, countdown=countdown, leak=leak, transitions=seen[:20])
+    sim.command('ResetTClock'); sim.wait_v(5000)
+    phase_to(sim, 1, 'rewind to Idle after Launch')
+    s = sim.wait_until(lambda s: not (s.get('rec') or {}).get('automatic_actions_inhibited') and 'locked after' not in lock_reason(sim, s)[1], 40000, 'launch lock released')
+    sim.check('rules: launch lock released after the reset', s is not None, reason=lock_reason(sim)[1])
+
+
+def abort_keys(sim):
+    code, ab = sim.api('/api/board_abort')
+    errs = (ab or {}).get('active_errors', []) if code == 200 else []
+    return {e.get('board'): e.get('timestamp_ms') for e in errs}, errs
+
+
+def flow_dismissals(sim):
+    """GS 8215ce7 / UI 5090cf4, 69165ff, c280bb7: board abort errors are dismissible (HITL, every board), the UI
+    keys a dismissal by (board, timestamp_ms), so that key must survive a websocket reconnect, an AV-bay radio
+    drop and a station restart; alert acknowledgements must survive a reconnect. Schedule: sched cut0..cut1
+    (AV-bay radio cut) and gsrb (station power cycle), virtual seconds."""
+    a = sim.a; S = a.sched; mode = a.station_mode
+    shown = [b for b in BOARDS if not (mode == 'test_fire' and b in AV_BAY)]
+    latch_all(sim, 'dismissals', expect=shown)
+    sim.wait_v(3000)
+    keys0, errs = abort_keys(sim)
+    sim.check('dismissals: every aborted board has an active error', sorted(keys0) == sorted(shown), boards=sorted(keys0), want=shown)
+    want = mode == 'hitl'
+    sim.check(f"dismissals: every board's abort error {'is' if want else 'is not'} dismissible in {mode}",
+              bool(errs) and all(e.get('dismissible', False) is want for e in errs), dismissible={e.get('board'): e.get('dismissible') for e in errs})
+    code, alerts = sim.api('/api/alerts?minutes=60')
+    lst = alerts if isinstance(alerts, list) else []
+    newest = lambda sev: max((x.get('timestamp_ms', 0) for x in lst if x.get('severity') == sev), default=0)
+    ack = {'warning_timestamp_ms': newest('warning'), 'error_timestamp_ms': newest('error')}
+    code, reply = sim.api('/api/alerts/ack', ack); sim.log_action('alerts_ack', request=ack, http=code, reply=reply, alerts=len(lst))
+    sim.check('dismissals: alert acknowledgement accepted', code == 200 and (reply or {}).get('warning_ack_timestamp_ms') == ack['warning_timestamp_ms']
+              and (reply or {}).get('error_ack_timestamp_ms') == ack['error_timestamp_ms'], http=code, reply=reply, request=ack)
+    def reconnect(tag):
+        try: ws = WsWatch(sim, sim.origin, sim.token, tag=tag)
+        except Exception as e: sim.log_action('ws_failed', error=repr(e)); return None
+        t = time.time() + 30
+        while time.time() < t and not any(e['ty'] == 'AlertAckState' for e in ws.events): time.sleep(.2)
+        return next((e.get('data') for e in ws.events if e['ty'] == 'AlertAckState'), None)
+    def same(tag):
+        keys, _ = abort_keys(sim)
+        moved = {b: (keys0[b], keys.get(b)) for b in keys0 if b in keys and keys[b] != keys0[b]}
+        sim.check(f'dismissals: abort error keys (board, timestamp_ms) unchanged after {tag}', not moved and set(keys) >= set(keys0), moved=moved, missing=sorted(set(keys0) - set(keys)))
+    st = reconnect('ws-reconnect')
+    sim.check('dismissals: alert acknowledgement restored on a websocket reconnect', (st or {}).get('warning_ack_timestamp_ms') == ack['warning_timestamp_ms']
+              and (st or {}).get('error_ack_timestamp_ms') == ack['error_timestamp_ms'], ack_state=st, ack=ack)
+    same('a websocket reconnect')
+    if S.get('cut0'):
+        wait_until_v(sim, (S['cut1'] + 10) * 1000, 'AV-bay radio back')
+        sim.wait_until(lambda s: all(b in sim.aborted_set(s) for b in shown), 30000, 'abort errors back after the radio cut')
+        same('an AV-bay radio drop and return')
+    if S.get('gsrb'):
+        wait_until_v(sim, S['gsrb'] * 1000 + 2000, 'station power cycled')
+        back = sim.wait_until(lambda s: isinstance(s.get('rec'), dict) and s['rec'].get('boards') and all(b in sim.aborted_set(s) for b in shown), 120000, 'station back with abort errors')
+        sim.check('dismissals: station back after the power cycle', back is not None)
+        same('a station restart')
+        st = reconnect('ws-after-restart')
+        sim.result['alert_ack_after_restart'] = {'ack_state': st, 'acked': ack}
+        sim.log_action('alert_ack_after_restart', ack_state=st, acked=ack)
+    sim.save_snapshot('dismissals')
+    r = sim.recovery('reset_startup', boards=BOARDS, label='dismissals reset all')
+    if not r.get('success'): recover_all_needing(sim, 'dismissals leftovers')
+    verify_clear(sim, 'after dismissals', timeout_ms=45000)
+
+
+FLOWS = {'isolation': flow_isolation, 'self_test': flow_self_test, 'nitrogen': flow_nitrogen, 'cold_flow': flow_cold_flow, 'n2_override': flow_n2_override,
+         'fill': flow_fill, 'turbocharge': flow_turbocharge, 'manual_switch': flow_manual_switch, 'challenge': flow_challenge,
+         'rules_hitl': flow_rules_hitl, 'dismissals': flow_dismissals}
+
+
+def sc_gse_flows(sim):
+    """Operator GSE flows on the faithful radio, all seven boards, in the station mode under test (--flows,
+    in order; see FLOWS). Each flow is a step: a fault is recorded and the next flow still runs."""
+    global BOARDS
+    BOARDS = present_boards(sim)
+    if sim.a.station_mode == 'test_fire':
+        # A test fire covers the stand only: the station leaves the (still simulated) AV bay unqueried.
+        BOARDS = [b for b in BOARDS if b not in AV_BAY]
+    sim.gse_plant = {'nitrogen': False, 'nitrous': False}
+    snap = sim.wait_ready(BOARDS, timeout_ms=sim.a.ready_timeout_ms)
+    sim.check('startup: all boards healthy', snap is not None, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in BOARDS})
+    # HITL does not report topology_stable.
+    g = sim.wait_until(lambda s: (s.get('gse') or {}).get('phase') in ('idle', 'cancelled', 'passed') and (s.get('gse') or {}).get('topology_stable') is not False
+                       and isinstance((s.get('gse') or {}).get('valves'), list) and None not in s['gse']['valves'], 120000, 'GSE at rest with valve readbacks')
+    sim.check('startup: GSE at rest with AB/VB valve readbacks', g is not None, gse={k: (sim.st().get('gse') or {}).get(k) for k in ('phase', 'valves', 'message')})
+    for name in [f for f in sim.a.flows.split(',') if f]:
+        step(sim, name, lambda: FLOWS[name](sim))
+    sim.save_snapshot('end')
+
+
+SCENARIOS['gse_flows'] = sc_gse_flows
+
+
+def ui_contract_check(sim):
+    """Decode each live station mode review captured by station_mode_switch (contract-live/<label>/) with the
+    UI's own types: Seds-Ground-Station-Frontend live_station_mode_switch_decodes_with_the_ui_contract."""
+    for d in sorted(p for p in (sim.out / 'contract-live').glob('*') if (p / 'after.json').exists() or (p / 'prepare.json').exists()):
+        r = subprocess.run(['cargo', 'test', '--quiet', 'live_station_mode', '--', '--test-threads=1'], cwd=sim.a.ui_contract,
+                           env={**os.environ, 'GS_LIVE_STATION_MODE_DIR': str(d)}, capture_output=True, text=True)
+        (d / 'ui-decode.log').write_text(r.stdout + r.stderr)
+        sim.result['checks'].append({'v': None, 'name': f'{d.name}: the UI decodes the live review, receipt and switch', 'pass': r.returncode == 0,
+                                     'log': str(d / 'ui-decode.log')})
+    sim.result['passed'] = all(c['pass'] for c in sim.result['checks']); sim.write_result()
+
+
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--mode', choices=['hitl', 'test_fire', 'normal', 'hitl_mode', 'test_fire_mode'], required=True,
@@ -1448,6 +1906,10 @@ if __name__ == '__main__':
     p.add_argument('--nodes', default='', help='subset of rf,power,flight,gateway,actuator,valve,daq')
     p.add_argument('--no-query', action='store_true', help='passive comms measurement (no operator Query load)')
     p.add_argument('--sched', type=json.loads, default={}, help='{"can0":s,"can1":s,"gsrb":s,"abrb":s} virtual seconds')
+    p.add_argument('--flows', default='', help='gse_flows: comma list of ' + ','.join(FLOWS))
+    p.add_argument('--gse-config', type=json.loads, default={}, help='JSON merged into the station gse.json')
+    p.add_argument('--ui-contract', type=Path, help='Seds-Ground-Station-Frontend checkout: after the run, decode every captured live '
+                   'station mode review with the UI (cargo test live_station_mode)')
     a = p.parse_args()
     a.station_mode = {'hitl_mode': 'hitl', 'test_fire_mode': 'test_fire'}.get(a.mode, a.mode)
     a.mode = {'hitl': 'hitl_mode', 'test_fire': 'test_fire_mode'}.get(a.station_mode, 'normal')
@@ -1463,4 +1925,8 @@ if __name__ == '__main__':
     import signal
     def _term(*_): raise KeyboardInterrupt('SIGTERM')
     signal.signal(signal.SIGTERM, _term)
-    s = Sim(a); s.run(SCENARIOS[a.scenario]); print(json.dumps({k: s.result.get(k) for k in ('phase', 'passed', 'error', 'virtual_ms', 'wall_s')}))
+    unknown = [f for f in a.flows.split(',') if f and f not in FLOWS]
+    assert not unknown, ('unknown flows', unknown)
+    s = Sim(a); s.run(SCENARIOS[a.scenario])
+    if a.ui_contract: ui_contract_check(s)
+    print(json.dumps({k: s.result.get(k) for k in ('phase', 'passed', 'error', 'virtual_ms', 'wall_s')}))
