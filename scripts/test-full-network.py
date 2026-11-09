@@ -460,14 +460,19 @@ def latch_all(sim, label, expect=None):
     return snap
 
 
+def station_aborted(s):
+    """The station holds an Abort: an operator Abort puts it in Aborted (flight_state 15); an automatic
+    (safety task) Abort leaves the flight state alone and shows as gse.automatic_abort_claimed."""
+    return (s.get('rec') or {}).get('flight_state') == 15 or (s.get('gse') or {}).get('automatic_abort_claimed') is True
+
+
 def clear_gse(sim, label):
-    """Operator 'Clear GSE abort' when the station itself is in Aborted (flight_state 15)."""
-    rec = sim.st().get('rec') or {}
-    if rec.get('flight_state') == 15:
+    """Operator 'Clear GSE abort' when the station holds an operator or automatic Abort."""
+    if station_aborted(sim.st()):
         code, body = sim.api('/api/gse/abort/clear', {})
         sim.log_action('clear_gse_abort', label=label, http=code, body=body)
         sim.check(f'{label}: Clear GSE abort accepted', code == 200, http=code, body=body)
-        sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') != 15, 10000, 'station left Aborted')
+        sim.wait_until(lambda s: not station_aborted(s), 10000, 'station left Aborted')
 
 
 def verify_clear(sim, label, boards=None, timeout_ms=30000):
@@ -1364,7 +1369,7 @@ def sc_stale_auto_abort(sim):
     def gb_back():
         wait_until_v(sim, s1 * 1000, 'GB back'); F.atomic(sim.diag / 'flight/gb-pico-gate.txt', '0'); sim.log_action('gb_pico_gate', cut=False)
     threading.Thread(target=gb_back, daemon=True).start()
-    snap = sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') == 15, 60000, 'automatic abort raised')
+    snap = sim.wait_until(station_aborted, 60000, 'automatic abort raised')
     v_abort = sim.vclock()
     sim.check('GB offline raises the automatic abort', snap is not None)
     if snap is None: return
