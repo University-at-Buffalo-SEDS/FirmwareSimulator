@@ -1,5 +1,7 @@
 //! Firmware consumer holdover policy against the real SDK election algorithm.
 #[cfg(test)]
+mod relay_anchor;
+#[cfg(test)]
 mod tests {
     use sedsnet::timesync::{
         TimeSyncConfig, TimeSyncLeader, TimeSyncRole, TimeSyncTracker,
