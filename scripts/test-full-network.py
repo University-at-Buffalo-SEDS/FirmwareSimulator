@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Full seven-board linked simulation (see docs/hardware-faithful-radio.md for --radio rfd-faithful
---faithful-time and the faithful, gps_time and vb_stale scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
+--faithful-time and the faithful, mode_switch, rrls_faithful, gps_time and vb_stale scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
 umbilical) with the one-binary GS (+firmware_sim) started in a runtime station mode
 (GS_STATION_MODE=hitl|test_fire|normal; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
 recorder (virtual-time stamped API snapshots) and scripted scenarios.
@@ -118,6 +118,12 @@ def build_config(a):
         topo['reboots'].append({'node': 'groundstation', 'after_sample': int(spec_)})
     for spec_ in a.board_reboot:
         node, s = spec_.split(':'); topo['reboots'].append({'node': NODE_OF.get(node, node), 'after_sample': int(s)})
+    for spec_ in a.radio_cut:
+        s0_, s1_ = (int(x) for x in spec_.split(':'))
+        topo.setdefault('radio_link_events', [])
+        for snd, rcv in (('groundstation', 'rf'), ('rf', 'groundstation')):
+            topo['radio_link_events'] += [dict(link='rocket_radio', sender=snd, receiver=rcv, after_sample=s0_, connected=False),
+                                          dict(link='rocket_radio', sender=snd, receiver=rcv, after_sample=s1_, connected=True)]
     for spec_ in a.can_cut:
         node, s0, s1 = spec_.split(':'); node = NODE_OF.get(node, node); link, per = CAN_EP[node]
         topo['can_link_events'] += [{'link': link, 'node': node, 'peripheral': per, 'after_sample': int(s0), 'connected': False},
@@ -1032,23 +1038,12 @@ def sc_faithful(sim):
     h = (z.get('topology') or {}).get('health') or []
     offs = {x.get('sender_id'): x.get('clock_offset_ms') for x in h}
     sim.check('(8) network health clock_offset_ms present for every board', all(offs.get(b) is not None for b in boards), clock_offset_ms=offs)
-    # (3)/(ii) mode switch availability at Idle and the switch itself
-    m = z.get('modes') or {}
-    opt = next((o for o in m.get('options', []) if o.get('id') == 'hitl'), None) if isinstance(m, dict) else None
-    sim.check('(3) HITL switch offered while Idle', bool(opt and opt.get('available')), option=opt, reason=m.get('reason') if isinstance(m, dict) else m)
-    ok = station_mode_switch(sim, 'hitl', 'idle-normal-to-hitl')
-    if ok: station_mode_switch(sim, 'normal', 'idle-hitl-to-normal')
+    # mode switch checks live in the mode_switch scenario (GS 0be3424 rule)
     # (2)/(i) abort at Idle with a backlogged radio, then Clear GSE abort within a bounded time
     code, body = sim.command('Abort'); va = sim.vclock()
-    # (iii) immediately after: an Abort still genuinely in delivery must hold the mode switch
-    c3, st3 = sim.api('/api/station-modes'); o3 = next((o for o in (st3 or {}).get('options', []) if o.get('id') == 'hitl'), None) if c3 == 200 else None
-    sim.check('(iii) mode switch refused while the Abort is still being delivered', not (o3 or {}).get('available', False), option=o3, reason=(st3 or {}).get('reason') if c3 == 200 else st3)
     sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') == 15, 30000, 'station Aborted')
     sim.wait_v(15000)
-    r = gs_view(sim)
-    m = r.get('modes') or {}
-    opt = next((o for o in m.get('options', []) if o.get('id') == 'hitl'), None) if isinstance(m, dict) else None
-    sim.check('(ii) mode switch offered while Aborted at Idle with nothing moving (15 s after Abort)', bool(opt and opt.get('available')), option=opt, reason=m.get('reason') if isinstance(m, dict) else m)
+    gs_view(sim)
     v0 = sim.vclock(); cleared = None; tries = []
     while sim.vclock() - v0 < 120000 and not sim.stop.is_set():
         c, b = sim.api('/api/gse/abort/clear', {}); tries.append({'v': sim.vclock(), 'http': c, 'body': str(b)[:200]})
@@ -1156,6 +1151,172 @@ def sc_gps_time(sim):
 SCENARIOS['gps_time'] = sc_gps_time
 
 
+class Rrls:
+    def __init__(self, sim):
+        self.sim = sim; self.fwd = F.Forwarder(sim.addr); self.fwd.destination = (sim.addr, 3001); sim.rrls_fwd = self.fwd; self.tok = None
+    def login(self, tries=600):
+        for _ in range(tries):
+            try: self.tok = F.login(self.fwd.origin, self.sim.key); return True
+            except (AssertionError, OSError, KeyError, TypeError): time.sleep(.5)
+        return False
+    def api(self, path, body=None):
+        for attempt in range(2):
+            try: code, data = F.request(self.fwd.origin, path, body, self.tok, 30)
+            except OSError as e: code, data = 0, {'os_error': str(e)}
+            if code in (0, 401) and attempt == 0: self.login(tries=120); continue
+            return code, data
+
+
+def sc_rrls_faithful(sim):
+    """RRLS on the faithful radio: (1) idle RRLS seen alive at the primary, (2) RRLS-issued exchanges/commands
+    within ~1 s, (3) no relay traffic on a healthy direct path; relay engaged and within its share when broken."""
+    a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'rrls.jsonl').open('a')
+    sim.wait_ready(boards, timeout_ms=60000)
+    r = Rrls(sim); sim.check('RRLS login', r.login())
+    def both(tag):
+        row = {'v': sim.vclock(), 'tag': tag}
+        for k, (fn, path) in {'p_rrls': (sim.api, '/api/rrls/status'), 'r_rrls': (r.api, '/api/rrls/status'), 'p_topo': (sim.api, '/api/network_topology'),
+                              'p_pair': (sim.api, '/api/station/pairing'), 'r_pair': (r.api, '/api/station/pairing'), 'r_ctl': (r.api, '/api/rrls/control'),
+                              'r_boards': (r.api, '/api/boards')}.items():
+            c, d = fn(path); row[k] = d if c == 200 else {'http': c, 'body': str(d)[:200]}
+        # (5) network time on both stations, read back to back
+        c1, t1 = sim.api('/api/network_time'); c2, t2 = r.api('/api/network_time'); c3, t3 = sim.api('/api/network_time')
+        try: row['clock_offset_ms'] = t2['timestamp_ms'] - (t1['timestamp_ms'] + t3['timestamp_ms']) / 2; row['clock_bracket_ms'] = t3['timestamp_ms'] - t1['timestamp_ms']
+        except (TypeError, KeyError): row['clock_offset_ms'] = None; row['clock_raw'] = [str(t1)[:100], str(t2)[:100]]
+        if isinstance(row['p_topo'], dict):
+            row['p_topo'] = {'nodes': [n for n in row['p_topo'].get('nodes', []) if 'rrls' in json.dumps(n).lower()],
+                             'links': [l for l in row['p_topo'].get('links', []) if 'rrls' in json.dumps(l).lower()]}
+        out.write(json.dumps(row, default=str) + '\n'); out.flush(); return row
+    # (2a) pairing exchange over the radio
+    both('initial'); v0 = sim.vclock()
+    sim.api('/api/station/pairing/start', {}); r.api('/api/station/pairing/start', {})
+    code = None
+    while sim.vclock() - v0 < 60000:
+        x = both('pair'); cp = ((x['p_pair'] or {}).get('exchange') or {}).get('code'); cr = ((x['r_pair'] or {}).get('exchange') or {}).get('code')
+        if cp and cp == cr: code = cp; break
+        sim.wait_v(200)
+    v_code = sim.vclock()
+    if code:
+        sim.api('/api/station/pairing/confirm', {'code': code}); r.api('/api/station/pairing/confirm', {'code': code})
+    v1 = sim.vclock(); saved = None
+    while code and sim.vclock() - v1 < 60000:
+        x = both('pair-saved')
+        if (x['p_pair'] or {}).get('paired') and (x['r_pair'] or {}).get('paired'): saved = sim.vclock(); break
+        sim.wait_v(200)
+    sim.check('(2) pairing exchange over the radio: code within 1 s and saved within 1 s of confirm', code is not None and v_code - v0 <= 1500 and saved is not None and saved - v1 <= 1500,
+              code_after_v_ms=v_code - v0 if code else None, saved_after_v_ms=(saved - v1) if saved else None)
+    # restart both stations to activate the pairing (scheduled host reboots)
+    wait_until_v(sim, (S['hostrb'] + 3) * 1000, 'stations restarted')
+    sim.wait_until(lambda s: isinstance(s.get('rec'), dict) and s['rec'].get('boards'), 120000, 'primary back')
+    r.login(tries=240); sim.wait_v(10000)
+    # (1)+(3a) healthy direct path
+    rows = []; v_idle = sim.vclock()
+    while sim.vclock() < S['cut0'] * 1000 - 2000:
+        rows.append(both('idle')); sim.wait_v(2000)
+    def rel(x): return ((x.get('r_rrls') or {}).get('relayed_frames') or 0, (x.get('r_rrls') or {}).get('relay_envelope_bytes') or 0, bool((x.get('r_rrls') or {}).get('forwarding')))
+    seen = []
+    for x in rows:
+        t = json.dumps(x.get('p_topo')); m = re.findall(r'"(?:age_ms|peer_age_ms|last_seen_age_ms)": ?(\d+)', t)
+        st = re.findall(r'"status": ?"(\w+)"', t)
+        seen.append(bool(x['p_topo'].get('nodes')) and (not m or min(int(v) for v in m) <= 5000) and not any(s_ in ('offline', 'unknown', 'stale') for s_ in st))
+    sim.check('(1) idle RRLS seen alive at the primary continuously (RRLS topology node present and <= 5 s old in >= 95% of samples)',
+              rows and sum(seen) >= 0.95 * len(rows), fraction=round(sum(seen) / max(1, len(rows)), 3), last_nodes=(rows[-1]['p_topo'] if rows else None))
+    if rows:
+        f0, f1 = rel(rows[0]), rel(rows[-1])
+        sim.check('(3) no relay forwarding while the direct path is healthy', f1[0] - f0[0] == 0 and not any(rel(x)[2] for x in rows),
+                  relayed_frames_delta=f1[0] - f0[0], forwarding_samples=sum(rel(x)[2] for x in rows), p_relay_requested=[(x.get('p_rrls') or {}).get('relay_requested') for x in rows][-3:])
+    # (4) RRLS shows live data from every board it hears
+    def live(x):
+        bl = (x.get('r_boards') or {}).get('boards') if isinstance(x.get('r_boards'), dict) else None
+        rowsb = {y.get('sender_id'): y for y in (bl or [])}
+        return {b: (rowsb.get(b) or {}).get('age_ms') for b in boards}
+    lv = [live(x) for x in rows]
+    frac = {b: round(sum(1 for d in lv if d.get(b) is not None and d[b] <= 5000) / max(1, len(lv)), 3) for b in boards}
+    sim.check('(4) idle RRLS shows live data from every board (age <= 5 s in >= 95% of samples, RRLS /api/boards)', all(f >= 0.95 for f in frac.values()),
+              fraction=frac, last=lv[-1] if lv else None)
+    offs = [x.get('clock_offset_ms') for x in rows]
+    sim.check('(5) idle RRLS network clock within 1 s of the primary', bool(offs) and all(o is not None and abs(o) <= 1000 for o in offs),
+              max_abs=max((abs(o) for o in offs if o is not None), default=None), missing=sum(o is None for o in offs), samples=len(offs))
+    # (2b) RRLS-issued recovery query reaches the primary
+    v2 = sim.vclock(); c, b = r.api('/api/board-recovery/query', {'board': 'RF'}); got = None
+    while sim.vclock() - v2 < 15000:
+        rf = sim.rows().get('RF') or {}; op = rf.get('operation') or {}
+        if op.get('action') == 'query' and (op.get('age_ms') or 10**9) <= (sim.vclock() - v2) * a.faithful_time + 2000: got = sim.vclock(); break
+        time.sleep(.2)
+    sim.check('(2) RRLS-issued recovery query is seen at the primary within 1 s', got is not None and got - v2 <= 1000, http=c, body=str(b)[:300], after_v_ms=(got - v2) if got else None)
+    # (3b) broken direct path
+    wait_until_v(sim, S['cut0'] * 1000, 'direct path broken'); cut = []
+    while sim.vclock() < S['cut1'] * 1000:
+        cut.append(both('cut')); sim.wait_v(2000)
+    if len(cut) >= 3:
+        f0, f1 = rel(cut[2]), rel(cut[-1]); dt = (cut[-1]['v'] - cut[2]['v']) / 1000
+        share = (f1[1] - f0[1]) * 8 * (1 + a.rfd_global_retries) / dt / 64000 if dt > 0 else None
+        sim.check('(3) relay engages when the direct path is broken', any(rel(x)[2] for x in cut) and f1[0] > f0[0], relayed_frames_delta=f1[0] - f0[0], forwarding_samples=sum(rel(x)[2] for x in cut))
+        co = [x.get('clock_offset_ms') for x in cut[2:]]
+        sim.check('(5) relaying RRLS network clock within 1 s of the primary', bool(co) and all(o is not None and abs(o) <= 1000 for o in co),
+                  max_abs=max((abs(o) for o in co if o is not None), default=None), missing=sum(o is None for o in co))
+        sim.check('(3) relay air share stays <= 15 %', share is not None and share <= 0.15, share=round(share, 3) if share is not None else None, relay_bytes=f1[1] - f0[1], window_s=dt)
+    wait_until_v(sim, S['cut1'] * 1000 + 20000, 'direct restored'); after = [both('restored')]
+    sim.wait_v(20000); after.append(both('restored2'))
+    sim.check('(3) relay stops after the direct path returns', not rel(after[-1])[2], last=after[-1].get('r_rrls'))
+
+
+SCENARIOS['rrls_faithful'] = sc_rrls_faithful
+
+
+def switch_round_trip(sim, label):
+    """normal -> hitl -> normal in process; returns True when both switches complete."""
+    ok = station_mode_switch(sim, 'hitl', label + '-to-hitl')
+    sim.wait_v(2000)
+    back = station_mode_switch(sim, 'normal', label + '-to-normal') if ok else False
+    sim.wait_v(2000)
+    return ok and back
+
+
+def switch_refused(sim, label):
+    c, st = sim.api('/api/station-modes')
+    opt = next((o for o in (st or {}).get('options', []) if o.get('id') == 'hitl'), None) if c == 200 else None
+    binding = {k: st[k] for k in ('backend_instance', 'principal_context', 'authority_id', 'revision', 'policy_epoch')} if c == 200 else {}
+    binding.update(current_id=(st or {}).get('current', {}).get('id'), target_id='hitl')
+    c2, b2 = sim.api('/api/station-modes/prepare', binding)
+    sim.check(f'{label}: mode switch refused', not (opt or {}).get('available', False) and c2 != 200, option_reason=(opt or {}).get('reason'), prepare_http=c2, prepare=str(b2)[:200])
+
+
+def sc_mode_switch(sim):
+    """GS 0be3424 rule on the faithful radio: the mode switch never locks on board/abort/delivery/recovery state;
+    only a countdown, turbocharge, manual control or cold flow refuse it. Schedule (virtual s): DAQ CAN cut
+    sched dq0..dq1, GS<->RF direct radio cut cut0..cut1."""
+    a = sim.a; S = a.sched
+    sim.ws = None
+    try: sim.ws = WsWatch(sim, sim.origin, sim.token, tag='ws-modes')
+    except Exception as e: sim.log_action('ws_failed', error=repr(e))
+    sim.faithful = (sim.out / 'faithful.jsonl').open('a')
+    wait_until_v(sim, 30000, 'startup sequence finished'); gs_view(sim)
+    sim.check('switch at Idle right after the startup sequence finished', switch_round_trip(sim, 'idle-after-startup-sequence'))
+    wait_until_v(sim, (S['dq0'] + 8) * 1000, 'DAQ missing')
+    sim.check('switch at Idle with a board missing (DAQ CAN cut)', switch_round_trip(sim, 'daq-missing'), daq=sim.rows().get('DAQ', {}).get('readback_status'))
+    c, b = sim.api('/api/board-recovery/query', {'board': 'DAQ'}); sim.log_action('daq_query_pending', http=c, body=b)
+    sim.check('switch while a board recovery query is pending', switch_round_trip(sim, 'recovery-pending'), query_http=c)
+    wait_until_v(sim, (S['cut0'] + 3) * 1000, 'direct radio broken')
+    sim.command('Abort'); sim.wait_v(8000); gs_view(sim)
+    ab = sim.aborted_set(sim.st())
+    sim.check('switch while Aborted, a board aborted and the AV-bay ABORT undeliverable', switch_round_trip(sim, 'aborted-undeliverable'), aborted_boards=ab,
+              radio_budget=((sim.st().get('netdiag') or {}).get('radio_tx_budget') or {}).get('pending_control_bytes'))
+    c, b = sim.api('/api/gse/abort/clear', {}); sim.log_action('clear_abort', http=c, body=b)
+    wait_until_v(sim, (S['cut1'] + 5) * 1000, 'direct radio restored')
+    for cmd in ('Dump',):
+        sim.command(cmd); sim.wait_v(1500)
+        gs = sim.api('/api/gse/status')[1]
+        sim.log_action('manual_state', manual=(gs or {}).get('manual_control'), valves=(gs or {}).get('valves'))
+        switch_refused(sim, f'manual control ({cmd})')
+        sim.command(cmd); sim.wait_v(3000)
+    gs_view(sim)
+    if sim.ws: (sim.out / 'ws-counts.json').write_text(json.dumps(sim.ws.counts, indent=1))
+
+
+SCENARIOS['mode_switch'] = sc_mode_switch
+
+
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--mode', choices=['hitl', 'test_fire', 'normal', 'hitl_mode', 'test_fire_mode'], required=True,
@@ -1173,7 +1334,7 @@ if __name__ == '__main__':
     p.add_argument('--ready-timeout-ms', type=int, default=240000)
     p.add_argument('--cycles', type=int, default=5)
     p.add_argument('--radio', choices=['hub', 'rfd', 'rfd-faithful', 'backlog'], default='rfd')
-    p.add_argument('--rfd-global-retries', type=int, default=10)
+    p.add_argument('--rfd-global-retries', type=int, default=3, help='extra air copies per packet; 3 is calibrated against the bench uplink (see docs)')
     p.add_argument('--faithful-time', type=float, default=0, help='wall seconds per virtual second (Renode pace + time-dilated station)')
     p.add_argument('--phase-a-ms', type=int, default=180000)
     p.add_argument('--gps-initial', type=int, choices=[0, 1, 2], default=0, help='RF GPS fixture at power-up: 0 no fix, 1 fix, 2 u-blox placeholder date, no fix')
@@ -1182,6 +1343,7 @@ if __name__ == '__main__':
     p.add_argument('--gs-reboot', action='append', default=[])
     p.add_argument('--board-reboot', action='append', default=[])
     p.add_argument('--can-cut', action='append', default=[])
+    p.add_argument('--radio-cut', action='append', default=[], help='s0:s1 virtual seconds: GS<->RF direct radio path broken')
     p.add_argument('--wall-freshness-scale', type=int, default=30)
     p.add_argument('--rust-log', default='info')
     p.add_argument('--cpus', type=int, default=6)
@@ -1198,6 +1360,9 @@ if __name__ == '__main__':
     if a.sched.get('gsrb'): a.gs_reboot.append(str(a.sched['gsrb']))
     if a.sched.get('abrb'): a.board_reboot.append(f"AB:{a.sched['abrb']}")
     if a.sched.get('vbc0'): a.can_cut.append(f"VB:{a.sched['vbc0']}:{a.sched['vbc1']}")
+    if a.sched.get('cut0'): a.radio_cut.append(f"{a.sched['cut0']}:{a.sched['cut1']}")
+    if a.sched.get('dq0'): a.can_cut.append(f"DAQ:{a.sched['dq0']}:{a.sched['dq1']}")
+    if a.sched.get('hostrb'): a.gs_reboot.append(str(a.sched['hostrb'])); a.board_reboot.append(f"rrls:{a.sched['hostrb']}")
     import signal
     def _term(*_): raise KeyboardInterrupt('SIGTERM')
     signal.signal(signal.SIGTERM, _term)

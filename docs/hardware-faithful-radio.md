@@ -42,7 +42,7 @@ The station's wall timers then age at the boards' rate. Its radio capacity pacin
 
 ## Scenario
 
-`scripts/test-full-network.py --scenario faithful` runs the seven-board network in Normal mode at Idle on
+`scripts/test-full-network.py --scenario faithful` (default `--rfd-global-retries 3`, see Calibration) runs the seven-board network in Normal mode at Idle on
 `--radio rfd-faithful --faithful-time 20`. It records the counters the Pi exposes every 5 virtual seconds into
 `faithful.jsonl`:
 - from `/api/network_diagnostics`: `radio_tx_budget`, `queues.tx_len`, `reliable` and per-type tx/retries;
@@ -64,3 +64,37 @@ It then asserts the following, numbered by the bench fault list:
 
 Use `--rrls` to add a hosted RRLS on the same medium (`--scenario pairing` drives UI pairing over the radio).
 `--gs-env` passes extra station variables.
+
+More scenarios:
+
+| Scenario | What it asserts |
+| --- | --- |
+| `mode_switch` | The 0be3424 rule. The in-process normal/hitl switch succeeds at Idle right after the startup sequence, with DAQ missing (scheduled `dq0`/`dq1` CAN cut), with a board recovery query pending, and while Aborted with a board aborted and the AV-bay ABORT undeliverable (`cut0`/`cut1` GS-RF radio cut). It is refused under manual valve control. T-minus, turbocharge and cold flow need a fill or launch sequence and are not covered here. |
+| `rrls_faithful` | The RRLS on the same medium (`--rrls`, AV-bay nodes). Pairing over the radio finishes within about 1 s per step. The idle RRLS is seen alive at the primary. An RRLS-issued query reaches the primary within 1 s. There is no relay traffic on a healthy direct path. With the direct path cut, the relay engages at or below a 15 % air share and stops afterwards. The idle RRLS shows live data from every board, and its network clock stays within 1 s of the primary. |
+| `gps_time` | `--gps-initial 2`: a cold u-blox receiver (no fix, placeholder date). Every board keeps network UTC, none runs ahead of the station or steps backwards, before and after a valid fix. |
+| `vb_stale` | No Valve Board stale-sensor [S] warning during an outage (`vbc0`/`vbc1` VB CAN cut) or within 10 s of reconnecting. An injected F fault inside the grace still warns. |
+
+## Calibration
+
+The bench snapshot covers 60 s in Normal mode at Idle, all boards, RRLS off. On rocket_comms it shows:
+- about 1,135 rx and 392 tx frames per minute, 346 of them RELIABLE_ACK;
+- tx_len growing about 12 frames/s;
+- refusals dominated by control_budget.
+
+The seven-board faithful sim on GS aed4351 at pace 20 measured over 95 virtual s:
+
+| Extra copies | rx/min | tx/min | ACK/min | HEARTBEAT/min | tx_len growth/s | Launch-proof fresh |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0 | 1029 | 549 | 280 | 64 | 0.83 | all boards |
+| 3 | 736 | 557 | 246 | 64 | 0.76 | 10-45 % per board |
+| 10 | 180 | 410 | 16 | 64 | 0.46 | 0-17 % per board |
+
+Station tx stays at 6.4-9 frames/s on every row, which is the 100 + 55 ms pacing cap. The uplink and ACK volume
+come closest to the bench with 0 to 3 extra copies; the default is 3.
+
+Differences from the bench that remain:
+- Heartbeat and time sync reach the air in the sim but almost never on the Pi.
+- tx_len grows about 15 times faster on the Pi.
+- The refusal mix differs: control_budget on the Pi, large_frame_reservation in the sim.
+
+That refusal mix suggests the snapshot came from a station older than aed4351.
