@@ -1,0 +1,33 @@
+--- a/Core/Src/recovery.c	2026-11-08 12:51:15.501746325 -0500
++++ b/Core/Src/recovery.c	2026-11-08 12:51:15.510870722 -0500
+@@ -16,6 +16,9 @@
+ #include "av_bay_underglow.h"
+ #endif
+ #include "tx_thread.h"
++#ifndef SIM_SELF_LAUNCH_MS
++#define SIM_SELF_LAUNCH_MS 60000U
++#endif
+ 
+ #define id "RE "
+ 
+@@ -875,6 +878,20 @@
+       tx_thread_sleep(1U); /* Let evaluator/telemetry acknowledge; never spin. */
+       continue;
+     }
++    /* LOCAL SIM-ONLY HOOK (never committed): deliver Postinit then Launch
++     * exactly like accepted network commands, for a targeted Launch sim. */
++    {
++      static unsigned sim_step;
++      const uint32_t sim_now = HAL_GetTick();
++      if (sim_step < 2U && sim_now >= (sim_step ? SIM_SELF_LAUNCH_MS : SIM_SELF_LAUNCH_MS - 5000U)) {
++        fc_msg sim_msg = sim_step ? Launch_Signal : Postinit_Signal;
++        sim_step++;
++        if (fc_recovery_command_admissible((uint32_t)sim_msg, false)) {
++          g_last_network_flight_command_msg = sim_msg;
++          (void)tx_queue_send(&seds_syscall, &sim_msg, TX_NO_WAIT);
++        }
++      }
++    }
+     const uint32_t command_epoch = fc_recovery_epoch();
+ 
+     recovery_update_stack_profile();

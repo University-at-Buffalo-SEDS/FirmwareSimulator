@@ -625,7 +625,9 @@ class Run:
                 name = phase if isinstance(phase, str) else (phase.get('phase') or phase.get('mission_phase') or phase.get('label')) if isinstance(phase, dict) else phase
             if name != self.gs.get('mission_phase'):
                 self.gs['mission_phase'] = name
-                self.result['mission_phases_seen'].append({'virtual_ms': self.now, 't_plus_ms': self.tplus_ms(), 'phase': name, 'fc_state': self.fc_state, 'comms': self.cut['state']})
+                self.result['mission_phases_seen'].append({'virtual_ms': self.now, 't_plus_ms': self.tplus_ms(), 'phase': name, 'fc_state': self.fc_state, 'comms': self.cut['state'],
+                                                           'detailed': phase.get('detailed') if isinstance(phase, dict) else None,
+                                                           'comms_loss_landed': phase.get('comms_loss_landed') if isinstance(phase, dict) else None})
                 changed.append(('mission_phase', {'value': phase_value}))
         if self.t0 is not None or self.stage in ('qd', 'fire', 'flight'):
             code, clock = self.api('/api/launch_clock')
@@ -849,6 +851,13 @@ class Run:
         c['gs_reverted_to_in_flight'] = {'pass': bool(reverted) and bool(landed), 'first': reverted[0] if reverted else None,
                                          'fc_state_at_restore': restore_state and restore_state.get('fc_state')}
         c['fc_in_descent_or_reefing_at_restore'] = {'pass': bool(restore_state) and restore_state.get('fc_state') in ('Descent', 'Reefing')}
+        # The FC owns In flight -> Landed: after the FC lands the station must show
+        # Landed from the FC's own report (not the comms-loss fallback) while comms
+        # are nominal or restored.
+        fc_landed = (self.result['fc_states_seen'].get('Landed') or {}).get('virtual_ms')
+        fc_landed_phase = [p for p in phases if fc_landed is not None and p['virtual_ms'] >= fc_landed
+                           and str(p['phase']).lower() == 'landed' and p.get('comms_loss_landed') is False]
+        c['gs_landed_from_fc'] = {'pass': bool(fc_landed_phase), 'first': fc_landed_phase[0] if fc_landed_phase else None}
         c['fc_no_stack_or_hard_fault'] = {'pass': not any(k.startswith('fc_fault_counter_') for k in self.result) and not self.result.get('fc_fault'),
                                           'low_water': self.result.get('fc_stack_low_water')}
         self.result['checks'] = c
