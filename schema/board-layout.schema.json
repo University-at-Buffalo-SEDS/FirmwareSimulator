@@ -89,6 +89,7 @@
         "trace": {"type": "boolean"},
         "boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
         "factory_boot_success_symbol": {"type": "string", "pattern": "^[A-Za-z0-9_]+$"},
+        "factory_boot_ms": {"type": "integer", "minimum": 1},
         "sample_count": {"type": "integer", "minimum": 1},
         "memory_probe_warmup_samples": {"type": "integer", "minimum": 0},
         "require_stack_probe": {"type": "boolean"},

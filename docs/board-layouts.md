@@ -30,7 +30,7 @@ firmware-sim validate --layout sim/board.json --firmware-root .
 
 The authoritative schema is `schema/board-layout.schema.json` and `examples/stm32g4-board.json` is a complete example.
 
-The direct run loads the firmware ELF and requires `execution.boot_success_symbol` (normally the scheduler) to execute. The factory run loads ELF symbols without loading ELF bytes, maps only the exact generated factory binary at the BSP flash base, initializes MSP and PC from its vector table, and requires `execution.factory_boot_success_symbol` (default `main`). Validation rejects vectors outside declared flash/RAM.
+The direct run loads the firmware ELF and requires `execution.boot_success_symbol` (normally the scheduler) to execute. The factory run loads ELF symbols without loading ELF bytes, maps only the exact generated factory binary at the BSP flash base, initializes MSP and PC from its vector table, and requires `execution.factory_boot_success_symbol` (default `main`). It has `execution.factory_boot_ms` of virtual time to get there; unset, that is 1000 ms on STM32H5, 200 ms on STM32G4, 500 ms on STM32U5 and 50 ms otherwise. Each default is about five times the slowest measured factory boot from blank persistent storage, so a boot that hangs still fails. Validation rejects vectors outside declared flash/RAM.
 
 Boards using LaunchCore persistent settings declare `memory.persistent_data_base`
 and `memory.persistent_data_size`. Validation requires an erase-aligned region

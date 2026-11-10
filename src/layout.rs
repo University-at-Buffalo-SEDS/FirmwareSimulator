@@ -262,6 +262,10 @@ pub struct ExecutionConfig {
     pub boot_success_symbol: String,
     #[serde(default = "default_factory_boot_symbol")]
     pub factory_boot_success_symbol: String,
+    /// Virtual time the factory flow (bootloader then application) has to
+    /// reach `factory_boot_success_symbol`; the architecture default if unset.
+    #[serde(default)]
+    pub factory_boot_ms: Option<u64>,
     #[serde(default = "default_sample_count")]
     pub sample_count: usize,
     #[serde(default)]
@@ -285,6 +289,7 @@ impl Default for ExecutionConfig {
             trace: false,
             boot_success_symbol: default_boot_symbol(),
             factory_boot_success_symbol: default_factory_boot_symbol(),
+            factory_boot_ms: None,
             sample_count: default_sample_count(),
             memory_probe_warmup_samples: 0,
             require_stack_probe: false,

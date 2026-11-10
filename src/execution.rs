@@ -204,6 +204,10 @@ pub fn run(layout: &BoardLayout, root: &Path) -> Result<ExecutionReport> {
         "invalid factory execution success symbol"
     );
     ensure!(
+        layout.execution.factory_boot_ms != Some(0),
+        "execution factory_boot_ms must be positive"
+    );
+    ensure!(
         layout.execution.sample_count > 0,
         "execution sample_count must be positive"
     );
@@ -1000,6 +1004,33 @@ struct ExecutionScenario<'a> {
     power_cut_after: Option<u64>,
 }
 
+/// Virtual time the DAQ Board (STM32U5) factory flow takes to reach the
+/// scheduler from blank persistent storage, where it provisions its recovery
+/// identity and reads it back through the strict LaunchCore reader. Measured
+/// with factory_boot_ms on DAQ 4dbee80: 95 ms stops in that work, 100 ms
+/// reaches `_tx_thread_schedule`.
+const DAQ_MEASURED_FACTORY_BOOT_MS: u64 = 100;
+/// Five times the measured DAQ boot, as for G4: still flags a boot that hangs.
+const U5_FACTORY_BOOT_MS: u64 = 5 * DAQ_MEASURED_FACTORY_BOOT_MS;
+
+/// The factory flow's virtual-time budget: the layout's
+/// `execution.factory_boot_ms`, else the architecture default.
+///
+/// H5 bootloader + application startup includes clock, SD-card absence, and
+/// TIM6 timebase initialization. A factory-flashed G4 or U5 board starts with
+/// blank persistent storage and provisions it before ThreadX starts; the
+/// Valve Board needs 20-40 ms of virtual time for that, so G4 gets 200 ms, and
+/// the DAQ Board about 100 ms, so U5 gets 500 ms: 5x margin that still flags
+/// a hang. Each default leaves the allocator soak unchanged.
+pub(crate) fn factory_boot_ms(layout: &BoardLayout) -> u64 {
+    layout.execution.factory_boot_ms.unwrap_or(match layout.architecture {
+        ArchitectureKind::Stm32h5 => 1_000,
+        ArchitectureKind::Stm32g4 => 200,
+        ArchitectureKind::Stm32u5 => U5_FACTORY_BOOT_MS,
+        _ => 50,
+    })
+}
+
 fn render_script(
     layout: &BoardLayout,
     platform: &Path,
@@ -1091,18 +1122,7 @@ fn render_script(
             ));
         }
     }
-    // H5 bootloader + application startup includes clock, SD-card absence, and
-    // TIM6 timebase initialization. Give the factory flow enough virtual time
-    // to reach the same scheduler hook without lengthening the allocator soak.
-    // A factory-flashed G4 board starts with blank persistent storage and
-    // provisions it before ThreadX starts; the Valve Board needs 20-40 ms of
-    // virtual time for that, so 200 ms leaves 5x margin and still flags a hang.
-    let minimum_factory_ms = match layout.architecture {
-        ArchitectureKind::Stm32h5 => 1_000,
-        ArchitectureKind::Stm32g4 => 200,
-        _ => 50,
-    };
-    let factory_ms = minimum_factory_ms;
+    let factory_ms = factory_boot_ms(layout);
     let factory_seconds = factory_ms as f64 / 1000.0;
     let tracing = if layout.execution.trace {
         format!(
@@ -1636,6 +1656,7 @@ fn tail(value: &str, count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{factory_boot_ms, DAQ_MEASURED_FACTORY_BOOT_MS, U5_FACTORY_BOOT_MS};
     use super::{
         marker_csv, marker_u64, materialize_platform, observed_marker_after, parse_memory_profile,
         render_board_initialization_script, render_ota_script, render_peripheral_overlay,
@@ -2025,6 +2046,29 @@ mod tests {
         assert!(factory.contains("sysbus LoadBinary @firmware-flash.bin 0x08000000"));
         assert!(factory.contains("cpu SetRegister 13 0x2001c000"));
         assert!(factory.contains("cpu PC 0x08000001"));
+    }
+
+    #[test]
+    fn layout_sets_the_factory_boot_budget_and_architectures_keep_their_defaults() {
+        assert_eq!(factory_boot_ms(&layout("stm32h5", "[]")), 1_000);
+        assert_eq!(factory_boot_ms(&layout("stm32g4", "[]")), 200);
+        let mut board = layout("stm32u5", "[]");
+        assert_eq!(factory_boot_ms(&board), U5_FACTORY_BOOT_MS);
+        board.execution.factory_boot_ms = Some(1_234);
+        assert_eq!(factory_boot_ms(&board), 1_234);
+        let parsed: crate::layout::ExecutionConfig =
+            serde_json::from_str(r#"{"factory_boot_ms": 750}"#).unwrap();
+        assert_eq!(parsed.factory_boot_ms, Some(750));
+    }
+
+    #[test]
+    fn u5_factory_flow_has_time_to_provision_blank_persistent_storage() {
+        // A factory-flashed DAQ Board (STM32U5) starts with an erased
+        // persistent region and, before ThreadX schedules, provisions its
+        // recovery identity and reads it back through the strict LaunchCore
+        // reader: about 100 ms. 50 ms stopped it inside read_data.
+        assert!(U5_FACTORY_BOOT_MS >= 5 * DAQ_MEASURED_FACTORY_BOOT_MS);
+        assert!(factory_boot_ms(&layout("stm32u5", "[]")) >= 5 * DAQ_MEASURED_FACTORY_BOOT_MS);
     }
 
     #[test]
