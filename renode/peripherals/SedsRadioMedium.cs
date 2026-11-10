@@ -900,6 +900,18 @@ namespace Antmicro.Renode.Peripherals.UART
                 WriteNumber(receive ? 1UL : 0UL,4); WriteNumber(untilUs,8);
                 stream.Flush(); WriteStatus();
             }
+            // FIRMWARE_SIM_RADIO_TRACE_MAX_MB (4..256, default 4) bounds each
+            // stream; a long linked run needs more than the default.
+            private static readonly ulong MaxBytes = TraceMaxBytes();
+            private static ulong TraceMaxBytes()
+            {
+                var text = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RADIO_TRACE_MAX_MB");
+                ulong mb;
+                if(string.IsNullOrEmpty(text)) return 4UL * 1024 * 1024;
+                if(!ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out mb) || mb < 4 || mb > 256)
+                    throw new RecoverableException("FIRMWARE_SIM_RADIO_TRACE_MAX_MB must be 4..256");
+                return mb * 1024 * 1024;
+            }
             public void Record(ulong now, byte value)
             {
                 lock(sync)
@@ -946,8 +958,7 @@ namespace Antmicro.Renode.Peripherals.UART
             {
                 for(var i=0;i<width;i++) { stream.WriteByte((byte)value); value >>= 8; }
             }
-            private const ulong MaxBytes = 4 * 1024 * 1024;
-            private const ulong MaxRecords = (MaxBytes - 32) / 9;
+            private static readonly ulong MaxRecords = (MaxBytes - 32) / 9;
             private readonly object sync = new object();
             private readonly string statusPath;
             private readonly FileStream stream;

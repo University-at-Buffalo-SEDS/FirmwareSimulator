@@ -179,6 +179,7 @@ def build_config(a):
            '-v', f'{out / "gs-data"}:/opt/groundstation/data', '-v', f'{out / "gs-backend-data"}:/opt/groundstation/backend/data']
     if a.radio_trace:
         cmd += ['-e', 'FIRMWARE_SIM_RADIO_TRACE_DIR=/diagnostics/radio-trace', '-e', f'FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS={a.duration_ms - 1000}']
+        cmd += ['-e', f'FIRMWARE_SIM_RADIO_TRACE_MAX_MB={a.radio_trace_max_mb}']
     if a.faithful_time:
         cmd += ['-e', f'FIRMWARE_SIM_WALL_PACE={a.faithful_time}']
     if a.radio == 'rfd-faithful':
@@ -1319,6 +1320,118 @@ def sc_rrls_faithful(sim):
 SCENARIOS['rrls_faithful'] = sc_rrls_faithful
 
 
+def sc_pyro_paths(sim):
+    """HITL operator parachute commands and Abort over the direct GS-RF path, over the RRLS relay with the direct
+    path cut, and after the direct path returns, under the normal background load (telemetry, heartbeats, time sync)
+    plus a managed-variable query every 3 s. Records the POST time of every command (pyro.jsonl); with --radio-trace
+    scripts/analyze-pyro-latency.py derives per-hop latency to the FC's acknowledgement. Checks relay engagement,
+    handover, RRLS presence and RRLS-issued commands. Schedule (virtual s): hostrb (pairing restart), cut0/cut1."""
+    a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'pyro.jsonl').open('a')
+    def rec(**kw):
+        out.write(json.dumps({'v': sim.vclock(), **kw}, default=str) + '\n'); out.flush()
+    sim.check('startup: boards ready', sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms) is not None)
+    r = Rrls(sim) if a.rrls else None
+    if r:
+        sim.check('RRLS login', r.login())
+    if r and S.get('hostrb'):
+        sim.api('/api/station/pairing/start', {}); r.api('/api/station/pairing/start', {}); v0 = sim.vclock(); code = None
+        while sim.vclock() - v0 < 60000 and not code:
+            cp = ((sim.api('/api/station/pairing')[1] or {}).get('exchange') or {}).get('code')
+            cr = ((r.api('/api/station/pairing')[1] or {}).get('exchange') or {}).get('code')
+            if cp and cp == cr: code = cp
+            else: sim.wait_v(200)
+        if code:
+            sim.api('/api/station/pairing/confirm', {'code': code}); r.api('/api/station/pairing/confirm', {'code': code})
+        sim.check('RRLS pairing code exchanged over the radio', code is not None, after_v_ms=sim.vclock() - v0)
+        wait_until_v(sim, (S['hostrb'] + 3) * 1000, 'stations restarted')
+        sim.wait_until(lambda s: isinstance(s.get('rec'), dict) and s['rec'].get('boards'), 120000, 'primary back')
+        r.login(tries=240)
+        sim.check('boards ready after the pairing restart', sim.wait_ready(boards, timeout_ms=120000) is not None)
+    stop_bg = threading.Event()
+    def background():
+        while not stop_bg.is_set() and not sim.stop.is_set():
+            query_rtt_loop(sim, 30000, boards=boards, period_ms=3000 * len(boards), tag='bg-queries')
+    bg = threading.Thread(target=background, daemon=True); bg.start()
+    def rrls_status():
+        if not r: return {}
+        c, d = r.api('/api/rrls/status'); return d if c == 200 and isinstance(d, dict) else {}
+    seq = [0]; refused = []
+    def pyro(path, until_v):
+        while sim.vclock() < until_v and not sim.stop.is_set():
+            cmd = ('DeployParachute', 'ExpandParachute')[seq[0] % 2]; seq[0] += 1
+            v0 = sim.vclock(); code, body = sim.command(cmd); v1 = sim.vclock()
+            rs = rrls_status()
+            rec(kind='pyro', path=path, cmd=cmd, v_post=v0, v_reply=v1, http=code, body=str(body)[:200],
+                rrls_forwarding=rs.get('forwarding'), relayed_frames=rs.get('relayed_frames'))
+            if code != 200: refused.append((path, cmd, code, str(body)[:200]))
+            # FLIGHT_COMMAND is Ordered: space commands past one full reliable window (4.5 s) so each command
+            # measures its own path, not the predecessor's; the jitter spreads them over the telemetry phase.
+            sim.wait_v(5000 + (seq[0] * 977) % 1500)
+    def abort_on(path):
+        v0 = sim.vclock(); code, body = sim.command('Abort'); got = {}
+        while sim.vclock() - v0 < 30000 and len(got) < len(boards) and not sim.stop.is_set():
+            snap = sim.st()
+            if snap.get('v', 0) >= v0:
+                for b in boards:
+                    row = sim.rows(snap).get(b) or {}
+                    if b not in got and (row.get('abort_latched') or row.get('state_label') == 'Aborted'): got[b] = snap['v'] - v0
+            time.sleep(.02)
+        rec(kind='abort', path=path, v_post=v0, http=code, latency_ms=got, missing=[b for b in boards if b not in got])
+        sim.check(f'Abort over the {path} path reaches every board', code == 200 and len(got) == len(boards), latency_ms=got)
+        av = [got.get(b) for b in ('RF', 'FC', 'PB') if b in boards]
+        sim.check(f'Abort over the {path} path reaches the AV bay within {a.abort_bound_ms} ms', all(x is not None and x <= a.abort_bound_ms for x in av), latency_ms=got)
+        res = sim.recovery('reset_startup', boards=boards, label=f'reset all after {path} Abort', timeout_ms=120000)
+        sim.check(f'Reset all after the {path} Abort succeeds', res.get('success') is True, duration_ms=res.get('duration_ms'))
+        verify_clear(sim, f'after {path} Abort', boards=boards, timeout_ms=60000)
+    def rrls_query(path):
+        if not r: return
+        v0 = sim.vclock(); c, b = r.api('/api/board-recovery/query', {'board': 'RF'}); got = None
+        while sim.vclock() - v0 < 15000:
+            op = (sim.rows().get('RF') or {}).get('operation') or {}
+            if op.get('action') == 'query' and (op.get('age_ms') or 10**9) <= (sim.vclock() - v0) * a.faithful_time + 2000: got = sim.vclock(); break
+            time.sleep(.1)
+        rec(kind='rrls_query', path=path, http=c, after_v_ms=(got - v0) if got else None)
+        sim.check(f'RRLS-issued query reaches the primary within 1 s ({path})', c == 200 and got is not None and got - v0 <= 1000, http=c, after_v_ms=(got - v0) if got else None)
+    # 1. direct path
+    rs0 = rrls_status()
+    pyro('direct', S['cut0'] * 1000 - 8000)
+    rrls_query('direct')
+    rs1 = rrls_status()
+    if r:
+        sim.check('no relay forwarding while the direct path is healthy', not rs1.get('forwarding') and (rs1.get('relayed_frames') or 0) == (rs0.get('relayed_frames') or 0),
+                  relayed=[rs0.get('relayed_frames'), rs1.get('relayed_frames')])
+        topo = json.dumps(sim.api('/api/network_topology')[1]).lower()
+        sim.check('RRLS present at the primary on the direct path', 'rrls' in topo)
+    # 2. direct path cut: the relay must engage
+    wait_until_v(sim, S['cut0'] * 1000, 'direct path cut'); v_cut = sim.vclock(); v_eng = None
+    while r and sim.vclock() - v_cut < 20000:
+        if rrls_status().get('forwarding'): v_eng = sim.vclock(); break
+        sim.wait_v(250)
+    if r:
+        sim.check('relay engages within 6 s of the direct path loss (3 s loss detection + lease)', v_eng is not None and v_eng - v_cut <= 6000,
+                  engage_v_ms=(v_eng - v_cut) if v_eng else None)
+        rec(kind='relay_engage', after_v_ms=(v_eng - v_cut) if v_eng else None)
+    pyro('relay', S['cut1'] * 1000 - 70000)
+    rrls_query('relay')
+    abort_on('relay')
+    # 3. direct path returns: handover back to direct
+    wait_until_v(sim, S['cut1'] * 1000, 'direct path restored'); v_res = sim.vclock(); v_off = None
+    while r and sim.vclock() - v_res < 40000:
+        if not rrls_status().get('forwarding'): v_off = sim.vclock(); break
+        sim.wait_v(250)
+    if r:
+        sim.check('relay hands back to the direct path within 20 s (5 s continuous direct, 10 s minimum dwell)', v_off is not None and v_off - v_res <= 20000,
+                  handover_v_ms=(v_off - v_res) if v_off else None)
+        rec(kind='relay_handover', after_v_ms=(v_off - v_res) if v_off else None)
+    pyro('restored', a.duration_ms - 75000)
+    abort_on('direct')
+    stop_bg.set()
+    sim.check('every parachute command admitted (HTTP 200)', seq[0] > 0 and not refused, commands=seq[0], refused=refused[:10])
+
+
+SCENARIOS['pyro_paths'] = sc_pyro_paths
+
+
 def switch_round_trip(sim, label):
     """normal -> hitl -> normal in process; returns True when both switches complete."""
     ok = station_mode_switch(sim, 'hitl', label + '-to-hitl')
@@ -1917,6 +2030,7 @@ if __name__ == '__main__':
     p.add_argument('--measure-ms', type=int, default=300000)
     p.add_argument('--ready-timeout-ms', type=int, default=240000)
     p.add_argument('--cycles', type=int, default=5)
+    p.add_argument('--abort-bound-ms', type=int, default=3000, help='pyro_paths: AV-bay Abort latency bound')
     p.add_argument('--radio', choices=['hub', 'rfd', 'rfd-faithful', 'backlog'], default='rfd')
     p.add_argument('--rfd-global-retries', type=int, default=3, help='extra air copies per packet; 3 is calibrated against the bench uplink (see docs)')
     p.add_argument('--faithful-time', type=float, default=0, help='wall seconds per virtual second (Renode pace + time-dilated station)')
@@ -1930,6 +2044,7 @@ if __name__ == '__main__':
     p.add_argument('--rfd-carrier-sense', choices=['', 'register', 'always', 'never'], default='', help='LBT reading (open assumption A2)')
     p.add_argument('--rfd-air-loss-ppm', type=int, default=0, help='independent per-copy air loss')
     p.add_argument('--radio-trace', action='store_true')
+    p.add_argument('--radio-trace-max-mb', type=int, default=4, help='per-stream radio trace bound (4..256)')
     p.add_argument('--gs-reboot', action='append', default=[])
     p.add_argument('--board-reboot', action='append', default=[])
     p.add_argument('--can-cut', action='append', default=[])

@@ -346,8 +346,71 @@ class Program
         Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",null);
         Console.WriteLine("RADIO_RFD_ASYNC_COLLISION_HALF_DUPLEX_LBT_PASS");
     }
+    // Replays the per-station UART TX traces of a linked run (SEDSRBT1 files
+    // from FIRMWARE_SIM_RADIO_TRACE_DIR) into a fresh medium with the drain
+    // registers, optionally keeping only RADIO_REPLAY_RF_KEEP_PERCENT of the RF
+    // board's frames, and reports how many GS frames reach the RF board. It
+    // estimates what a lower RF air duty buys the uplink. The replay has no
+    // retransmission feedback: the traces already hold every copy sent.
+    static List<(ulong At,byte[] Frame)> TraceFrames(string path)
+    {
+        var b=File.ReadAllBytes(path);var recs=new List<(ulong,byte)>();
+        for(var o=32;o+9<=b.Length;o+=9)recs.Add((BitConverter.ToUInt64(b,o),b[o+8]));
+        var frames=new List<(ulong,byte[])>();
+        for(var i=0;i+4<=recs.Count;)
+        {
+            var sync=(recs[i].Item2==0xA5&&recs[i+1].Item2==0x5A)||(recs[i].Item2==0xA6&&recs[i+1].Item2==0x5B);
+            var len=recs[i+2].Item2|(recs[i+3].Item2<<8);
+            if(!sync||len==0||len>4096||i+4+len>recs.Count){i++;continue;}
+            frames.Add((recs[i].Item1,recs.Skip(i).Take(4+len).Select(r=>r.Item2).ToArray()));i+=4+len;
+        }
+        return frames;
+    }
+    static void Replay(string dir)
+    {
+        var keep=int.Parse(Environment.GetEnvironmentVariable("RADIO_REPLAY_RF_KEEP_PERCENT")??"100");
+        Fresh();var m=new Machine();var ports=new SedsRadioHostPort[3];
+        var medium=Medium(tx:4096,rx:4096,burst:3968,idle:10000,overhead:160,turn:2000);
+        var rx=new List<(ulong,byte)>[3];
+        for(var k=0;k<3;k++){medium.ConfigureModem(k,"5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10");ports[k]=new SedsRadioHostPort(m);medium.AttachHost(k,ports[k]);
+            var list=rx[k]=new List<(ulong,byte)>();ports[k].CharReceived+=v=>list.Add((Clock.NowUs,v));}
+        var events=new List<(ulong At,int Station,byte[] Frame)>();
+        for(var k=0;k<3;k++)
+        {
+            var f=Path.Combine(dir,$"rocket_radio-station-{k}-tx.bin");if(!File.Exists(f))continue;
+            var n=0;foreach(var (at,frame) in TraceFrames(f)){n++;if(k==0&&(n*keep)/100==((n-1)*keep)/100)continue;events.Add((at,k,frame));}
+        }
+        events.Sort((a,b)=>a.At.CompareTo(b.At));
+        foreach(var e in events){if(Clock.NowUs<e.At)Advance(e.At);foreach(var v in e.Frame)ports[e.Station].WriteChar(v);}
+        Advance(Clock.NowUs+3000000);
+        // GS frames found intact in the RF board's received byte stream.
+        var rfStream=rx[0].Select(r=>r.Item2).ToArray();var text=Convert.ToBase64String(rfStream);
+        int sent=0,got=0;var lat=new List<double>();
+        var rfFrames=new Dictionary<string,Queue<ulong>>();
+        {
+            var recs=rx[0];
+            for(var i=0;i+4<=recs.Count;)
+            {
+                var sync=(recs[i].Item2==0xA5&&recs[i+1].Item2==0x5A)||(recs[i].Item2==0xA6&&recs[i+1].Item2==0x5B);
+                var len=recs[i+2].Item2|(recs[i+3].Item2<<8);
+                if(!sync||len==0||len>4096||i+4+len>recs.Count){i++;continue;}
+                var key=Convert.ToBase64String(recs.Skip(i).Take(4+len).Select(r=>r.Item2).ToArray());
+                if(!rfFrames.TryGetValue(key,out var q))rfFrames[key]=q=new Queue<ulong>();q.Enqueue(recs[i+3+len].Item1);i+=4+len;
+            }
+        }
+        foreach(var e in events.Where(e=>e.Station==1))
+        {
+            sent++;var key=Convert.ToBase64String(e.Frame);
+            if(rfFrames.TryGetValue(key,out var q)){while(q.Count>0&&q.Peek()<e.At)q.Dequeue();if(q.Count>0){got++;lat.Add((q.Dequeue()-e.At)/1000.0);}}
+        }
+        lat.Sort();double P(double p)=>lat.Count==0?-1:lat[Math.Min(lat.Count-1,(int)Math.Round((lat.Count-1)*p))];
+        var rfFramesKept=events.Count(e=>e.Station==0);
+        Console.WriteLine($"RADIO_REPLAY rf_keep_percent={keep} rf_frames={rfFramesKept} gs_frames={sent} gs_to_rf_delivered={got} loss={(sent==0?0:1.0-(double)got/sent):F3} p50_ms={P(.5):F1} p95_ms={P(.95):F1} rf_air_s={medium.ReadCounter(0,11)} collided_at_rf={medium.ReadCounter(0,12)}");
+    }
     static void Main()
     {
+        var replay=Environment.GetEnvironmentVariable("RADIO_REPLAY_TRACE_DIR");
+        if(replay!=null){Replay(replay);return;}
         var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");
         if(schedule!=null){PacketizationLatency(schedule);return;}
         ModemCommandMode();

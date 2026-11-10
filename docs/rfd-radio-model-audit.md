@@ -116,3 +116,11 @@ using the existing passive capture script.
   - 11: copies sent;
   - 12: copy receptions lost to overlap;
   - 13: LBT deferrals.
+
+## Replaying a run with less RF air time
+
+`tests/radio-medium` replays the UART TX traces of a linked run into a fresh medium (drain registers, async MAC):
+`RADIO_REPLAY_TRACE_DIR=<run>/diagnostics/radio-trace RADIO_REPLAY_RF_KEEP_PERCENT=50 dotnet RadioMedium.dll`. It keeps that share of
+the RF board's frames and reports the share of GS frames that reached the RF board and their latency. The traces already hold every
+retransmission, so it estimates per-frame loss, not the retry dynamics. `FIRMWARE_SIM_RFD_CARRIER_SENSE` applies as usual.
+
