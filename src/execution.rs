@@ -1031,6 +1031,107 @@ pub(crate) fn factory_boot_ms(layout: &BoardLayout) -> u64 {
     })
 }
 
+/// One monitor command per probe sample that prints one self-delimited
+/// record, `SEDS_PROBE|name|sample|0xVALUE|END`. A separate marker line and
+/// value line could be split, merged or lost when Renode's asynchronous log
+/// interleaved with the monitor output under host load.
+fn framed_probe_command(probe: &crate::layout::MemoryProbe, sample: usize) -> String {
+    let bus = "monitor.Machine.SystemBus";
+    let address = match probe.address {
+        Some(address) => crate::layout::probe_address("", Some(address), probe.byte_offset)
+            .expect("validated register address"),
+        None => format!(
+            "{bus}.GetSymbolAddress({}) + {}",
+            serde_json::to_string(&probe.symbol).expect("serialize probe symbol"),
+            probe.byte_offset
+        ),
+    };
+    let print = format!(
+        "print('SEDS_PROBE|{}|{}|0x%08x|END' % {bus}.ReadDoubleWord({address}))",
+        probe.name, sample
+    );
+    format!(
+        "python {}\n",
+        serde_json::to_string(&print).expect("serialize probe command")
+    )
+}
+
+/// Renode log records (`[HH:MM:SS.ffff] [LEVEL] text` through the end of its
+/// line) can land anywhere in the console stream, even inside a monitor
+/// result. Remove each one with its line break so a record it split rejoins.
+fn strip_renode_log_records(output: &str) -> String {
+    fn record_len(rest: &str) -> Option<usize> {
+        let bytes = rest.as_bytes();
+        let shape = b"[dd:dd:dd.";
+        if bytes.len() < shape.len() {
+            return None;
+        }
+        for (byte, expected) in bytes.iter().zip(shape) {
+            let ok = if *expected == b'd' { byte.is_ascii_digit() } else { byte == expected };
+            if !ok {
+                return None;
+            }
+        }
+        let mut at = shape.len();
+        while at < bytes.len() && bytes[at].is_ascii_digit() {
+            at += 1;
+        }
+        let level = rest[at..].strip_prefix("] [")?;
+        let letters = level.bytes().take_while(u8::is_ascii_uppercase).count();
+        if letters == 0 || !level[letters..].starts_with(']') {
+            return None;
+        }
+        let end = rest.find('\n').map_or(rest.len(), |newline| newline + 1);
+        Some(end)
+    }
+    let mut kept = String::with_capacity(output.len());
+    let mut rest = output;
+    while let Some(open) = rest.find('[') {
+        kept.push_str(&rest[..open]);
+        rest = &rest[open..];
+        match record_len(rest) {
+            Some(len) => rest = &rest[len..],
+            None => {
+                kept.push('[');
+                rest = &rest[1..];
+            }
+        }
+    }
+    kept.push_str(rest);
+    kept
+}
+
+/// Complete framed records by probe name; the first copy of a sample wins.
+fn framed_probe_records(
+    output: &str,
+) -> std::collections::HashMap<String, std::collections::BTreeMap<usize, u32>> {
+    let mut records: std::collections::HashMap<String, std::collections::BTreeMap<usize, u32>> =
+        std::collections::HashMap::new();
+    let stream = strip_renode_log_records(output);
+    for chunk in stream.split("SEDS_PROBE|").skip(1) {
+        let Some(record) = chunk.split("|END").next().filter(|_| chunk.contains("|END")) else {
+            continue;
+        };
+        let mut fields = record.split('|');
+        let (Some(name), Some(sample), Some(value), None) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(sample), Some(Ok(value))) = (
+            sample.parse::<usize>(),
+            value.strip_prefix("0x").map(|hex| u32::from_str_radix(hex, 16)),
+        ) else {
+            continue;
+        };
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            continue;
+        }
+        records.entry(name.to_string()).or_default().entry(sample).or_insert(value);
+    }
+    records
+}
+
 fn render_script(
     layout: &BoardLayout,
     platform: &Path,
@@ -1064,31 +1165,7 @@ fn render_script(
             duration_ms as f64 / 1000.0
         ));
         for probe in &layout.execution.memory_probes {
-            if let Some(address) = probe.address {
-                let expression = crate::layout::probe_address("", Some(address), probe.byte_offset)
-                    .expect("validated register address");
-                profile_script.push_str(&format!(
-                    "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord {}\n",
-                    probe.name, sample, expression
-                ));
-            } else if probe.byte_offset == 0 {
-                profile_script.push_str(&format!(
-                "echo \"SEDS_PROBE {} {}\"\nsysbus ReadDoubleWord `sysbus GetSymbolAddress \"{}\"`\n",
-                probe.name, sample, probe.symbol
-            ));
-            } else {
-                let read = format!(
-                    "print('0x%08x' % monitor.Machine.SystemBus.ReadDoubleWord(monitor.Machine.SystemBus.GetSymbolAddress({}) + {}))",
-                    serde_json::to_string(&probe.symbol).expect("serialize probe symbol"),
-                    probe.byte_offset
-                );
-                profile_script.push_str(&format!(
-                    "echo \"SEDS_PROBE {} {}\"\npython {}\n",
-                    probe.name,
-                    sample,
-                    serde_json::to_string(&read).expect("serialize probe command")
-                ));
-            }
+            profile_script.push_str(&framed_probe_command(probe, sample));
         }
     }
     if let Some(directory) = std::env::var_os("FIRMWARE_SIM_DIAGNOSTICS_DIR") {
@@ -1413,11 +1490,16 @@ fn render_ota_script(
 
 fn parse_memory_profile(layout: &BoardLayout, output: &str) -> Result<Vec<MemoryProbeReport>> {
     let lines: Vec<_> = output.lines().collect();
+    let framed = framed_probe_records(output);
     let mut reports = Vec::new();
     for probe in &layout.execution.memory_probes {
         let prefix = format!("SEDS_PROBE {} ", probe.name);
         let mut indexed = Vec::new();
-        for (index, line) in lines.iter().enumerate() {
+        if let Some(samples) = framed.get(&probe.name) {
+            indexed.extend(samples.iter().map(|(sample, value)| (*sample, *value)));
+        }
+        // Legacy two-line markers (echo, then the bus read on a later line).
+        for (index, line) in lines.iter().enumerate().filter(|_| !framed.contains_key(&probe.name)) {
             let Some(marker_start) = line.find(&prefix) else {
                 continue;
             };
@@ -2109,6 +2191,94 @@ mod tests {
             seconds >= 0.2,
             "G4 factory flow runs for {seconds}s, less than 5x the measured blank-storage boot"
         );
+    }
+
+    fn framed_probe(name: &str) -> MemoryProbe {
+        MemoryProbe {
+            name: name.into(),
+            symbol: format!("{name}_symbol"),
+            address: None,
+            byte_offset: 0,
+            minimum: None,
+            maximum: None,
+            max_end_drop: None,
+            minimum_interval_gain: None,
+            ignore_leading_zeroes: false,
+        }
+    }
+
+    #[test]
+    fn each_probe_sample_is_one_framed_monitor_record() {
+        // A marker line and a separate value line can be split, merged or
+        // lost when Renode's asynchronous log interleaves under host load.
+        let mut board = layout("stm32g4", "[]");
+        board.execution.sample_count = 2;
+        board.execution.virtual_time_ms = 2;
+        board.execution.memory_probes.push(framed_probe("pool"));
+        let mut offset = framed_probe("word");
+        offset.byte_offset = 4;
+        board.execution.memory_probes.push(offset);
+        let mut register = framed_probe("reg");
+        register.symbol.clear();
+        register.address = Some(0x4000_6400);
+        board.execution.memory_probes.push(register);
+        let script = render_script(
+            &board,
+            std::path::Path::new("platform.repl"),
+            std::path::Path::new("overlay.repl"),
+            ExecutionArtifacts {
+                elf: std::path::Path::new("firmware.elf"),
+                bootloader_elf: std::path::Path::new("bootloader.elf"),
+                factory: std::path::Path::new("factory.bin"),
+                firmware_image: std::path::Path::new("firmware-flash.bin"),
+            },
+            ExecutionScenario {
+                firmware_reset: (0x2001_bff0, 0x0800_4001, 0x0800_4200),
+                factory_reset: (0x2001_c000, 0x0800_0001),
+                trace: std::path::Path::new("trace.bin"),
+                ota: None,
+                power_cut_after: None,
+            },
+        );
+        assert!(!script.contains("echo \"SEDS_PROBE"));
+        for (name, sample) in [("pool", 0), ("pool", 1), ("word", 1), ("reg", 0)] {
+            assert_eq!(
+                script.matches(&format!("SEDS_PROBE|{name}|{sample}|0x%08x|END")).count(),
+                1,
+                "{name} sample {sample}"
+            );
+        }
+        assert!(script.contains("GetSymbolAddress(\\\"word_symbol\\\") + 4"));
+        assert!(script.contains("ReadDoubleWord(0x40006400)"));
+    }
+
+    #[test]
+    fn framed_probe_records_survive_split_merged_and_duplicated_output() {
+        let mut board = layout("stm32g4", "[]");
+        board.execution.sample_count = 3;
+        board.execution.virtual_time_ms = 3;
+        board.execution.memory_probes.push(framed_probe("pool"));
+        board.execution.memory_probes.push(framed_probe("peer_mask"));
+        let output = concat!(
+            // A timestamped Renode log record lands inside a record.
+            "SEDS_PROBE|pool|0|0x0000[23:28:41.1234] [INFO] sysbus: write ignored\n1234|END\n",
+            // Two records coalesce on one line with a log suffix.
+            "SEDS_PROBE|peer_mask|0|0x00000005|ENDSEDS_PROBE|pool|1|0x00001235|END[23:28:41.2000] [WARNING] x\n",
+            // A torn record without its terminator is ignored, not misread.
+            "SEDS_PROBE|peer_mask|1|0x0000\n",
+            "SEDS_PROBE|peer_mask|1|0x00000007|END\n",
+            // A repeated record does not double count.
+            "SEDS_PROBE|peer_mask|1|0x00000007|END\n",
+            "[23:28:42.0000] [INFO] Machine paused.\n",
+            "SEDS_PROBE|pool|2|0x00001236|END\nSEDS_PROBE|peer_mask|2|0x00000007|END\n",
+        );
+        let reports = parse_memory_profile(&board, output).unwrap();
+        assert_eq!(reports[0].samples, vec![0x1234, 0x1235, 0x1236]);
+        assert_eq!(reports[1].samples, vec![5, 7, 7]);
+        // A truly lost sample is still reported, never invented.
+        let lost = output.replace("SEDS_PROBE|pool|2|0x00001236|END\n", "");
+        let error = parse_memory_profile(&board, &lost).unwrap_err().to_string();
+        assert!(error.contains("pool returned 2 of 3 samples"), "{error}");
     }
 
     #[test]
