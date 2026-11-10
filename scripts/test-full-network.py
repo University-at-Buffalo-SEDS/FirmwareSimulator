@@ -1691,6 +1691,13 @@ def flow_fill(sim):
         # HITL keeps no qualification record: the settled-mass verdict ends the fill.
         if g.get('phase') == 'paused' and 'settled within tolerance' in str(g.get('message')): return 'done'
         return False
+    # As an operator would: a fresh fill starts from the tank's zero band, so wait for a relief (a nitrogen
+    # dump or a cold-flow cancel) to finish venting before pressing Fill.
+    def vented(s):
+        g = s.get('gse') or {}; b = g.get('baseline') or {}; p = g.get('pressure_psi')
+        return isinstance(p, (int, float)) and 'average_psi' in b and abs(p - b['average_psi']) <= max(b.get('noise_psi') or 0, 0.01)
+    if (gse_now(sim).get('baseline') or {}):
+        sim.wait_until(vented, 30000, 'tank vented to its zero band before Fill')
     ok, g, seen = sequence_ran(sim, 'fill', 'StartFill', 240000, on_snap=watch)
     sim.check('fill: nitrous valve readback opened', st['open'], valves_seen=seen[:30])
     done = bool((g.get('qualification') or {}).get('fill_target')) or g.get('phase') == 'passed' or 'settled within tolerance' in str(g.get('message'))
