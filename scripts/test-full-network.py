@@ -1397,14 +1397,18 @@ def sc_pyro_paths(sim):
             verify_clear(sim, f'after {path} Abort', boards=boards, timeout_ms=60000)
         return bool(res.get('success'))
     def rrls_query(path):
+        """An RRLS operator's own command, proxied to the primary (board-recovery queries stay at the primary by
+        design). Harmless: toggles the AV-bay underglow. Measures POST -> accepted by the primary."""
         if not r: return
-        v0 = sim.vclock(); c, b = r.api('/api/board-recovery/query', {'board': 'RF'}); got = None
-        while sim.vclock() - v0 < 15000:
-            op = (sim.rows().get('RF') or {}).get('operation') or {}
-            if op.get('action') == 'query' and (op.get('age_ms') or 10**9) <= (sim.vclock() - v0) * a.faithful_time + 2000: got = sim.vclock(); break
+        v0 = sim.vclock(); c, b = r.api('/api/command', 'ToggleAvBayUnderglow'); got = None; last = None
+        while c in (200, 202) and sim.vclock() - v0 < 15000:
+            cc, ctl = r.api('/api/rrls/control')
+            last = (ctl or {}).get('last') if cc == 200 and isinstance(ctl, dict) else None
+            if last and last.get('primary_accepted'): got = sim.vclock(); break
             time.sleep(.1)
-        rec(kind='rrls_query', path=path, http=c, after_v_ms=(got - v0) if got else None)
-        sim.check(f'RRLS-issued query reaches the primary within 1 s ({path})', c == 200 and got is not None and got - v0 <= 1000, http=c, after_v_ms=(got - v0) if got else None)
+        rec(kind='rrls_command', path=path, http=c, after_v_ms=(got - v0) if got else None, last=last)
+        sim.check(f'RRLS-issued command accepted by the primary within 1 s ({path})', got is not None and got - v0 <= 1000,
+                  http=c, body=str(b)[:200], after_v_ms=(got - v0) if got else None, last=last)
     # 1. direct path
     rs0 = rrls_status()
     pyro('direct', S['cut0'] * 1000 - 8000)
