@@ -172,7 +172,8 @@ def build_config(a):
             F.add_probes(layout, symbols, [('fc_state', 'sm', 0), ('fc_config_flags', 'g_conf', 0), ('fc_commands_received', 'g_network_flight_commands_received', 0)], miss)
             if 'owner' in symbols:  # fc_recovery_owner.c static mailbox: epoch @0, phase/sensor_restart @20, manual_stop.. @22
                 layout['execution']['memory_probes'] += [{'name': f'fc_owner_w{i}', 'address': symbols['owner'] + 4 * i} for i in range(8)]
-        dbg = sorted(x for x in symbols if '.' not in x and x.startswith(('g_dbg_', 'g_telemetry_timesync_', 'g_telemetry_service_faults')))
+        extra = {x for x in a.extra_probes.split(',') if x}  # e.g. SIM_TEST g_sim_* stage counters
+        dbg = sorted(x for x in symbols if '.' not in x and (x.startswith(('g_dbg_', 'g_telemetry_timesync_', 'g_telemetry_service_faults')) or x in extra))
         layout['execution']['memory_probes'] += [{'name': x[2:], 'symbol': x} for x in dbg]
         (config / f'{name}.json').write_text(json.dumps(layout))
     (config / 'comms.json').write_text(json.dumps({'version': 1,
@@ -1113,6 +1114,43 @@ def sc_faithful(sim):
 
 
 SCENARIOS['faithful'] = sc_faithful
+
+
+def reset_all_with_retry(sim, boards, label, attempts=6):
+    for n in range(attempts):
+        r = sim.recovery('reset_startup', boards=boards, label=f'{label} (attempt {n + 1})', expect_ok=False)
+        if r.get('success'): return r
+        sim.wait_v(5000)
+    return r
+
+
+def sc_faithful_cycles(sim):
+    """faithful, then --abort-cycles total operator Abort cycles (Reset all -> Abort -> Clear GSE abort), so every
+    board's Abort readback and the Reset all after an Abort get a small distribution. Pair with an external poller of
+    /api/board-recovery/status for per-board latency."""
+    sc_faithful(sim)
+    boards = present_boards(sim)
+    resets = []
+    for n in range(1, sim.a.abort_cycles):
+        r = reset_all_with_retry(sim, boards, f'reset all before cycle {n}')
+        resets.append(bool(r.get('success'))); sim.log_action('cycle_reset', cycle=n, success=r.get('success'))
+        sim.wait_v(20000)
+        code, body = sim.command('Abort')
+        sim.wait_until(lambda s: (s.get('rec') or {}).get('flight_state') == 15, 30000, f'station Aborted cycle {n}')
+        sim.wait_v(15000)
+        cleared = False
+        for _ in range(24):
+            c, b = sim.api('/api/gse/abort/clear', {})
+            if c == 200: cleared = True; break
+            sim.wait_v(5000)
+        sim.log_action('cycle_cleared', cycle=n, cleared=cleared)
+        sim.check(f'cycle {n}: Clear GSE abort succeeds', cleared)
+    r = reset_all_with_retry(sim, boards, 'final reset all')
+    resets.append(bool(r.get('success'))); sim.log_action('cycle_reset', cycle='final', success=r.get('success'))
+    sim.check('Reset all after every Abort succeeds', all(resets), resets=resets)
+
+
+SCENARIOS['faithful_cycles'] = sc_faithful_cycles
 
 
 def sc_vb_stale(sim):
@@ -2077,6 +2115,8 @@ if __name__ == '__main__':
     p.add_argument('--poll', type=float, default=.05)
     p.add_argument('--timeout', type=int, default=4 * 3600)
     p.add_argument('--gs-env', action='append', default=[])
+    p.add_argument('--abort-cycles', type=int, default=3, help='faithful_cycles: operator Abort cycles in total')
+    p.add_argument('--extra-probes', default='', help='comma list of extra firmware symbols to sample as memory probes')
     p.add_argument('--nodes', default='', help='subset of rf,power,flight,gateway,actuator,valve,daq')
     p.add_argument('--no-query', action='store_true', help='passive comms measurement (no operator Query load)')
     p.add_argument('--sched', type=json.loads, default={}, help='{"can0":s,"can1":s,"gsrb":s,"abrb":s} virtual seconds')

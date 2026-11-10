@@ -169,3 +169,25 @@ About 40 % of the faithful runs with RF 74e78f4 and the RF modem model (`--rfd-m
 - The station stayed responsive.
 - The cause is not yet known.
 - Runs with the older RF, and other runs with the same heads, completed.
+
+## Continuity and Abort readback
+
+`--scenario faithful_cycles` runs `faithful`, then repeats Reset all, operator Abort and Clear GSE abort until
+`--abort-cycles` (default 3) Aborts have been sent. Reset all is retried up to six times. It checks that every Clear
+and every Reset all succeeds. Poll `/api/board-recovery/status` during the run for per-board Abort readback.
+`--extra-probes g_sim_imu_publish_attempts,g_sim_avionics_telemetry_radio_egress,...` samples additional firmware
+symbols as memory probes (SIM_TEST builds expose the stage counters).
+
+Analysis:
+- `scripts/analyze-telemetry-continuity.py RUN [--assert-targets]` gives per-stream delivery and receive-gap
+  percentiles from the GS recording. The targets are 5 Hz AV-bay gap p95 <= 500 ms with >= 95 % delivered, and 1 Hz
+  <= 1.5 s with >= 98 %.
+- `scripts/analyze-radio-air-budget.py DECODED FROM TO` gives offered air per packet type and direction (UART bytes +
+  20 B framing, x2 copies, over 64 kbit/s), from `decode-radio-trace.py` output.
+- `scripts/analyze-radio-stage-loss.py DECODED FROM TO` gives RF-TX unique and copies vs GS-RX per stream, and the RF
+  reliable ACK round trip.
+
+On this model with drain registers and S5 proven, the full AV bay offered about 81 % of the air without carrier
+sense (about 30 % GS->RF loss, FC IMU 75 % delivered, Reset all refused). With `--rfd-carrier-sense always` it
+offered about 59 % (no loss, FC IMU 98 %, gap p95 457 ms, Reset all 3/3).
+
