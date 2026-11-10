@@ -7,6 +7,8 @@ from pathlib import Path
 import struct
 
 MAX_BYTES = 4 * 1024 * 1024
+# FIRMWARE_SIM_RADIO_TRACE_MAX_MB raises a stream's bound up to 256 MiB.
+LIMIT_BYTES = 256 * 1024 * 1024
 HEADER = struct.Struct('<8sIIIIQ')
 RECORD = struct.Struct('<QB')
 
@@ -14,8 +16,8 @@ RECORD = struct.Struct('<QB')
 def inspect(path, allow_incomplete=False, allow_capped=False, max_clock_backstep_us=0):
     path = Path(path)
     with path.open('rb') as handle:
-        blob = handle.read(MAX_BYTES + 1)
-    if len(blob) > MAX_BYTES or len(blob) < HEADER.size:
+        blob = handle.read(LIMIT_BYTES + 1)
+    if len(blob) > LIMIT_BYTES or len(blob) < HEADER.size:
         raise ValueError('trace is oversized or missing its32-byte header')
     magic, version, width, station, direction, until = HEADER.unpack_from(blob)
     if magic != b'SEDSRBT1' or version != 1 or width != 9 or station > 15 or direction > 1:
@@ -34,7 +36,7 @@ def inspect(path, allow_incomplete=False, allow_capped=False, max_clock_backstep
         raise ValueError('invalid explicit timestamp jitter limit')
     if any(at > until for at, _ in records) or max(backwards, default=0) > max_clock_backstep_us:
         raise ValueError('trace timestamp out of scope or reversed beyond explicit limit')
-    if status.get('version') != 1 or status.get('max_bytes') != MAX_BYTES or status.get('header_bytes') != 32 or status.get('record_bytes') != 9 or status.get('until_us') != until:
+    if status.get('version') != 1 or not (MAX_BYTES <= (status.get('max_bytes') or 0) <= LIMIT_BYTES and len(blob) <= status['max_bytes']) or status.get('header_bytes') != 32 or status.get('record_bytes') != 9 or status.get('until_us') != until:
         raise ValueError('trace status/header bounds mismatch')
     if type(status.get('capped')) is not bool or type(status.get('finished')) is not bool:
         raise ValueError('trace status does not declare cap/completion')

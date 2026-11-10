@@ -42,6 +42,8 @@ def main():
     ap.add_argument('--p95-bound-ms', type=float, default=1000)
     ap.add_argument('--max-bound-ms', type=float, default=2000)
     ap.add_argument('--output', type=Path)
+    ap.add_argument('--network-epoch-ms', type=int, default=1767225600000,
+                    help='GS_SIM_NETWORK_EPOCH_MS: the station stamps a command at its virtual press time from this epoch')
     a = ap.parse_args()
     decoded = a.decoded or a.run / 'radio-decoded.json'
     if not decoded.exists():
@@ -59,13 +61,15 @@ def main():
         streams[(st, d)] = sorted(s['packets'], key=lambda p: p['at_us'])
     rows = [json.loads(l) for l in (a.run / 'pyro.jsonl').read_text().splitlines() if l.strip()]
     cmds = [r for r in rows if r.get('kind') == 'pyro' and r.get('http') == 200]
-    byte = {'DeployParachute': 12, 'ExpandParachute': 13}
     gs_tx, rf_rx, rf_tx, gs_rx = (streams.get(k, []) for k in ((1, 'tx'), (0, 'rx'), (0, 'tx'), (1, 'rx')))
     out = []
     for i, c in enumerate(cmds):
         t0 = c['v_post'] * 1000; t_next = cmds[i + 1]['v_post'] * 1000 if i + 1 < len(cmds) else float('inf')
-        first = next((p for p in gs_tx if p['type'] == 'FLIGHT_COMMAND' and t0 <= p['at_us'] < t_next
-                      and (p.get('managed_value') or [None])[0] == byte[c['cmd']]), None)
+        # The command is identified by its stamp: the station stamps it with
+        # its network time at the press, which runs on virtual time.
+        stamp = lambda p: p['timestamp_ms'] - a.network_epoch_ms
+        first = next((p for p in gs_tx if p['type'] == 'FLIGHT_COMMAND' and p['at_us'] >= t0
+                      and c['v_post'] - 50 <= stamp(p) <= c['v_reply'] + 50), None)
         row = {'path': c['path'], 'cmd': c['cmd'], 'v_post': c['v_post']}
         if first:
             pid = first['packet_id']

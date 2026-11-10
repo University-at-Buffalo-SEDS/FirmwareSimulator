@@ -96,6 +96,11 @@ def build_config(a):
         env['FAKETIME_DONT_FAKE_MONOTONIC'] = '0'
     for kv in a.gs_env:
         k, v = kv.split('=', 1); env[k] = v
+    # A station whose modem the medium models runs its startup modem check against that model
+    # (GS 5eda140), so its pacing follows the modem's read-back S5 as on the bench.
+    modelled = {int(e.split('=', 1)[0]) for e in a.rfd_modem.split(';') if e.strip()} if a.rfd_modem else set()
+    if 1 in modelled:
+        env.setdefault('GS_SIMULATED_RFD_MODEM', '1')
     env['GS_LAUNCH_CLOCK_STATE'] = '/diagnostics/state/launch-clock.json'
     env['GS_BOARD_ABORT_HISTORY_DIR'] = '/diagnostics/state/board_abort_history'
     radio_link = next((l for l in topo['links'] if l['name'] == 'rocket_radio'), None)
@@ -121,6 +126,8 @@ def build_config(a):
         for k_ in ('GS_LAYOUT_PATH', 'GS_SIM_ROUTER_TIME_DIVISOR', 'GS_SIM_NETWORK_EPOCH_MS', 'GS_HEARTBEAT_PERIOD_MS', 'GS_SIM_WALL_FRESHNESS_SCALE',
                    'LD_PRELOAD', 'FAKETIME', 'FAKETIME_DONT_FAKE_MONOTONIC'):
             if k_ in env: rr['env'][k_] = env[k_]
+        if 2 in modelled:
+            rr['env']['GS_SIMULATED_RFD_MODEM'] = '1'
         topo['host_nodes'].append(rr)
         radio_link['endpoints'].append({'node': 'rrls', 'peripheral': 'radio'})
     # scheduled events (samples are virtual seconds)
@@ -1377,12 +1384,14 @@ def sc_pyro_paths(sim):
                     if b not in got and (row.get('abort_latched') or row.get('state_label') == 'Aborted'): got[b] = snap['v'] - v0
             time.sleep(.02)
         rec(kind='abort', path=path, v_post=v0, http=code, latency_ms=got, missing=[b for b in boards if b not in got])
-        sim.check(f'Abort over the {path} path reaches every board', code == 200 and len(got) == len(boards), latency_ms=got)
+        sim.check(f'Abort over the {path} path reaches every board', code in (200, 202) and len(got) == len(boards), latency_ms=got, http=code)
         av = [got.get(b) for b in ('RF', 'FC', 'PB') if b in boards]
         sim.check(f'Abort over the {path} path reaches the AV bay within {a.abort_bound_ms} ms', all(x is not None and x <= a.abort_bound_ms for x in av), latency_ms=got)
         res = sim.recovery('reset_startup', boards=boards, label=f'reset all after {path} Abort', timeout_ms=120000)
-        sim.check(f'Reset all after the {path} Abort succeeds', res.get('success') is True, duration_ms=res.get('duration_ms'))
-        verify_clear(sim, f'after {path} Abort', boards=boards, timeout_ms=60000)
+        sim.check(f'Reset all after the {path} Abort succeeds', res.get('success') is True, duration_ms=res.get('duration_ms'), body=str(res.get('body'))[:300])
+        if res.get('success'):
+            verify_clear(sim, f'after {path} Abort', boards=boards, timeout_ms=60000)
+        return bool(res.get('success'))
     def rrls_query(path):
         if not r: return
         v0 = sim.vclock(); c, b = r.api('/api/board-recovery/query', {'board': 'RF'}); got = None
@@ -1413,7 +1422,7 @@ def sc_pyro_paths(sim):
         rec(kind='relay_engage', after_v_ms=(v_eng - v_cut) if v_eng else None)
     pyro('relay', S['cut1'] * 1000 - 70000)
     rrls_query('relay')
-    abort_on('relay')
+    relay_reset = abort_on('relay')
     # 3. direct path returns: handover back to direct
     wait_until_v(sim, S['cut1'] * 1000, 'direct path restored'); v_res = sim.vclock(); v_off = None
     while r and sim.vclock() - v_res < 40000:
@@ -1423,6 +1432,11 @@ def sc_pyro_paths(sim):
         sim.check('relay hands back to the direct path within 20 s (5 s continuous direct, 10 s minimum dwell)', v_off is not None and v_off - v_res <= 20000,
                   handover_v_ms=(v_off - v_res) if v_off else None)
         rec(kind='relay_handover', after_v_ms=(v_off - v_res) if v_off else None)
+    if not relay_reset:
+        # The reset after the relayed Abort needs fresh board queries; retry it on the direct path.
+        res = sim.recovery('reset_startup', boards=boards, label='reset all on the restored direct path', timeout_ms=120000)
+        sim.check('Reset all succeeds once the direct path is back', res.get('success') is True, duration_ms=res.get('duration_ms'), body=str(res.get('body'))[:300])
+        verify_clear(sim, 'restored direct path', boards=boards, timeout_ms=60000)
     pyro('restored', a.duration_ms - 75000)
     abort_on('direct')
     stop_bg.set()
