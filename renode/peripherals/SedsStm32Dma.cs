@@ -11,6 +11,18 @@ namespace Antmicro.Renode.Peripherals.DMA
     // USART1/2 DMA uses byte-paced TX and RXNE-gated RX, including DMAMUX
     // selection, CNDTR, circular reload and HT/TC interrupts. Other channels
     // retain the upstream model. No firmware RAM is populated out of band.
+    //
+    // Lock order: Transfer runs in a channel LimitTimer callback, so it holds
+    // the machine clock-source lock, possibly on another machine's CPU thread
+    // (whichever thread advances the shared virtual time). It must never take
+    // a SystemBus peripheral access lock: a CPU writing that peripheral holds
+    // its access lock and then takes the clock lock (SedsStm32Uart TDR, TIM3),
+    // and the two threads deadlock, which stops all virtual time in the bay.
+    // That happened whenever RF firmware sent polled UART bytes (its RFD
+    // modem AT session) while the same UART's RX DMA was armed. Peripheral
+    // registers are therefore accessed on the peripheral object itself (see
+    // SedsStm32Uart for its own state lock); firmware RAM still goes through
+    // the bus, whose memory handlers never take the clock lock.
     public sealed class SedsStm32Dma : IDoubleWordPeripheral, IKnownSize, IGPIOReceiver, INumberedGPIOOutput, IDMA
     {
         public SedsStm32Dma(IMachine machine, int numberOfChannels, uint frequency = 170000000, int muxChannelOffset = 0)
@@ -113,7 +125,7 @@ namespace Antmicro.Renode.Peripherals.DMA
                             }
                             channel.StartCount = channel.Count;
                             channel.CurrentMemory = channel.Memory;
-                            var divisor = machine.GetSystemBus(this).ReadDoubleWord(channel.UartBase + 0x0c, this);
+                            var divisor = Register(channel.UartBase + 0x0c);
                             channel.WireTicks = channel.PacedAdc ? AdcPeriodTicks() : Math.Max(1ul, (ulong)divisor * 10);
                             channel.Timer.Limit = channel.PacedAdc ? channel.WireTicks : (channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1);
                             channel.Timer.Value = 0;
@@ -138,35 +150,35 @@ namespace Antmicro.Renode.Peripherals.DMA
                 // of the entire circular buffer during HAL_ADC_Start_DMA.
                 channel.WireTicks = AdcPeriodTicks();
                 channel.Timer.Limit = channel.WireTicks;
-                var adcControl = bus.ReadDoubleWord(Adc3Data - 0x38, this);
-                var adcConfig = bus.ReadDoubleWord(Adc3Data - 0x34, this);
-                var timerControl = bus.ReadDoubleWord(Tim3Base, this);
-                var trigger = bus.ReadDoubleWord(Tim3Base + 4, this);
-                var adcRequest = bus.ReadDoubleWord(DmamuxBase + (uint)((muxChannelOffset + index) * 4), this) & 0x7f;
+                var adcControl = Register(Adc3Data - 0x38);
+                var adcConfig = Register(Adc3Data - 0x34);
+                var timerControl = Register(Tim3Base);
+                var trigger = Register(Tim3Base + 4);
+                var adcRequest = Register(DmamuxBase + (uint)((muxChannelOffset + index) * 4)) & 0x7f;
                 if(adcRequest != 37 || (timerControl & 1) == 0 || (trigger & 0x70) != 0x20
                     || (adcControl & 5) != 5 || (adcConfig & 1) == 0 || (adcConfig & 0xc00) == 0
                     || (adcConfig & 0x3e0) != 0x80)
                     return;
-                bus.WriteWord(channel.CurrentMemory, (ushort)bus.ReadDoubleWord(Adc3Data, this), this);
+                bus.WriteWord(channel.CurrentMemory, (ushort)Register(Adc3Data), this);
                 if((channel.Control & 128) != 0) channel.CurrentMemory += 2;
                 CompleteElement(index);
                 return;
             }
-            var request = bus.ReadDoubleWord(DmamuxBase + (uint)((muxChannelOffset + index) * 4), this) & 0x7f;
+            var request = Register(DmamuxBase + (uint)((muxChannelOffset + index) * 4)) & 0x7f;
             var expected = (channel.UartBase == Uart1Base ? 24u : 26u) + (channel.Receive ? 0u : 1u);
             var dmaEnable = channel.Receive ? 64u : 128u;
             var ready = channel.Receive ? 32u : 128u;
-            if(request != expected || (bus.ReadDoubleWord(channel.UartBase + 8, this) & dmaEnable) == 0
-                || (bus.ReadDoubleWord(channel.UartBase + 0x1c, this) & ready) == 0)
+            if(request != expected || (Register(channel.UartBase + 8) & dmaEnable) == 0
+                || (Register(channel.UartBase + 0x1c) & ready) == 0)
             {
                 channel.Timer.Limit = Math.Max(1ul, channel.WireTicks / 10);
                 return;
             }
             channel.Timer.Limit = channel.PacedAdc ? channel.WireTicks : (channel.Receive ? Math.Max(1ul, channel.WireTicks / 10) : channel.WireTicks + 1);
             if(channel.Receive)
-                bus.WriteByte(channel.CurrentMemory, bus.ReadByte(channel.Peripheral, this), this);
+                bus.WriteByte(channel.CurrentMemory, RegisterByte(channel.Peripheral), this);
             else
-                bus.WriteByte(channel.Peripheral, bus.ReadByte(channel.CurrentMemory, this), this);
+                WriteRegisterByte(channel.Peripheral, bus.ReadByte(channel.CurrentMemory, this));
             if((channel.Control & 128) != 0) channel.CurrentMemory++;
             CompleteElement(index);
         }
@@ -193,10 +205,55 @@ namespace Antmicro.Renode.Peripherals.DMA
         }
         private ulong AdcPeriodTicks()
         {
-            var bus = machine.GetSystemBus(this);
-            return Math.Max(1ul, ((ulong)(bus.ReadDoubleWord(Tim3Base + 0x28, this) & 0xffff) + 1)
-                * ((ulong)(bus.ReadDoubleWord(Tim3Base + 0x2c, this) & 0xffff) + 1));
+            return Math.Max(1ul, ((ulong)(Register(Tim3Base + 0x28) & 0xffff) + 1)
+                * ((ulong)(Register(Tim3Base + 0x2c) & 0xffff) + 1));
         }
+        // Peripheral register access without the SystemBus access lock (see
+        // the lock order above). Registrations are resolved once per address.
+        private IBusPeripheral Resolve(ulong address, out long offset)
+        {
+            Target target;
+            if(!targets.TryGetValue(address, out target))
+            {
+                var registration = machine.GetSystemBus(this).WhatIsAt(address, this);
+                if(registration == null) { offset = 0; return null; }
+                target = new Target(registration.Peripheral,
+                    (long)(address - registration.RegistrationPoint.Range.StartAddress));
+                targets[address] = target;
+            }
+            offset = target.Offset;
+            return target.Peripheral;
+        }
+        private uint Register(ulong address)
+        {
+            long offset;
+            var peripheral = Resolve(address, out offset) as IDoubleWordPeripheral;
+            return peripheral == null ? 0u : peripheral.ReadDoubleWord(offset);
+        }
+        private byte RegisterByte(ulong address)
+        {
+            long offset;
+            var peripheral = Resolve(address, out offset);
+            if(peripheral is IBytePeripheral bytes) return bytes.ReadByte(offset);
+            var words = peripheral as IDoubleWordPeripheral;
+            return words == null ? (byte)0 : (byte)(words.ReadDoubleWord(offset & ~3L) >> (8 * (int)(offset & 3)));
+        }
+        private void WriteRegisterByte(ulong address, byte value)
+        {
+            long offset;
+            var peripheral = Resolve(address, out offset);
+            if(peripheral is IBytePeripheral bytes) bytes.WriteByte(offset, value);
+            else (peripheral as IDoubleWordPeripheral)?.WriteDoubleWord(offset, value);
+        }
+        private sealed class Target
+        {
+            public Target(IBusPeripheral peripheral, long offset) { Peripheral = peripheral; Offset = offset; }
+            public readonly IBusPeripheral Peripheral;
+            public readonly long Offset;
+        }
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, Target> targets =
+            new System.Collections.Concurrent.ConcurrentDictionary<ulong, Target>();
+
         public void OnGPIO(int number, bool value)
         {
             if(number >= 100 && number < 100 + channels.Length)

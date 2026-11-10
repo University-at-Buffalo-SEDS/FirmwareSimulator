@@ -48,6 +48,9 @@ COPY renode/peripherals/SedsStm32Dma.cs renode/peripherals/SedsStm32Dma.cs
 COPY tests/adc-dma tests/adc-dma
 RUN dotnet run --project tests/adc-dma/AdcDma.csproj -c Release
 
+COPY tests/uart-dma-lock-order tests/uart-dma-lock-order
+RUN dotnet run --project tests/uart-dma-lock-order/UartDmaLockOrder.csproj -c Release -- 200000
+
 COPY renode/peripherals/SedsStm32Adc.cs renode/peripherals/SedsStm32Adc.cs
 COPY tests/adc-registers tests/adc-registers
 RUN dotnet run --project tests/adc-registers/AdcRegisters.csproj -c Release

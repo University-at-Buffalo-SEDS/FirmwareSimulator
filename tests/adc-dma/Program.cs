@@ -45,6 +45,8 @@ namespace Antmicro.Renode.Core {
   public void WriteWord(ulong address,ushort v,object context){Memory[address]=v;}
   public byte ReadByte(ulong address,object context)=>(byte)ReadDoubleWord(address,context);
   public void WriteByte(ulong address,byte value,object context){Registers[address]=value;}
+  // Register windows are addressed directly (no bus access lock); offset == address here.
+  public Antmicro.Renode.Peripherals.Bus.BusRegistration WhatIsAt(ulong address,object context)=>new(new Antmicro.Renode.Peripherals.Bus.BusWindow(this),0);
  }
  public interface IGPIOReceiver{void OnGPIO(int number,bool value);}
  public interface IGPIO{void Connect(IGPIOReceiver receiver,int number);void Set(bool state);}
@@ -52,7 +54,16 @@ namespace Antmicro.Renode.Core {
  public interface INumberedGPIOOutput{IReadOnlyDictionary<int,IGPIO> Connections{get;}}
  public interface IKnownSize{long Size{get;}}
 }
-namespace Antmicro.Renode.Peripherals.Bus {public interface IDoubleWordPeripheral{uint ReadDoubleWord(long offset);void WriteDoubleWord(long offset,uint value);}}
+namespace Antmicro.Renode.Peripherals.Bus {
+ public interface IBusPeripheral{}
+ public interface IDoubleWordPeripheral:IBusPeripheral{uint ReadDoubleWord(long offset);void WriteDoubleWord(long offset,uint value);}
+ public interface IBytePeripheral:IBusPeripheral{byte ReadByte(long offset);void WriteByte(long offset,byte value);}
+ public class Range{public ulong StartAddress;}
+ public class RegistrationPoint{public Range Range=new();}
+ public class BusRegistration{public BusRegistration(IBusPeripheral p,ulong start){Peripheral=p;RegistrationPoint.Range.StartAddress=start;}public IBusPeripheral Peripheral;public RegistrationPoint RegistrationPoint=new();}
+ public class BusWindow:IDoubleWordPeripheral{readonly Antmicro.Renode.Core.Bus bus;public BusWindow(Antmicro.Renode.Core.Bus b){bus=b;}
+  public uint ReadDoubleWord(long o)=>bus.ReadDoubleWord((ulong)o,null);public void WriteDoubleWord(long o,uint v)=>bus.WriteByte((ulong)o,(byte)v,null);}
+}
 namespace Antmicro.Renode.Peripherals.Timers {}
 namespace Antmicro.Renode.Time {
  public enum Direction{Ascending}

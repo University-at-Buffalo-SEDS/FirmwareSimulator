@@ -11,6 +11,17 @@ namespace Antmicro.Renode.Peripherals.UART
     // STM32G4 USART register model. Renode's F7 model exposes a one-byte RX
     // holding register when G4 FIFO mode is enabled, which drops host bursts
     // before the firmware's ReceiveToIdle DMA/parser can observe them.
+    //
+    // Lock order (outermost first): SystemBus peripheral access lock ->
+    // machine clock-source lock -> stateLock. A CPU register access holds
+    // this UART's bus access lock and then takes the clock lock for its
+    // LimitTimer calls. Timer callbacks, and SedsStm32Dma servicing this
+    // UART from a timer callback, already hold the clock lock, so they call
+    // this model directly and never take the bus access lock (doing so
+    // deadlocked the bay: see SedsStm32Dma). stateLock is a leaf: it
+    // makes register read-modify-write and FIFO/flag updates atomic between
+    // the CPU and the DMA, and is never held across LimitTimer, IRQ (the
+    // NVIC enables SysTick, a clock call), CharReceived or file I/O.
     public sealed class SedsStm32Uart : IDoubleWordPeripheral, IBytePeripheral, IKnownSize, IUART
     {
         public SedsStm32Uart(IMachine machine, uint frequency = 170000000)
@@ -21,9 +32,15 @@ namespace Antmicro.Renode.Peripherals.UART
             transmitTimer = new LimitTimer(machine.ClockSource, frequency, this,
                 "uartTx", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
             transmitTimer.LimitReached += () => {
-                if(transmitFifo.TryDequeue(out var value))
+                byte value;
+                bool dequeued;
+                lock(stateLock)
                 {
-                    transmittedBytes++;
+                    dequeued = transmitFifo.TryDequeue(out value);
+                    if(dequeued) { transmittedBytes++; stateVersion++; }
+                }
+                if(dequeued)
+                {
                     // A cut link still clocks the byte out of the MCU; it is
                     // lost on the wire, so the firmware cannot tell.
                     if(LinkCut()) droppedTransmit++;
@@ -46,7 +63,7 @@ namespace Antmicro.Renode.Peripherals.UART
                 "uartIdle", limit: 1, direction: Direction.Ascending, enabled: false, eventEnabled: true);
             idleTimer.LimitReached += () => {
                 idleTimer.Enabled = false;
-                idle = true;
+                lock(stateLock) { idle = true; stateVersion++; }
                 UpdateInterrupt();
             };
             Reset();
@@ -66,60 +83,79 @@ namespace Antmicro.Renode.Peripherals.UART
 
         public uint ReadDoubleWord(long offset)
         {
-            switch(offset)
+            lock(stateLock)
             {
-            case 0x00: return control1;
-            case 0x04: return control2;
-            case 0x08: return control3;
-            case 0x0c: return baudRate;
-            case 0x1c:
-                return (TxAvailable ? 1u << 7 : 0u)
-                    | (transmitFifo.Count == 0 ? 1u << 6 : 0u)
-                    | (1u << 21) | (1u << 22)
-                    | (receiveFifo.Count > 0 ? 1u << 5 : 0u)
-                    | (idle ? 1u << 4 : 0u) | (overrun ? 1u << 3 : 0u);
-            case 0x24:
-                if(!receiveFifo.TryDequeue(out var value)) return 0;
-                UpdateInterrupt();
-                return value;
-            case 0x2c: return prescaler;
-            default: return 0;
+                switch(offset)
+                {
+                case 0x00: return control1;
+                case 0x04: return control2;
+                case 0x08: return control3;
+                case 0x0c: return baudRate;
+                case 0x1c:
+                    return (TxAvailable ? 1u << 7 : 0u)
+                        | (transmitFifo.Count == 0 ? 1u << 6 : 0u)
+                        | (1u << 21) | (1u << 22)
+                        | (receiveFifo.Count > 0 ? 1u << 5 : 0u)
+                        | (idle ? 1u << 4 : 0u) | (overrun ? 1u << 3 : 0u);
+                case 0x24:
+                    break;
+                case 0x2c: return prescaler;
+                default: return 0;
+                }
             }
+            // RDR: exactly one consumer (CPU or DMA) receives each byte.
+            byte data;
+            lock(stateLock)
+            {
+                if(!receiveFifo.TryDequeue(out data)) return 0;
+                stateVersion++;
+            }
+            UpdateInterrupt();
+            return data;
         }
 
         public void WriteDoubleWord(long offset, uint value)
         {
-            switch(offset)
+            var startTransmit = false;
+            ulong transmitTicks = 1;
+            lock(stateLock)
             {
-            case 0x00: control1 = value; break;
-            case 0x04: control2 = value; break;
-            case 0x08: control3 = value; break;
-            case 0x0c: baudRate = value; break;
-            case 0x20: // ICR: write-one-to-clear IDLECF and ORECF.
-                if((value & 16) != 0) idle = false;
-                if((value & 8) != 0) overrun = false;
-                break;
-            case 0x18:
-                if((value & (1u << 3)) != 0) receiveFifo.Clear(); // RXFRQ
-                break;
-            case 0x28:
-                // Do not hold a model lock across LimitTimer access: Renode
-                // invokes timer callbacks while holding its clock-source lock.
-                if((control1 & 9) == 9 && TxAvailable && baudRate != 0)
+                switch(offset)
                 {
-                    transmitFifo.Enqueue((byte)value);
-                    if(!transmitTimer.Enabled)
+                case 0x00: control1 = value; break;
+                case 0x04: control2 = value; break;
+                case 0x08: control3 = value; break;
+                case 0x0c: baudRate = value; break;
+                case 0x20: // ICR: write-one-to-clear IDLECF and ORECF.
+                    if((value & 16) != 0) idle = false;
+                    if((value & 8) != 0) overrun = false;
+                    break;
+                case 0x18:
+                    if((value & (1u << 3)) != 0) receiveFifo.Clear(); // RXFRQ
+                    break;
+                case 0x28:
+                    // TXE check and enqueue are one step, so the CPU and a
+                    // DMA channel cannot both take the last FIFO slot.
+                    if((control1 & 9) == 9 && TxAvailable && baudRate != 0)
                     {
-                        // Model the configured 8N1 wire time in virtual time.
-                        // Instant TXE previously collapsed a burst into one
-                        // Pico mailbox poll and caused artificial overwrites.
-                        transmitTimer.Limit = Math.Max(1ul, (ulong)baudRate * 10);
-                        transmitTimer.Value = 0;
-                        transmitTimer.Enabled = true;
+                        transmitFifo.Enqueue((byte)value);
+                        startTransmit = true;
+                        transmitTicks = Math.Max(1ul, (ulong)baudRate * 10);
                     }
+                    break;
+                case 0x2c: prescaler = value; break;
                 }
-                break;
-            case 0x2c: prescaler = value; break;
+                stateVersion++;
+            }
+            // LimitTimer calls take the clock lock; stateLock is released.
+            if(startTransmit && !transmitTimer.Enabled)
+            {
+                // Model the configured 8N1 wire time in virtual time.
+                // Instant TXE previously collapsed a burst into one
+                // Pico mailbox poll and caused artificial overwrites.
+                transmitTimer.Limit = transmitTicks;
+                transmitTimer.Value = 0;
+                transmitTimer.Enabled = true;
             }
             UpdateInterrupt();
         }
@@ -128,7 +164,7 @@ namespace Antmicro.Renode.Peripherals.UART
         {
             // Host PTYs deliver bursts in wall time. Put bytes onto the
             // configured virtual wire before exposing RXNE or DMA requests.
-            if((control1 & 5) != 5 || baudRate == 0) return;
+            lock(stateLock) { if((control1 & 5) != 5 || baudRate == 0) return; }
             if(LinkCut()) { droppedReceive++; return; }
             receiveWire.Enqueue(value);
             if(!receiveTimer.Enabled)
@@ -142,11 +178,23 @@ namespace Antmicro.Renode.Peripherals.UART
         private ulong CharacterTicks { get { return Math.Max(1ul, (ulong)baudRate * 10); } }
         private void ReceiveWireByte()
         {
-            if(receiveWire.TryDequeue(out var value) && (control1 & 5) == 5)
+            bool accepted = false;
+            if(receiveWire.TryDequeue(out var value))
             {
-                var capacity = (control1 & (1u << 29)) != 0 ? 8 : 1;
-                if(receiveFifo.Count < capacity) receiveFifo.Enqueue(value);
-                else if((control3 & (1u << 12)) == 0) overrun = true;
+                lock(stateLock)
+                {
+                    if((control1 & 5) == 5)
+                    {
+                        accepted = true;
+                        var capacity = (control1 & (1u << 29)) != 0 ? 8 : 1;
+                        if(receiveFifo.Count < capacity) receiveFifo.Enqueue(value);
+                        else if((control3 & (1u << 12)) == 0) overrun = true;
+                        stateVersion++;
+                    }
+                }
+            }
+            if(accepted)
+            {
                 idleTimer.Enabled = false;
                 // One frame of inactivity after the final received frame.
                 // The extra tick prevents an IDLE edge between contiguous bytes.
@@ -164,31 +212,49 @@ namespace Antmicro.Renode.Peripherals.UART
 
         public void Reset()
         {
-            receiveFifo.Clear();
-            receiveWire.Clear();
-            transmitFifo.Clear();
             receiveTimer.Reset(); receiveTimer.Enabled = false;
             idleTimer.Reset(); idleTimer.Enabled = false;
-            idle = overrun = false;
             transmitTimer.Reset();
             transmitTimer.Enabled = false;
-            transmittedBytes = 0;
-            control1 = 0;
-            control2 = 0;
-            control3 = 0;
-            baudRate = 0;
-            prescaler = 0;
+            lock(stateLock)
+            {
+                receiveFifo.Clear();
+                receiveWire.Clear();
+                transmitFifo.Clear();
+                idle = overrun = false;
+                transmittedBytes = 0;
+                control1 = 0;
+                control2 = 0;
+                control3 = 0;
+                baudRate = 0;
+                prescaler = 0;
+                stateVersion++;
+            }
             IRQ.Set(false);
         }
 
         private void UpdateInterrupt()
         {
-            // RXNEIE/RXFNEIE is bit 5 in CR1 on STM32G4.
-            IRQ.Set((receiveFifo.Count > 0 && (control1 & (1u << 5)) != 0)
-                || (TxAvailable && (control1 & (1u << 7)) != 0)
-                || (transmitFifo.Count == 0 && (control1 & (1u << 6)) != 0)
-                || (idle && (control1 & 16) != 0)
-                || (overrun && (control3 & 1) != 0));
+            // The level is computed under stateLock but set outside it (the
+            // NVIC takes the clock lock). If another thread changed the state
+            // meanwhile, set again so the last write reflects the latest state.
+            while(true)
+            {
+                bool level;
+                ulong version;
+                lock(stateLock)
+                {
+                    // RXNEIE/RXFNEIE is bit 5 in CR1 on STM32G4.
+                    level = (receiveFifo.Count > 0 && (control1 & (1u << 5)) != 0)
+                        || (TxAvailable && (control1 & (1u << 7)) != 0)
+                        || (transmitFifo.Count == 0 && (control1 & (1u << 6)) != 0)
+                        || (idle && (control1 & 16) != 0)
+                        || (overrun && (control3 & 1) != 0);
+                    version = stateVersion;
+                }
+                IRQ.Set(level);
+                lock(stateLock) { if(version == stateVersion) return; }
+            }
         }
 
         // ---- Optional external link gate ----------------------------------
@@ -271,6 +337,8 @@ namespace Antmicro.Renode.Peripherals.UART
         private readonly LimitTimer transmitTimer, receiveTimer, idleTimer;
         private readonly ConcurrentQueue<byte> receiveWire = new ConcurrentQueue<byte>();
         private bool idle, overrun;
+        private readonly object stateLock = new object();
+        private ulong stateVersion;
         // CPU register accesses, UART input and timer callbacks can execute
         // on different Renode threads. Queue<T> loses head/count updates in
         // that case, replacing valid firmware bytes with stale FIFO contents.
