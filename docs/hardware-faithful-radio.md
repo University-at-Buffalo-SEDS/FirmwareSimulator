@@ -13,6 +13,11 @@ Linked simulations used to look healthy while the bench was crippled. There were
 
 ## Model
 
+`docs/rfd-radio-model-audit.md` checks the medium against the RFDesign documents and the bench, item by item. Since that audit, a
+station with a modelled modem (`FIRMWARE_SIM_RFD_MODEM`, or `--rfd-profile drain|field`) uses its own S3/S5/S6/DUTY_CYCLE and
+LBT_RSSI, and the medium switches to uncoordinated async access with collisions and half duplex. The variables below
+still apply to stations without a modelled modem.
+
 `renode/peripherals/SedsRadioMedium.cs` reads two optional variables. Without them it behaves exactly as before.
 
 | Variable | Meaning |

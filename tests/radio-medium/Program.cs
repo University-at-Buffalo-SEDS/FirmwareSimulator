@@ -113,6 +113,7 @@ class Program
         {
             Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES",retries.ToString());
             Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_DUTY_CYCLE",duty.ToString());
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY","blind");
             Fresh();var m=new Machine();var tx=new SedsRadioHostPort(m);var rx=new SedsRadioHostPort(m);
             // 64 kbit/s, 50 ms SER_BRK idle cutoff, 160 bits of framing per copy.
             var medium=Medium(rate:64000,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160);
@@ -143,7 +144,207 @@ class Program
         }
         Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES",null);
         Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_DUTY_CYCLE",null);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",null);
+        // Default reading (on_loss): a clean link spends one copy per packet.
+        {
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES","10");
+            Fresh();var m=new Machine();var tx=new SedsRadioHostPort(m);var rx=new SedsRadioHostPort(m);
+            var medium=Medium(rate:64000,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160);
+            medium.AttachHost(0,tx);medium.AttachHost(1,rx);
+            foreach(var b in Enumerable.Range(0,40))tx.WriteChar((byte)b);Advance(2000000);
+            Assert(medium.ReadCounter(0,9)==1&&medium.ReadCounter(0,11)==1&&medium.CompletedAirBits==480,"default on_loss must not resend on a clean link");
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_GLOBAL_RETRIES",null);
+        }
         Console.WriteLine("RADIO_RFD_BROADCAST_COPIES_DUTY_PASS");
+    }
+    // Per-station RFD900x ASYNC air timing (docs/rfd-radio-model-audit.md).
+    // Pinned arithmetic, all at 64 kbit/s air (S2=64), 115200 8N1 UART (87 us
+    // per character), 160 bits of air framing per copy (assumption A3):
+    //   40 B frame -> 40*87 = 3480 us UART in, S6 ms idle, copies*(320+160)
+    //   bits / 64000 on air, 40*87 = 3480 us UART out at the receiver.
+    // S6 is local to each modem and S5 is applied by the sending modem
+    // (manual V1.1 Table 3-2 p. 6-7), so each direction has its own timing.
+    static ulong FirstFrameLatency(SedsRadioMedium medium,SedsRadioHostPort from,List<(ulong At,byte Value)> to,ulong start,int count)
+    {
+        to.Clear();Advance(start);
+        foreach(var b in Enumerable.Range(0,count))from.WriteChar((byte)b);
+        Advance(start+1000000);
+        Assert(to.Count==count,"frame not delivered: "+to.Count);
+        return to[count-1].At-start;
+    }
+    static void PerStationModemAirTiming()
+    {
+        foreach(var mac in new[]{"arbiter","async"})
+        foreach(var mode in new[]{"blind","on_loss"})
+        {
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",mac);
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",mode);
+            Fresh();var m=new Machine();var gs=new SedsRadioHostPort(m);var rf=new SedsRadioHostPort(m);
+            // The scenario profile (2 ms idle, 256 B) must not apply to modelled modems.
+            var medium=Medium(rate:64000,tx:4096,rx:4096,burst:256,idle:2000,overhead:160,turn:2000);
+            // GS at the drain profile, RF still at the 10-28 field readback.
+            medium.ConfigureModem(0,"5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10");
+            medium.ConfigureModem(1,"5:GLOBAL_RETRIES=10,6:SER_BRK_DETMS=50");
+            medium.AttachHost(0,gs);medium.AttachHost(1,rf);
+            var atRf=new List<(ulong,byte)>();rf.CharReceived+=v=>atRf.Add((Clock.NowUs,v));
+            var atGs=new List<(ulong,byte)>();gs.CharReceived+=v=>atGs.Add((Clock.NowUs,v));
+            var up=FirstFrameLatency(medium,gs,atRf,2000000,40);
+            var down=FirstFrameLatency(medium,rf,atGs,4000000,40);
+            ulong gsCopies=mode=="blind"?2UL:1UL, rfCopies=mode=="blind"?11UL:1UL;
+            // The arbiter delivers after the last copy; the async MAC delivers at
+            // the first intact copy (a receiver cannot know more copies follow),
+            // while the sender still holds the air for all of them.
+            ulong Expect(ulong idle,ulong copies)=>3480+idle+((mac=="async"?1UL:copies)*480*1000000+63999)/64000+3480;
+            Console.WriteLine($"RADIO_RFD_PER_STATION_TIMING mac={mac} mode={mode} gs_to_rf_us={up} expect={Expect(10000,gsCopies)} rf_to_gs_us={down} expect={Expect(50000,rfCopies)}");
+            // 100 us medium quantum on each of the three stages.
+            Assert(up>=Expect(10000,gsCopies)&&up<=Expect(10000,gsCopies)+300,"GS->RF timing does not follow the GS modem's S5/S6");
+            Assert(down>=Expect(50000,rfCopies)&&down<=Expect(50000,rfCopies)+300,"RF->GS timing does not follow the RF modem's S5/S6");
+            Assert(medium.ReadCounter(0,11)==gsCopies&&medium.ReadCounter(1,11)==rfCopies,"copies counter");
+            var snap=medium.Snapshot();
+            Assert(snap.Contains("\"global_retries\":1,\"packet_idle_us\":10000,\"max_data\":3968")
+                &&snap.Contains("\"global_retries\":10,\"packet_idle_us\":50000"),"per-station parameters not reported: "+snap);
+        }
+        // A packet closes at the station's own MAX_DATA (S3), not the profile's.
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",null);
+        {
+            Fresh();var m=new Machine();var a=new SedsRadioHostPort(m);var b=new SedsRadioHostPort(m);
+            var medium=Medium(tx:4096,rx:4096,burst:256,idle:2000,overhead:160);
+            medium.ConfigureModem(0,"3:MAX_DATA=100,5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=500");
+            medium.AttachHost(0,a);medium.AttachHost(1,b);var got=new List<byte>();b.CharReceived+=got.Add;
+            foreach(var x in Enumerable.Range(0,250))a.WriteChar((byte)x);
+            Advance(3000000);
+            Assert(got.Count==250&&medium.ReadCounter(0,9)==3,"MAX_DATA=100 must split 250 B into 3 packets: "+medium.ReadCounter(0,9));
+        }
+        // A cut receiver: blind sends 1+S5 copies regardless; on_loss resends
+        // while any attached station lacks the packet, so a cut peer costs
+        // every resend. The third station still gets the packet once.
+        foreach(var mode in new[]{"blind","on_loss"})
+        {
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",mode);
+            Fresh();var m=new Machine();var gs=new SedsRadioHostPort(m);var rf=new SedsRadioHostPort(m);var rrls=new SedsRadioHostPort(m);
+            var medium=Medium(tx:4096,rx:4096,burst:256,idle:2000,overhead:160);
+            medium.ConfigureModem(0,"5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10");
+            medium.AttachHost(0,gs);medium.AttachHost(1,rf);medium.AttachHost(2,rrls);
+            var got=new List<byte>();rrls.CharReceived+=got.Add;
+            medium.SetLink(0,1,false);
+            foreach(var x in Enumerable.Range(0,40))gs.WriteChar((byte)x);
+            Advance(1000000);
+            Assert(got.Count==40&&medium.ReadCounter(1,6)==40&&medium.ReadCounter(0,11)==2,mode+": cut peer handling copies="+medium.ReadCounter(0,11));
+        }
+        // Seeded air loss: delivered + lost = sent; blind always spends 1+S5,
+        // on_loss spends between 1 and 1+S5 and loses less than one blind try.
+        foreach(var mode in new[]{"blind","on_loss"})
+        {
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",mode);
+            Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_AIR_LOSS_PPM","300000");
+            Fresh();var m=new Machine();var a=new SedsRadioHostPort(m);var b=new SedsRadioHostPort(m);
+            var medium=Medium(tx:65536,rx:65536,burst:256,idle:2000,overhead:160);
+            medium.ConfigureModem(0,"5:GLOBAL_RETRIES=3,6:SER_BRK_DETMS=5");
+            medium.AttachHost(0,a);medium.AttachHost(1,b);var got=new List<byte>();b.CharReceived+=got.Add;
+            ulong t=0;for(var k=0;k<400;k++){foreach(var x in Enumerable.Range(0,10))a.WriteChar((byte)x);t+=80000;Advance(t);}
+            Advance(t+2000000);
+            var packets=medium.ReadCounter(0,9);var copies=medium.ReadCounter(0,11);var lost=medium.ReadCounter(1,10);
+            Console.WriteLine($"RADIO_RFD_AIR_LOSS mode={mode} packets={packets} copies={copies} delivered={got.Count} lost={lost}");
+            Assert(packets==400&&(ulong)got.Count+lost==4000,"delivered+lost must equal sent");
+            if(mode=="blind")Assert(copies==1600,"blind must send 1+S5 copies");
+            else Assert(copies>400&&copies<1600,"on_loss must resend only on loss");
+            // P(all 4 copies lost) = 0.3^4 = 0.8 %: 3.2 of 400 packets expected.
+            Assert(lost<=200,"retries must cover most single-copy losses");
+        }
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",null);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_AIR_LOSS_PPM",null);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
+        Console.WriteLine("RADIO_RFD_PER_STATION_AIR_TIMING_PASS");
+    }
+    // Uncoordinated ASYNC access (datasheet s5.3): overlapping transmissions
+    // are lost at receivers that hear both and at the transmitting stations
+    // themselves (half duplex). LBT_RSSI != 0 makes a station wait for a clear
+    // channel for 5-10 ms (SiK tdm.c) instead.
+    static void AsyncCollisionsHalfDuplexAndLbt()
+    {
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC","async");
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY","blind");
+        (SedsRadioMedium M,SedsRadioHostPort Gs,SedsRadioHostPort Rf,List<byte> AtRrls,List<byte> AtGs,List<byte> AtRf) Net(string regs)
+        {
+            Fresh();var m=new Machine();var gs=new SedsRadioHostPort(m);var rf=new SedsRadioHostPort(m);var rrls=new SedsRadioHostPort(m);
+            var medium=Medium(tx:8192,rx:8192,burst:256,idle:2000,overhead:160,turn:2000);
+            for(var k=0;k<3;k++)medium.ConfigureModem(k,regs);
+            medium.AttachHost(0,rf);medium.AttachHost(1,gs);medium.AttachHost(2,rrls);
+            var a=new List<byte>();rrls.CharReceived+=a.Add;var g=new List<byte>();gs.CharReceived+=g.Add;var r=new List<byte>();rf.CharReceived+=r.Add;
+            return (medium,gs,rf,a,g,r);
+        }
+        // 1. Same instant, LBT off, S5=0: both packets collide at RRLS and
+        // neither transmitter hears the other.
+        {
+            var n=Net("5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=5,18:LBT_RSSI=0");
+            Advance(1000000);
+            foreach(var x in Enumerable.Range(0,40)){n.Gs.WriteChar((byte)x);n.Rf.WriteChar((byte)x);}
+            Advance(2000000);
+            Assert(n.AtRrls.Count==0&&n.AtGs.Count==0&&n.AtRf.Count==0,"simultaneous transmissions must be lost: "+n.AtRrls.Count+"/"+n.AtGs.Count+"/"+n.AtRf.Count);
+            Assert(n.M.ReadCounter(2,12)==2&&n.M.ReadCounter(2,10)==80&&n.M.ReadCounter(1,12)==1,"collision counters: "+n.M.Snapshot());
+        }
+        // 2. RF holds the air with a 1000 B packet (130 ms); GS's 40 B packet
+        // becomes ready 20 ms in. LBT off: GS transmits over it, and RRLS loses
+        // both, while GS (transmitting) loses RF's packet too.
+        // 3. LBT on: GS defers until RF ends plus 5-10 ms; nothing is lost.
+        foreach(var lbt in new[]{0,1})
+        {
+            var n=Net("5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=5,18:LBT_RSSI="+lbt);
+            Advance(1000000);
+            foreach(var x in Enumerable.Range(0,1000))n.Rf.WriteChar((byte)x);
+            // RF: 1000 B take 87 ms of UART, then 5 ms idle: on air at about 92 ms.
+            Advance(1000000+92000+20000);
+            var gsStart=Clock.NowUs;
+            foreach(var x in Enumerable.Range(0,40))n.Gs.WriteChar((byte)x);
+            var gsAt=new List<ulong>();
+            Advance(Clock.NowUs+2000000);
+            if(lbt==0)
+            {
+                Assert(n.AtRrls.Count==0&&n.AtGs.Count==0&&n.M.ReadCounter(1,13)==0,"LBT off: overlap must lose both at RRLS and RF at GS: rrls="+n.AtRrls.Count+" gs="+n.AtGs.Count);
+                Assert(n.AtRf.Count==0,"RF was transmitting, it cannot receive GS");
+            }
+            else
+            {
+                Assert(n.AtRrls.Count==1040&&n.AtGs.Count==1000&&n.AtRf.Count==40,"LBT on: nothing lost: rrls="+n.AtRrls.Count);
+                Assert(n.M.ReadCounter(1,13)>0&&n.M.ReadCounter(2,12)==0,"LBT on: GS must defer, no collision");
+            }
+            Console.WriteLine($"RADIO_RFD_ASYNC_OVERLAP lbt={lbt} rrls={n.AtRrls.Count} gs={n.AtGs.Count} rf={n.AtRf.Count} gs_lbt_waits={n.M.ReadCounter(1,13)} rrls_collided={n.M.ReadCounter(2,12)}");
+        }
+        // 4. LBT on: the deferred GS packet starts 5-10 ms after RF's packet
+        // ends. RF's copy: (1000*8+160)/64000 s = 127.5 ms from about 92 ms.
+        {
+            var n=Net("5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=5,18:LBT_RSSI=1");
+            var at=new List<ulong>();var rf2=n.AtRf;
+            Advance(1000000);
+            foreach(var x in Enumerable.Range(0,1000))n.Rf.WriteChar((byte)x);
+            Advance(1000000+112000);
+            foreach(var x in Enumerable.Range(0,40))n.Gs.WriteChar((byte)x);
+            ulong first=0;while(Clock.NowUs<4000000){Advance(Clock.NowUs+100);if(first==0&&rf2.Count>0)first=Clock.NowUs;}
+            // RF on air at 1000000+87000+5000(+quantum); ends 127500 later.
+            ulong rfEnd=1000000+87000+5000+127500;
+            ulong gsCopy=(480UL*1000000+63999)/64000;
+            var gsAirStart=first-gsCopy-87;
+            Console.WriteLine($"RADIO_RFD_ASYNC_LBT_BACKOFF gs_air_start_after_rf_end_us={(long)gsAirStart-(long)rfEnd}");
+            Assert(gsAirStart>=rfEnd+5000&&gsAirStart<=rfEnd+10000+400,"LBT backoff must be 5-10 ms after the channel clears");
+        }
+        // 5. Blind S5=1, LBT off. RF's 20 B packet is on air 6.74-11.74 ms
+        // (copy 2 to 16.74 ms); GS's 40 B packet (written 1 ms later) is on air
+        // 9.48-16.98 ms, copy 2 16.98-24.48 ms. Only GS's second copy is clear
+        // at RRLS, so RRLS gets exactly GS's packet. RF, still within its 2 ms
+        // turnaround at 16.98 ms, gets nothing.
+        {
+            var n=Net("5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=5,18:LBT_RSSI=0");
+            Advance(1000000);
+            foreach(var x in Enumerable.Range(0,20))n.Rf.WriteChar((byte)x);
+            Advance(1001000);
+            foreach(var x in Enumerable.Range(100,40))n.Gs.WriteChar((byte)x);
+            Advance(3000000);
+            Assert(n.AtRrls.Count==40&&n.AtRrls[0]==100&&n.AtRf.Count==0&&n.AtGs.Count==0,
+                "only the clear second copy may arrive: rrls="+n.AtRrls.Count+" rf="+n.AtRf.Count+" gs="+n.AtGs.Count);
+        }
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY",null);
+        Console.WriteLine("RADIO_RFD_ASYNC_COLLISION_HALF_DUPLEX_LBT_PASS");
     }
     static void Main()
     {
@@ -151,6 +352,8 @@ class Program
         if(schedule!=null){PacketizationLatency(schedule);return;}
         ModemCommandMode();
         BroadcastCopiesAndDutyCycle();
+        PerStationModemAirTiming();
+        AsyncCollisionsHalfDuplexAndLbt();
         // An idle-delimited UART packet stays complete while another modem
         // owns the air. A later UART write cannot reopen that packet.
         foreach(var packetIdle in new ulong[]{10000,50000})

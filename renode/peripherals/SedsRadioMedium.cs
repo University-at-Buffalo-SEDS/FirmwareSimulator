@@ -55,6 +55,11 @@ namespace Antmicro.Renode.Peripherals.UART
     // Capacity/recovery model, not an implementation of the RFD proprietary
     // MAC. FIFO sizes, byte burst grouping, idle cutoff, overhead and turn time
     // are explicit scenario parameters. No SDT/frame parsing occurs here.
+    // A station with a modelled RFD modem (ConfigureModem) takes its packet
+    // size (MAX_DATA), packet idle cutoff (SER_BRK_DETMS), broadcast copies
+    // (GLOBAL_RETRIES) and DUTY_CYCLE from its own active registers, because
+    // each RFD900x ASYNC modem applies them to its own transmissions:
+    // docs/rfd-radio-model-audit.md has the sources and the assumptions.
     public sealed class SedsRadioMedium : IExternal, IConnectable<IUART>, IPeripheral
     {
         public SedsRadioMedium(uint airRate, uint uartBaud, int txFifo, int rxFifo,
@@ -100,6 +105,35 @@ namespace Antmicro.Renode.Peripherals.UART
             // the scenario's SER_BRK_DETMS (idleUs) and MAX_DATA (maxBurst).
             globalRetries = EnvBounded("FIRMWARE_SIM_RFD_GLOBAL_RETRIES", 0, 0, 100);
             dutyCycle = EnvBounded("FIRMWARE_SIM_RFD_DUTY_CYCLE", 100, 1, 100);
+            // GLOBAL_RETRIES semantics are not documented beyond "maximum number
+            // of retries for broadcast messages" (manual V1.1 p. 7), so both
+            // readings are selectable (docs/rfd-radio-model-audit.md, open
+            // assumption A1):
+            //   on_loss (default): a resend happens only while some other
+            //            attached station still lacks the packet, at most S5
+            //            resends (an acknowledgement from every station is
+            //            assumed; release notes 2.45 "with acknowledgement");
+            //   blind:   every broadcast goes on air 1 + S5 times.
+            // The default follows the 2026-10-28 bench strace: the RF modem (S5
+            // at its factory 10; no RF code wrote S5 before 2026-11-08) sent
+            // 880 B/s of payload to the GS on 64 kbit/s air, and 11 blind
+            // copies would need 880*8*11 = 77 kbit/s.
+            // FIRMWARE_SIM_RFD_AIR_LOSS_PPM is an independent per-copy,
+            // per-receiver loss (seeded, deterministic); 0 = clean air.
+            var mode = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_BROADCAST_RETRY");
+            if(string.IsNullOrEmpty(mode) || mode == "on_loss") retryOnLoss = true;
+            else if(mode == "blind") retryOnLoss = false;
+            else throw new RecoverableException("FIRMWARE_SIM_RFD_BROADCAST_RETRY must be blind or on_loss");
+            airLossPpm = EnvBounded("FIRMWARE_SIM_RFD_AIR_LOSS_PPM", 0, 0, 1000000);
+            random = new Random((int)EnvBounded("FIRMWARE_SIM_RFD_AIR_LOSS_SEED", 1, 0, int.MaxValue));
+            var mac = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC");
+            if(string.IsNullOrEmpty(mac)) asyncMac = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_MODEM"));
+            else if(mac == "async" || mac == "arbiter") asyncMac = mac == "async";
+            else throw new RecoverableException("FIRMWARE_SIM_RFD_MAC must be async or arbiter");
+            carrierSense = Environment.GetEnvironmentVariable("FIRMWARE_SIM_RFD_CARRIER_SENSE");
+            if(carrierSense == "" || carrierSense == "register") carrierSense = null;
+            else if(carrierSense != null && carrierSense != "always" && carrierSense != "never")
+                throw new RecoverableException("FIRMWARE_SIM_RFD_CARRIER_SENSE must be register, always or never");
             // Opt-in RFD900x ASYNC command-mode model per station, for example
             // FIRMWARE_SIM_RFD_MODEM="0=6:SER_BRK_DETMS=20,19:RTSCTS=1". Stations
             // without an entry stay transparent, exactly as before.
@@ -210,6 +244,7 @@ namespace Antmicro.Renode.Peripherals.UART
                     // Physical disconnect drops queued UART/air data belonging
                     // to that station. Other stations remain live.
                     if(active != null && active.Sender == i) active = null;
+                    node.Cur = null;
                     nodes[i] = null;
                     return;
                 }
@@ -227,7 +262,11 @@ namespace Antmicro.Renode.Peripherals.UART
         // lengths include an in-flight TX burst and scheduled UART RX bytes.
         // 0 TX depth,1 RX depth,2 TX peak,3 RX peak,4 refused TX bytes,
         // 5 dropped RX bytes,6 lost-link bytes,7 air TX bytes,8 delivered bytes,
-        // 9 air packets (each counted once, however many broadcast copies).
+        // 9 air packets (each counted once, however many broadcast copies),
+        // 10 bytes lost on air (every copy lost; FIRMWARE_SIM_RFD_AIR_LOSS_PPM),
+        // 11 broadcast copies sent (11/9 is the mean copies per packet),
+        // 12 copy receptions corrupted by overlap (collision or half duplex),
+        // 13 ticks a ready packet waited for listen-before-talk (async MAC).
         public ulong ReadCounter(int index, int counter)
         {
             lock(sync)
@@ -245,6 +284,10 @@ namespace Antmicro.Renode.Peripherals.UART
                     case 7: return n.AirTx;
                     case 8: return n.Delivered;
                     case 9: return n.AirPackets;
+                    case 10: return n.AirLost;
+                    case 11: return n.AirCopies;
+                    case 12: return n.Collided;
+                    case 13: return n.LbtDeferrals;
                     default: throw new RecoverableException("Unknown radio counter");
                 }
             }
@@ -261,8 +304,10 @@ namespace Antmicro.Renode.Peripherals.UART
                     if(nodes[i] == null) continue;
                     if(!first) b.Append(','); first = false;
                     b.Append("{\"index\":").Append(i).Append(",\"counters\":[");
-                    for(var c = 0; c < 10; c++) { if(c != 0) b.Append(','); b.Append(ReadCounter(i,c)); }
-                    b.Append(']');
+                    for(var c = 0; c < 14; c++) { if(c != 0) b.Append(','); b.Append(ReadCounter(i,c)); }
+                    b.Append("],\"global_retries\":").Append(GlobalRetries(nodes[i]))
+                        .Append(",\"packet_idle_us\":").Append(IdleUs(nodes[i]))
+                        .Append(",\"max_data\":").Append(MaxData(nodes[i]));
                     if(nodes[i].Modem != null) b.Append(",\"modem\":").Append(nodes[i].Modem.Json());
                     b.Append('}');
                 }
@@ -344,8 +389,8 @@ namespace Antmicro.Renode.Peripherals.UART
             // a completed idle gap even if a later write arrives before
             // this station gets its next turn. Only lengths/times are
             // staged here; payload bytes retain their single FIFO owner.
-            if(n.PacketTail == null || n.PacketTail.Count == maxBurst
-                || inputStart >= n.PacketTail.LastReadyUs + idleUs)
+            if(n.PacketTail == null || n.PacketTail.Count >= MaxData(n)
+                || inputStart >= n.PacketTail.LastReadyUs + IdleUs(n))
             {
                 n.PacketTail = new TxPacket();
                 n.Packets.Enqueue(n.PacketTail);
@@ -363,7 +408,8 @@ namespace Antmicro.Renode.Peripherals.UART
             List<Delivery> deliveries = null;
             lock(sync)
             {
-                if(active != null && now >= active.EndUs)
+                if(asyncMac) AsyncAir(now);
+                else if(active != null && now >= active.EndUs)
                 {
                     var sender = nodes[active.Sender];
                     if(sender != null) { sender.PendingTx -= active.Bytes.Length; sender.AirTx += (ulong)active.Bytes.Length; sender.AirPackets++; sender.HoldUs = active.EndUs + active.HoldUs; }
@@ -373,15 +419,8 @@ namespace Antmicro.Renode.Peripherals.UART
                         var n = nodes[i];
                         if(n == null || n != active.Recipients[i] || i == active.Sender) continue;
                         if(!links[active.Sender,i]) { n.LostLink += (ulong)active.Bytes.Length; continue; }
-                        // A modem in command mode or rebooting does not output air data.
-                        if(n.Modem != null && n.Modem.State != ModemState.Data) { n.Modem.DroppedAir += (ulong)active.Bytes.Length; continue; }
-                        foreach(var value in active.Bytes)
-                        {
-                            if(n.Rx.Count >= rxFifo) { n.DroppedRx++; continue; }
-                            n.OutputReady = Math.Max(active.EndUs, n.OutputReady) + UartByteUs;
-                            n.Rx.Enqueue(new TimedByte(value,n.OutputReady));
-                            n.PeakRx = Math.Max(n.PeakRx,(ulong)n.Rx.Count);
-                        }
+                        if(!active.Received[i]) { n.AirLost += (ulong)active.Bytes.Length; continue; }
+                        DeliverAir(n, active.Bytes, active.EndUs);
                     }
                     availableUs = active.EndUs + turnUs;
                     active = null;
@@ -401,7 +440,7 @@ namespace Antmicro.Renode.Peripherals.UART
                         deliveries.Add(new Delivery(n, value));
                     }
                 }
-                if(active == null && now >= availableUs)
+                if(!asyncMac && active == null && now >= availableUs)
                 {
                     for(var step = 0; step < MaxNodes; step++)
                     {
@@ -410,17 +449,22 @@ namespace Antmicro.Renode.Peripherals.UART
                         if(n == null || n.Packets.Count == 0 || now < n.HoldUs) continue;
                         var packet = n.Packets.Peek();
                         if(now < packet.LastReadyUs
-                            || (packet.Count < maxBurst && now < packet.LastReadyUs + idleUs)) continue;
+                            || (packet.Count < MaxData(n) && now < packet.LastReadyUs + IdleUs(n))) continue;
                         n.Packets.Dequeue();
                         if(n.PacketTail == packet) n.PacketTail = null;
                         var ready = packet.Count;
                         var bytes = new byte[ready];
                         for(var j = 0; j < ready; j++) bytes[j] = n.Tx.Dequeue().Value;
-                        var bits = ((ulong)ready * 8 + overheadBits) * (1 + globalRetries);
+                        var recipients = (Node[])nodes.Clone();
+                        var received = new bool[MaxNodes];
+                        var copies = SendCopies(i, recipients, received, GlobalRetries(n));
+                        n.AirCopies += copies;
+                        var bits = ((ulong)ready * 8 + overheadBits) * copies;
                         var duration = (bits * 1000000 + airRate - 1) / airRate;
-                        var hold = dutyCycle >= 100 ? 0UL : duration * (100 - dutyCycle) / dutyCycle;
+                        var duty = DutyCycle(n);
+                        var hold = duty >= 100 ? 0UL : duration * (100 - duty) / duty;
                         active = new Burst { Sender = i, Bytes = bytes, Bits = bits, EndUs = now + duration, HoldUs = hold,
-                            Recipients = (Node[])nodes.Clone() };
+                            Recipients = recipients, Received = received };
                         cursor = (i + 1) % MaxNodes;
                         break;
                     }
@@ -432,6 +476,118 @@ namespace Antmicro.Renode.Peripherals.UART
             foreach(var delivery in deliveries)
                 delivery.Node.Machine.HandleTimeDomainEvent(delivery.Node.Deliver, delivery.Value, stamp);
         }
+        // The receiving modem outputs a whole packet over its UART after the
+        // packet (copy) has ended on air.
+        private void DeliverAir(Node n, byte[] bytes, ulong endUs)
+        {
+            // A modem in command mode or rebooting does not output air data.
+            if(n.Modem != null && n.Modem.State != ModemState.Data) { n.Modem.DroppedAir += (ulong)bytes.Length; return; }
+            foreach(var value in bytes)
+            {
+                if(n.Rx.Count >= rxFifo) { n.DroppedRx++; continue; }
+                n.OutputReady = Math.Max(endUs, n.OutputReady) + UartByteUs;
+                n.Rx.Enqueue(new TimedByte(value,n.OutputReady));
+                n.PeakRx = Math.Max(n.PeakRx,(ulong)n.Rx.Count);
+            }
+        }
+
+        // --- RFD900x ASYNC uncoordinated access ---------------------------
+        // FIRMWARE_SIM_RFD_MAC=async (the default once FIRMWARE_SIM_RFD_MODEM
+        // is set): no central arbiter. "There is no transmission coordination
+        // or synchronisation of the network" (X series datasheet 2.1 s5.3).
+        // Every station transmits on its own; a copy is lost at a receiver
+        // that hears another station during it (no capture effect), or that
+        // is transmitting itself or within turnUs after (single half-duplex
+        // radio). Listen-before-talk follows each modem's LBT_RSSI register
+        // (0 = off, the SiK meaning; async merged SiK 3.09, release notes
+        // 2.60) unless FIRMWARE_SIM_RFD_CARRIER_SENSE=always|never. With LBT
+        // the channel must be clear for 5 ms plus a random 0-5 ms, redrawn
+        // after each busy period (SiK tdm.c LBT_MIN_TIME_USEC 5000 and
+        // lbt_rand; ETSI EN 300 220 9.2.2.2). docs/rfd-radio-model-audit.md.
+        private void AsyncAir(ulong now)
+        {
+            for(var s = 0; s < MaxNodes; s++)
+            {
+                var n = nodes[s];
+                if(n == null || n.Cur == null || now < n.Cur.CopyEnd) continue;
+                var c = n.Cur;
+                for(var r = 0; r < MaxNodes; r++)
+                {
+                    var rx = nodes[r];
+                    if(r == s || rx == null || rx != c.Recipients[r] || c.Received[r] || !links[s,r]) continue;
+                    if(Overlapped(s, r, c.CopyStart, c.CopyEnd)) { rx.Collided++; continue; }
+                    if(airLossPpm != 0 && random.Next(1000000) < airLossPpm) continue;
+                    c.Received[r] = true;
+                    DeliverAir(rx, c.Bytes, c.CopyEnd);
+                }
+                c.Copies++; n.AirCopies++;
+                completedAirBits += c.CopyBits;
+                var missing = false;
+                for(var r = 0; r < MaxNodes; r++)
+                    if(r != s && nodes[r] != null && nodes[r] == c.Recipients[r] && !c.Received[r]) missing = true;
+                if(c.Copies < c.MaxCopies && (!retryOnLoss || missing))
+                {
+                    c.CopyStart = c.CopyEnd; c.CopyEnd += c.CopyUs;
+                    airLog.Add(new AirTx { Sender = s, Start = c.CopyStart, End = c.CopyEnd });
+                    continue;
+                }
+                for(var r = 0; r < MaxNodes; r++)
+                {
+                    var rx = nodes[r];
+                    if(r == s || rx == null || rx != c.Recipients[r] || c.Received[r]) continue;
+                    if(!links[s,r]) rx.LostLink += (ulong)c.Bytes.Length; else rx.AirLost += (ulong)c.Bytes.Length;
+                }
+                n.PendingTx -= c.Bytes.Length; n.AirTx += (ulong)c.Bytes.Length; n.AirPackets++;
+                var duty = DutyCycle(n); var total = c.Copies * c.CopyUs;
+                n.HoldUs = c.CopyEnd + turnUs + (duty >= 100 ? 0UL : total * (100 - duty) / duty);
+                n.Cur = null;
+            }
+            airLog.RemoveAll(t => t.End + 2000000 < now);
+            for(var i = 0; i < MaxNodes; i++)
+            {
+                var n = nodes[i];
+                if(n == null) continue;
+                var busy = false;
+                for(var j = 0; j < MaxNodes; j++)
+                    if(j != i && nodes[j] != null && nodes[j].Cur != null && links[j,i]) busy = true;
+                if(busy) { n.ClearSinceUs = now; n.ListenDrawn = false; }
+                else if(!n.ListenDrawn) { n.ListenUs = 5000UL + (ulong)random.Next(5001); n.ListenDrawn = true; }
+                if(n.Cur != null || n.Packets.Count == 0 || now < n.HoldUs) continue;
+                var packet = n.Packets.Peek();
+                if(now < packet.LastReadyUs
+                    || (packet.Count < MaxData(n) && now < packet.LastReadyUs + IdleUs(n))) continue;
+                if(ListenBeforeTalk(n) && (busy || now < n.ClearSinceUs + n.ListenUs)) { n.LbtDeferrals++; continue; }
+                n.Packets.Dequeue();
+                if(n.PacketTail == packet) n.PacketTail = null;
+                var bytes = new byte[packet.Count];
+                for(var j = 0; j < bytes.Length; j++) bytes[j] = n.Tx.Dequeue().Value;
+                var bits = (ulong)bytes.Length * 8 + overheadBits;
+                var copyUs = (bits * 1000000 + airRate - 1) / airRate;
+                n.Cur = new AirPacket { Bytes = bytes, Recipients = (Node[])nodes.Clone(), Received = new bool[MaxNodes],
+                    MaxCopies = 1UL + GlobalRetries(n), CopyBits = bits, CopyUs = copyUs, CopyStart = now, CopyEnd = now + copyUs };
+                airLog.Add(new AirTx { Sender = i, Start = now, End = now + copyUs });
+            }
+        }
+        // A copy from `sender` is lost at `receiver` if anything else the
+        // receiver can hear overlaps it, or the receiver itself transmits
+        // during it or less than turnUs before it.
+        private bool Overlapped(int sender, int receiver, ulong start, ulong end)
+        {
+            foreach(var t in airLog)
+            {
+                if(t.Sender == sender) continue;
+                if(t.Sender == receiver ? (t.Start < end && t.End + turnUs > start)
+                    : (links[t.Sender, receiver] && t.Start < end && t.End > start)) return true;
+            }
+            return false;
+        }
+        private bool ListenBeforeTalk(Node n)
+        {
+            if(carrierSense != null) return carrierSense == "always";
+            int v;
+            return n.Modem != null && n.Modem.TryActive("LBT_RSSI", null, out v) && v != 0;
+        }
+
         // --- RFD900x ASYNC command-mode model -----------------------------
         private bool ModemInput(Node n, byte value, ulong now)
         {
@@ -476,7 +632,7 @@ namespace Antmicro.Renode.Peripherals.UART
             if(m.State == ModemState.Rebooting && now >= m.RebootUntilUs)
             {
                 m.State = ModemState.Data;
-                foreach(var r in m.Regs.Values) r.Ram = r.Eeprom;
+                foreach(var r in m.Regs.Values) r.Ram = r.Active = r.Eeprom;
             }
             if(m.Pluses == 3 && now >= m.PlusUs + 1000000 && m.LastHostUs <= m.PlusUs)
             {
@@ -547,7 +703,9 @@ namespace Antmicro.Renode.Peripherals.UART
             if(!string.IsNullOrEmpty(path)) File.AppendAllText(path, line + "\n");
         }
         private enum ModemState { Data, Command, Rebooting }
-        private sealed class ModemReg { public string Name; public int Ram, Eeprom; }
+        // Active is what the radio runs: ATSn= changes RAM, and only AT&W then
+        // ATZ (a reboot) makes it the running value (manual V1.1 p. 5).
+        private sealed class ModemReg { public string Name; public int Ram, Eeprom, Active; }
         private sealed class Modem
         {
             public Modem()
@@ -568,7 +726,15 @@ namespace Antmicro.Renode.Peripherals.UART
                 ModemReg r;
                 if(!Regs.TryGetValue(number, out r)) { r = new ModemReg { Name = name ?? ("S" + number) }; Regs[number] = r; }
                 if(!string.IsNullOrEmpty(name)) r.Name = name;
-                r.Ram = r.Eeprom = value;
+                r.Ram = r.Eeprom = r.Active = value;
+            }
+            // Registers are found by the name ATI5 reports: the 4.03 numbering
+            // differs from the V1.1 manual above S5. Returns false if absent.
+            public bool TryActive(string name, string alias, out int value)
+            {
+                foreach(var r in Regs.Values)
+                    if(r.Name == name || r.Name == alias) { value = r.Active; return true; }
+                value = 0; return false;
             }
             public string Json()
             {
@@ -592,6 +758,64 @@ namespace Antmicro.Renode.Peripherals.UART
             public int Pluses;
             public ulong PlusUs, LastHostUs, RebootUntilUs, DroppedAir;
             public ulong CommandEntries, Commands, Saves, Reboots;
+        }
+
+        // --- Per-station air parameters --------------------------------------
+        // Stations without a modelled modem keep the scenario profile and the
+        // global FIRMWARE_SIM_RFD_* values, exactly as before.
+        private int MaxData(Node n)
+        {
+            int v;
+            // MAX_DATA (S3): 1..4068, manual V1.1 Table 3-2; a packet never
+            // exceeds the modem's own TX buffer.
+            if(n.Modem != null && n.Modem.TryActive("MAX_DATA", null, out v) && v >= 1)
+                return Math.Min(Math.Min(v, 4068), txFifo);
+            return maxBurst;
+        }
+        private ulong IdleUs(Node n)
+        {
+            int v;
+            // SER_BRK_DETMS (S6): ms of serial silence that closes a packet,
+            // 0..500, local to each node (manual V1.1 p. 7). 0 turns break
+            // detection off; modelled as one character time (send at once).
+            if(n.Modem != null && n.Modem.TryActive("SER_BRK_DETMS", "SER_BREAK_DETECT_MS", out v) && v >= 0)
+                return v == 0 ? UartByteUs : (ulong)Math.Min(v, 500) * 1000UL;
+            return idleUs;
+        }
+        // GLOBAL_RETRIES (S5), 0..100 (manual V1.1 Table 3-2). Applied by the
+        // sending modem to its own broadcasts.
+        private uint GlobalRetries(Node n)
+        {
+            int v;
+            if(n.Modem != null && n.Modem.TryActive("GLOBAL_RETRIES", null, out v) && v >= 0)
+                return (uint)Math.Min(v, 100);
+            return globalRetries;
+        }
+        // Decides, at the start of a packet, how many copies go on air and
+        // which receivers get at least one. Receivers keep the first copy.
+        private ulong SendCopies(int sender, Node[] recipients, bool[] received, uint retries)
+        {
+            ulong copies = 0;
+            while(copies < 1UL + retries)
+            {
+                copies++;
+                var missing = false;
+                for(var i = 0; i < MaxNodes; i++)
+                {
+                    if(i == sender || recipients[i] == null || received[i]) continue;
+                    if(links[sender,i] && (airLossPpm == 0 || random.Next(1000000) >= airLossPpm)) received[i] = true;
+                    else missing = true;
+                }
+                if(retryOnLoss && !missing) break;
+            }
+            return copies;
+        }
+        private uint DutyCycle(Node n)
+        {
+            int v;
+            if(n.Modem != null && n.Modem.TryActive("DUTY_CYCLE", null, out v) && v >= 1 && v <= 100)
+                return (uint)v;
+            return dutyCycle;
         }
 
         private Node GetNode(int index)
@@ -630,10 +854,20 @@ namespace Antmicro.Renode.Peripherals.UART
             public TxPacket PacketTail;
             public readonly Queue<TimedByte> Rx = new Queue<TimedByte>();
             public int PendingTx;
-            public ulong InputReady, OutputReady, PeakTx, PeakRx, RefusedTx, DroppedRx, LostLink, AirTx, Delivered, AirPackets, HoldUs;
+            public ulong InputReady, OutputReady, PeakTx, PeakRx, RefusedTx, DroppedRx, LostLink, AirTx, Delivered, AirPackets, HoldUs, AirLost, AirCopies, Collided, LbtDeferrals;
+            // Async access state (FIRMWARE_SIM_RFD_MAC=async).
+            public AirPacket Cur;
+            public ulong ClearSinceUs, ListenUs;
+            public bool ListenDrawn;
         }
         private sealed class TxPacket { public int Count; public ulong LastReadyUs; }
-        private sealed class Burst { public int Sender; public byte[] Bytes; public ulong Bits, EndUs, HoldUs; public Node[] Recipients; }
+        private sealed class AirTx { public int Sender; public ulong Start, End; }
+        private sealed class AirPacket
+        {
+            public byte[] Bytes; public Node[] Recipients; public bool[] Received;
+            public ulong Copies, MaxCopies, CopyBits, CopyUs, CopyStart, CopyEnd;
+        }
+        private sealed class Burst { public int Sender; public byte[] Bytes; public ulong Bits, EndUs, HoldUs; public Node[] Recipients; public bool[] Received; }
         private struct Delivery
         {
             public Delivery(Node node, byte value) { Node = node; Value = value; }
@@ -733,7 +967,11 @@ namespace Antmicro.Renode.Peripherals.UART
         private readonly uint airRate, uartBaud, overheadBits;
         private readonly int txFifo, rxFifo, maxBurst;
         private readonly ulong idleUs, turnUs;
-        private readonly uint globalRetries, dutyCycle;
+        private readonly uint globalRetries, dutyCycle, airLossPpm;
+        private readonly bool retryOnLoss, asyncMac;
+        private readonly string carrierSense;
+        private readonly List<AirTx> airLog = new List<AirTx>();
+        private readonly Random random;
         private LimitTimer timer;
         private Burst active;
         private int cursor;

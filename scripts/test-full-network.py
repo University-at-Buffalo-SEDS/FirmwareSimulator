@@ -185,6 +185,12 @@ def build_config(a):
         cmd += ['-e', f'FIRMWARE_SIM_RFD_GLOBAL_RETRIES={a.rfd_global_retries}']
     if a.rfd_modem:
         cmd += ['-e', 'FIRMWARE_SIM_RFD_MODEM=' + a.rfd_modem, '-e', 'FIRMWARE_SIM_RFD_MODEM_LOG=/diagnostics/rfd-modem.log']
+    if a.rfd_broadcast_retry:
+        cmd += ['-e', 'FIRMWARE_SIM_RFD_BROADCAST_RETRY=' + a.rfd_broadcast_retry]
+    if a.rfd_carrier_sense:
+        cmd += ['-e', 'FIRMWARE_SIM_RFD_CARRIER_SENSE=' + a.rfd_carrier_sense]
+    if a.rfd_air_loss_ppm:
+        cmd += ['-e', f'FIRMWARE_SIM_RFD_AIR_LOSS_PPM={a.rfd_air_loss_ppm}']
     for node, repo in F.REPOS.items():
         cmd += ['-v', f'{(a.cohort / repo).resolve()}:/nodes/{node}:ro']
     cmd += [a.image, 'bay', '--topology', '/simulation/topology.json']
@@ -1910,6 +1916,12 @@ if __name__ == '__main__':
     p.add_argument('--phase-a-ms', type=int, default=180000)
     p.add_argument('--gps-initial', type=int, choices=[0, 1, 2], default=0, help='RF GPS fixture at power-up: 0 no fix, 1 fix, 2 u-blox placeholder date, no fix')
     p.add_argument('--rfd-modem', default='')
+    p.add_argument('--rfd-profile', choices=['', 'drain', 'field'], default='',
+                   help='model every radio station\'s modem with these registers (docs/rfd-radio-model-audit.md): '
+                        'drain = deployed rfd-async-64k-drain (S5=1, S6=10), field = 2026-10-28 readback (S5=10, S6=50)')
+    p.add_argument('--rfd-broadcast-retry', choices=['', 'blind', 'on_loss'], default='', help='GLOBAL_RETRIES reading (open assumption A1)')
+    p.add_argument('--rfd-carrier-sense', choices=['', 'register', 'always', 'never'], default='', help='LBT reading (open assumption A2)')
+    p.add_argument('--rfd-air-loss-ppm', type=int, default=0, help='independent per-copy air loss')
     p.add_argument('--radio-trace', action='store_true')
     p.add_argument('--gs-reboot', action='append', default=[])
     p.add_argument('--board-reboot', action='append', default=[])
@@ -1931,6 +1943,10 @@ if __name__ == '__main__':
     a = p.parse_args()
     a.station_mode = {'hitl_mode': 'hitl', 'test_fire_mode': 'test_fire'}.get(a.mode, a.mode)
     a.mode = {'hitl': 'hitl_mode', 'test_fire': 'test_fire_mode'}.get(a.station_mode, 'normal')
+    if a.rfd_profile and not a.rfd_modem:
+        regs = {'drain': '5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10', 'field': '5:GLOBAL_RETRIES=10,6:SER_BRK_DETMS=50'}[a.rfd_profile]
+        # Station indexes are the rocket_radio endpoint order: rf, groundstation, then rrls.
+        a.rfd_modem = ';'.join(f'{i}={regs}' for i in range(3 if a.rrls else 2))
     if a.sched.get('can0'): a.can_cut.append(f"DAQ:{a.sched['can0']}:{a.sched['can1']}")
     if a.sched.get('gsrb'): a.gs_reboot.append(str(a.sched['gsrb']))
     if a.sched.get('abrb'): a.board_reboot.append(f"AB:{a.sched['abrb']}")
