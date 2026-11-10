@@ -89,19 +89,23 @@ More scenarios:
 
 `--scenario gse_flows --flows <list>` drives the station API exactly as the operator UI does, in the station
 mode under test (`--mode normal|hitl|test_fire`), all seven boards on the faithful radio. Each flow is a step, so a
-fault is recorded and the next flow still runs. The station's tank is the operational flight sim's valve-driven
-plant (`F.plant_pressure`, `F.plant_mass`) fed from the station's own AB/VB valve readbacks: nitrogen reaches the
-tank only after the nitrogen test starts, nitrous only after the fill starts. The scenario sets the nitrogen
-target to 50 psi, the ceiling to 150 psi, the cold-flow target to 40 psi and a 5 kg nitrous fill;
-`--gse-config` merges more `gse.json` settings. HITL fill runs use `--gse-config '{"pressure_ceiling_psi":900}'`: HITL fill admission checks the engine's default 750 psi nitrous target instead of the configured one (reported against GroundStation26 8d038eb), so a lower ceiling refuses every HITL fill.
+fault is recorded and the next flow still runs. Flows run in the order given, except that `cold_flow` always runs
+before `fill`: its further nitrogen test starts by opening dump and vent for the empty-tank baseline, which
+belongs before the tank holds a fill. Without `--flows` the run takes the full operator path for the mode:
+`isolation,self_test,nitrogen,cold_flow,fill,turbocharge,manual_switch` (HITL: without `turbocharge`). The
+station's tank is the operational flight sim's valve-driven plant (`F.plant_pressure`, `F.plant_mass`) fed from
+the station's own AB/VB valve readbacks: nitrogen reaches the tank only after the nitrogen test starts, nitrous
+only after the fill starts. The scenario sets the nitrogen target to 50 psi, the ceiling to 150 psi, the
+cold-flow target to 40 psi and a 5 kg nitrous fill at a 100 psi nitrous target; `--gse-config` merges more
+`gse.json` settings.
 
 | Flow | What it asserts | Regression |
 | --- | --- | --- |
-| `isolation` | At prelaunch the self-test is held only by the isolation confirmation and `ValveSelfTest` is refused. `POST /api/gse/self-test-confirmation {"confirmed":true}` (the checkbox's request) is accepted, the station reports it confirmed and enables `ValveSelfTest`. | UI 790627f (the UI-side half is the frontend test below) |
+| `isolation` | At prelaunch the self-test is held only by the isolation confirmation and `ValveSelfTest` is refused. `POST /api/gse/self-test-confirmation {"confirmed":true}` (the checkbox's request) is accepted, the station reports it confirmed and enables `ValveSelfTest`. | UI 790627f (the UI-side half is the frontend test below), GS 1f3dc40 (HITL 403) |
 | `self_test` | The self-test runs and passes, every valve readback opens and closes, the confirmation is consumed, and a mode change is refused while it runs. | |
-| `nitrogen` | The stepped nitrogen test passes (dumped at its hold) with the mode change refused while it runs. On GroundStation26 8d038eb the dump never completes on this plant (reported), so the Normal fill flow uses `n2_override`. | GS 0be3424 |
-| `n2_override` | HITL: `/api/gse/status` has `nitrogen_override`, `StartFill` is refused before it, the override is available at rest, the dialog's `POST /api/gse/cold-flow/override` is accepted and `nitrogen_override.active` follows; `fill` then shows the gated fill running. Normal and test fire use the same route as the operational cold-flow override (after `self_test`). | GS c56bd8c, UI acbc3a2/d8e64fe |
-| `fill` | `StartFill` is accepted, the nitrous valve readback opens, the fill reaches its mass target, and a mode change is refused while it runs. | |
+| `nitrogen` | The stepped nitrogen test passes (dumped at its hold, which ends at the tank's zero band) with the mode change refused while it runs. | GS 0be3424, 586f466 |
+| `n2_override` | Instead of `nitrogen`: HITL: `/api/gse/status` has `nitrogen_override`, `StartFill` is refused before it, the override is available at rest, the dialog's `POST /api/gse/cold-flow/override` is accepted and `nitrogen_override.active` follows; `fill` then shows the gated fill running. Normal and test fire use the same route as the operational cold-flow override (after `self_test`). | GS c56bd8c, UI acbc3a2/d8e64fe |
+| `fill` | `StartFill` is accepted (HITL included, at the configured nitrous target under the 150 psi ceiling), the nitrous valve readback opens, the fill reaches its mass target, a mode change is refused while it runs, and the settled fill holds without a valve fault. | GS 6b48a14, 74af95e |
 | `turbocharge` | When the station offers Turbocharge, a mode change is refused while it runs, and Cancel fill ends it. Otherwise recorded under `not_reached`. | GS 0be3424 |
 | `cold_flow` | A further nitrogen test handed to cold flow at its hold; a mode change is refused while cold flow runs (the station names it as a running sequence), and cold flow cancels. | GS 0be3424 |
 | `manual_switch` | Two manual Dump commands, then a mode round trip succeeds (the manual-control latch does not hold it). | GS 322cfd8 |
@@ -123,7 +127,7 @@ UI and matches `requests/gse-self-test-confirmation`) and
 
 Example (Renode hangs in about half of the runs; retry a run whose virtual clock stalls for 150 s):
 
-    scripts/test-full-network.py --scenario gse_flows --mode hitl --flows isolation,self_test,n2_override,fill,manual_switch \
+    scripts/test-full-network.py --scenario gse_flows --mode hitl \
         --radio rfd-faithful --rfd-global-retries 1 --rfd-modem 0= --faithful-time 20 --ui-contract ../Seds-Ground-Station-Frontend \
         --cohort <seven built boards> --image <firmware-sim image> --evidence runs/fill-hitl
 

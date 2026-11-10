@@ -1835,9 +1835,25 @@ FLOWS = {'isolation': flow_isolation, 'self_test': flow_self_test, 'nitrogen': f
          'rules_hitl': flow_rules_hitl, 'dismissals': flow_dismissals}
 
 
+# Default --flows per station mode: the full operator path with the real nitrogen test.
+DEFAULT_FLOWS = {'normal': 'isolation,self_test,nitrogen,cold_flow,fill,turbocharge,manual_switch',
+                 'test_fire': 'isolation,self_test,nitrogen,cold_flow,fill,turbocharge,manual_switch',
+                 'hitl': 'isolation,self_test,nitrogen,cold_flow,fill,manual_switch'}
+
+
+def gse_flow_order(names):
+    """--flows in order, except that cold_flow runs before fill: its further nitrogen test starts by opening dump
+    and vent for the empty-tank baseline, which belongs before the tank holds a fill."""
+    names = list(names)
+    if 'cold_flow' in names and 'fill' in names and names.index('cold_flow') > names.index('fill'):
+        names.remove('cold_flow'); names.insert(names.index('fill'), 'cold_flow')
+    return names
+
+
 def sc_gse_flows(sim):
     """Operator GSE flows on the faithful radio, all seven boards, in the station mode under test (--flows,
-    in order; see FLOWS). Each flow is a step: a fault is recorded and the next flow still runs."""
+    in order with cold_flow before fill; default DEFAULT_FLOWS; see FLOWS). Each flow is a step: a fault is
+    recorded and the next flow still runs."""
     global BOARDS
     BOARDS = present_boards(sim)
     if sim.a.station_mode == 'test_fire':
@@ -1850,7 +1866,9 @@ def sc_gse_flows(sim):
     g = sim.wait_until(lambda s: (s.get('gse') or {}).get('phase') in ('idle', 'cancelled', 'passed') and (s.get('gse') or {}).get('topology_stable') is not False
                        and isinstance((s.get('gse') or {}).get('valves'), list) and None not in s['gse']['valves'], 120000, 'GSE at rest with valve readbacks')
     sim.check('startup: GSE at rest with AB/VB valve readbacks', g is not None, gse={k: (sim.st().get('gse') or {}).get(k) for k in ('phase', 'valves', 'message')})
-    for name in [f for f in sim.a.flows.split(',') if f]:
+    names = gse_flow_order(f for f in sim.a.flows.split(',') if f)
+    sim.log_action('gse_flows_order', flows=names)
+    for name in names:
         step(sim, name, lambda: FLOWS[name](sim))
     sim.save_snapshot('end')
 
@@ -1906,7 +1924,7 @@ if __name__ == '__main__':
     p.add_argument('--nodes', default='', help='subset of rf,power,flight,gateway,actuator,valve,daq')
     p.add_argument('--no-query', action='store_true', help='passive comms measurement (no operator Query load)')
     p.add_argument('--sched', type=json.loads, default={}, help='{"can0":s,"can1":s,"gsrb":s,"abrb":s} virtual seconds')
-    p.add_argument('--flows', default='', help='gse_flows: comma list of ' + ','.join(FLOWS))
+    p.add_argument('--flows', default='', help='gse_flows: comma list of ' + ','.join(FLOWS) + ' (default: the full operator path for --mode)')
     p.add_argument('--gse-config', type=json.loads, default={}, help='JSON merged into the station gse.json')
     p.add_argument('--ui-contract', type=Path, help='Seds-Ground-Station-Frontend checkout: after the run, decode every captured live '
                    'station mode review with the UI (cargo test live_station_mode)')
@@ -1925,6 +1943,8 @@ if __name__ == '__main__':
     import signal
     def _term(*_): raise KeyboardInterrupt('SIGTERM')
     signal.signal(signal.SIGTERM, _term)
+    if a.scenario == 'gse_flows' and not a.flows:
+        a.flows = DEFAULT_FLOWS[a.station_mode]
     unknown = [f for f in a.flows.split(',') if f and f not in FLOWS]
     assert not unknown, ('unknown flows', unknown)
     s = Sim(a); s.run(SCENARIOS[a.scenario])
