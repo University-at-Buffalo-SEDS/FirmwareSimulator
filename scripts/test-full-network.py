@@ -164,6 +164,10 @@ def build_config(a):
             g = next(p for p in layout['peripherals'] if p.get('model') == 'neo_m9n'); g['stimulus_path'] = '/diagnostics/gps.fix'
         if name == 'actuator':
             F.add_probes(layout, symbols, [('ab_abort_word', 'g_aborted', 0)], miss)
+        if name in ('gateway', 'daq'):
+            # Flight-state cache: shows when the board itself took an Abort (15), apart from the station's readback.
+            F.add_probes(layout, symbols, [(f'fsc_{k}', f'g_flight_state_cache_{k}', 0) for k in ('value', 'updates', 'errors', 'writes')]
+                         + [('reliable_refusals', 'g_reliable_refusal_count', 0)], miss)
         if name == 'flight':
             F.add_probes(layout, symbols, [('fc_state', 'sm', 0), ('fc_config_flags', 'g_conf', 0), ('fc_commands_received', 'g_network_flight_commands_received', 0)], miss)
             if 'owner' in symbols:  # fc_recovery_owner.c static mailbox: epoch @0, phase/sensor_restart @20, manual_stop.. @22
