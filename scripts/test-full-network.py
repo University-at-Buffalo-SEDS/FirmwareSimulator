@@ -1417,18 +1417,25 @@ def sc_pyro_paths(sim):
             # measures its own path, not the predecessor's; the jitter spreads them over the telemetry phase.
             sim.wait_v(5000 + (seq[0] * 977) % 1500)
     def abort_on(path):
-        v0 = sim.vclock(); code, body = sim.command('Abort'); got = {}
+        # Two views per board: "shown" is the station's Abort state (board_abort active_errors, which a board's
+        # pushed latch sets), "readback" is the board row's own readback fields (a query reply). GS e106c54 takes a
+        # pushed latch as an Abort but never as readback, so readback can lag the shown Abort by a query round.
+        v0 = sim.vclock(); code, body = sim.command('Abort'); got = {}; shown = {}
         while sim.vclock() - v0 < 30000 and len(got) < len(boards) and not sim.stop.is_set():
             snap = sim.st()
             if snap.get('v', 0) >= v0:
+                aborted = set(sim.aborted_set(snap))
                 for b in boards:
                     row = sim.rows(snap).get(b) or {}
                     if b not in got and (row.get('abort_latched') or row.get('state_label') == 'Aborted'): got[b] = snap['v'] - v0
+                    if b not in shown and (b in aborted or b in got): shown[b] = snap['v'] - v0
             time.sleep(.02)
-        rec(kind='abort', path=path, v_post=v0, http=code, latency_ms=got, missing=[b for b in boards if b not in got])
-        sim.check(f'Abort over the {path} path reaches every board', code in (200, 202) and len(got) == len(boards), latency_ms=got, http=code)
-        av = [got.get(b) for b in ('RF', 'FC', 'PB') if b in boards]
-        sim.check(f'Abort over the {path} path reaches the AV bay within {a.abort_bound_ms} ms', all(x is not None and x <= a.abort_bound_ms for x in av), latency_ms=got)
+        rec(kind='abort', path=path, v_post=v0, http=code, latency_ms=got, shown_ms=shown, missing=[b for b in boards if b not in got])
+        sim.check(f'Abort over the {path} path reaches every board', code in (200, 202) and len(got) == len(boards), latency_ms=got, shown_ms=shown, http=code)
+        av = [shown.get(b) for b in ('RF', 'FC', 'PB') if b in boards]
+        sim.check(f'Abort over the {path} path is shown for the AV bay within {a.abort_bound_ms} ms', all(x is not None and x <= a.abort_bound_ms for x in av), shown_ms=shown, readback_ms=got)
+        av_rb = [got.get(b) for b in ('RF', 'FC', 'PB') if b in boards]
+        sim.check(f'Abort over the {path} path reads back from the AV bay within {a.abort_bound_ms} ms', all(x is not None and x <= a.abort_bound_ms for x in av_rb), readback_ms=got)
         res = sim.recovery('reset_startup', boards=boards, label=f'reset all after {path} Abort', timeout_ms=120000)
         sim.check(f'Reset all after the {path} Abort succeeds', res.get('success') is True, duration_ms=res.get('duration_ms'), body=str(res.get('body'))[:300])
         if res.get('success'):
