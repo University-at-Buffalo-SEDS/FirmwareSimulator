@@ -121,7 +121,12 @@ finally:
         result['gs_db_accel_rows'] = c.execute("select count(*) from telemetry where data_type like '%ACCEL%' or data_type like '%IMU%'").fetchone()[0]
     except Exception as e:
         result['db_error'] = str(e)
-    final_gs = json.loads(result['gs_states'][-1]['gs_flightstate']) if result['gs_states'] else None
+    final_gs = result['gs_states'][-1]['gs_flightstate'] if result['gs_states'] else None
+    if isinstance(final_gs, str):
+        try: final_gs = json.loads(final_gs)
+        except ValueError: pass
+    # /flightstate is {"state": <set-(a) name>, "fc_phase": {...}} since the state split.
+    if isinstance(final_gs, dict): final_gs = final_gs.get('state')
     # The station logs every deployment notification; the recording DB exists
     # only once a recording starts, so the log is the authoritative record here.
     gs_log = '\n'.join(p.read_text(errors='replace') for p in out.glob('gs-groundstation-*.log'))
@@ -132,6 +137,9 @@ finally:
         'gs_drogue_notification': 'Drogue parachute deployed' in deploy,
         'gs_main_notification': 'Main parachute deployed' in deploy,
     }
+    spec = importlib.util.spec_from_file_location('wire', HERE / 'flight_state_wire_check.py'); wire = importlib.util.module_from_spec(spec); spec.loader.exec_module(wire)
+    result['wire'] = wire.check(out)
+    result['checks']['flight_state_wire_set_a'] = result['wire']['pass']
     result['passed'] = all(result['checks'].values())
     (out / 'transport-result.json').write_text(json.dumps(result, indent=1, default=str))
     if fwd: fwd.close()

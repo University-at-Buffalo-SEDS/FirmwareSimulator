@@ -340,6 +340,11 @@ def run(args):
             time.sleep(.05)
         assert process.returncode==0,'Simulator/firmware gate failed'
         assert stage=='complete','Sequence gate incomplete: '+stage
+        # State-split contract: every FLIGHT_STATE frame of the run is in set (a).
+        spec=importlib.util.spec_from_file_location('flight_state_wire_check',Path(__file__).with_name('flight_state_wire_check.py'));wire=importlib.util.module_from_spec(spec);spec.loader.exec_module(wire)
+        log.flush();wire_result=wire.check(out);(out/'flight-state-wire.json').write_text(json.dumps(wire_result,indent=2)+'\n')
+        assert wire_result['pass'],'FLIGHT_STATE outside set (a) on the wire: '+json.dumps(wire_result['violations'][:5])
+        summary['flight_state_wire_set_a']={k:wire_result[k]for k in('frames','station_writes','values')};progress()
     except BaseException as error:
         summary.update(phase='failed',error=str(error));progress();raise
     finally:

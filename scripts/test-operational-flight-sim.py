@@ -858,6 +858,12 @@ class Run:
         fc_landed_phase = [p for p in phases if fc_landed is not None and p['virtual_ms'] >= fc_landed
                            and str(p['phase']).lower() == 'landed' and p.get('comms_loss_landed') is False]
         c['gs_landed_from_fc'] = {'pass': bool(fc_landed_phase), 'first': fc_landed_phase[0] if fc_landed_phase else None}
+        # State-split contract: every FLIGHT_STATE frame of the run (fill ->
+        # launch -> InFlight -> Landed) is in set (a).
+        spec = importlib.util.spec_from_file_location('flight_state_wire_check', HERE / 'flight_state_wire_check.py')
+        wire = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wire)
+        c['flight_state_wire_set_a'] = wire.check(self.out)
         c['fc_no_stack_or_hard_fault'] = {'pass': not any(k.startswith('fc_fault_counter_') for k in self.result) and not self.result.get('fc_fault'),
                                           'low_water': self.result.get('fc_stack_low_water')}
         self.result['checks'] = c
