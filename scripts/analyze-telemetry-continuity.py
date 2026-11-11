@@ -65,7 +65,9 @@ def main():
         expect = round((t1 - t0) / sp) if sp else None
         rxg = gaps([t for t, _ in v])
         lat = [t - s for t, s in v if s]
-        w = ws.get(key, []); wg = gaps([r['wall'] * 1000 for r in w])
+        w = ws.get(key, [])
+        # WebSocket arrival on the virtual clock when captured (wall time runs --faithful-time slower).
+        wg = gaps([r['v'] if r.get('v') is not None else r['wall'] * 1000 for r in w])
         row = dict(src_period=sp, expected=expect, rx=len(v), delivered=round(100 * len(v) / expect, 1) if expect else None,
                    rx_p50=pct(rxg, .5), rx_p95=pct(rxg, .95), rx_max=max(rxg) if rxg else None,
                    lat_p50=pct(lat, .5), lat_p95=pct(lat, .95), ws=len(w), ws_p95_wall=round(pct(wg, .95)) if wg else None)
