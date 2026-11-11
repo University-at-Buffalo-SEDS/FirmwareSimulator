@@ -451,8 +451,35 @@ class Program
         Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
         Console.WriteLine("RADIO_PER_PATH_LOSS_PASS");
     }
+    static TurnTaking.Outcome TurnTakingRun(TurnTaking.Schedule schedule)
+    {
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC","async");
+        Fresh();
+        var o=TurnTaking.Run(schedule,()=>Medium(rate:64000,baud:115200,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160,turn:1000),Advance,()=>Clock.NowUs);
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
+        Console.WriteLine($"RADIO_TURN_TAKING schedule={schedule} ack_complete={o.AckCompletePct:F1}% ack_attempts={o.AckMeanAttempts:F2} announce_delivered={o.AnnounceDeliveredPct:F0}% announce_p95={o.AnnounceLatencyP95Ms:F0}ms announce_max={o.AnnounceLatencyMaxMs:F0}ms confirm_p50={o.ConfirmP50Ms:F0}ms confirm_p95={o.ConfirmP95Ms:F0}ms confirm_max={o.ConfirmMaxMs:F0}ms confirm_missing={o.ConfirmMissing}/{o.Commands} bytes_s=RF:{o.BytesPerS[0]:F0},GS:{o.BytesPerS[1]:F0},RRLS:{o.BytesPerS[2]:F0} total={o.TotalBytesPerS:F0} packets_s=RF:{o.PacketsPerS[0]:F1},GS:{o.PacketsPerS[1]:F1},RRLS:{o.PacketsPerS[2]:F1} {o.Counters}");
+        return o;
+    }
+    // Uncoordinated writes on the calibrated medium reproduce the bench failure;
+    // the turn-taking schedule meets the targets within the budgets: under
+    // 3 KB/s on air, about 5 air packets/s per node, every AV-bay end-to-end ACK
+    // completed, the time announce (the clock offset) under 500 ms, operator
+    // confirmations under 1 s.
+    static void TurnTakingStudy()
+    {
+        var u=TurnTakingRun(TurnTaking.Schedule.Uncoordinated);
+        Assert(u.AckCompletePct<50&&u.AnnounceLatencyP95Ms>1000,"uncoordinated writes must reproduce the bench collapse");
+        var t=TurnTakingRun(TurnTaking.Schedule.TurnTaking);
+        Assert(t.TotalBytesPerS<3000,"turn-taking budget: under 3 KB/s on air");
+        Assert(t.PacketsPerS.All(p=>p<=5.5),"turn-taking budget: about 5 air packets/s per node");
+        Assert(t.AckCompletePct>=99.5,"every AV-bay end-to-end ACK completes");
+        Assert(t.AnnounceLatencyP95Ms<500&&t.AnnounceDeliveredPct>=99,"time announce (clock offset) under 500 ms");
+        Assert(t.ConfirmMissing==0&&t.ConfirmMaxMs<1000,"operator confirmations under 1 s");
+        Console.WriteLine("RADIO_TURN_TAKING_PASS");
+    }
     static void Main()
     {
+        if(Environment.GetEnvironmentVariable("RADIO_TURN_TAKING")!=null){TurnTakingStudy();return;}
         var sweep=Environment.GetEnvironmentVariable("RADIO_CALIBRATION_SWEEP");
         if(sweep!=null)
         {
@@ -482,6 +509,7 @@ class Program
         Assert(BenchCalibrationTable(),"bench calibration regressed");
         Console.WriteLine("RADIO_BENCH_CALIBRATION_PASS");
         PerPathLinkLoss();
+        TurnTakingStudy();
         // The mechanics tests below pin the uncalibrated timing model.
         Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_CALIBRATION","none");
         var replay=Environment.GetEnvironmentVariable("RADIO_REPLAY_TRACE_DIR");

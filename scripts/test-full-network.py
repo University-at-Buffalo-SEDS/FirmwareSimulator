@@ -1124,6 +1124,53 @@ def sc_faithful(sim):
 SCENARIOS['faithful'] = sc_faithful
 
 
+def sc_bench_symptoms(sim):
+    """Bench symptom check (docs/rfd-radio-model-audit.md): Normal mode, Idle, every board, for --phase-a-ms.
+    Samples the AV-bay clock offsets and recovery queries every 5 s and toggles the AV-bay underglow every 20 s,
+    timing how long the GS takes to see the network value follow (the operator confirmation). The radio traces
+    give the AV-bay frame arrival gaps at the GS; the GS log gives BOARD_RECOVERY_REQUEST exhaustions."""
+    a = sim.a; rows = []; confirms = []
+    t_end = sim.vclock() + a.phase_a_ms; last_sample = last_toggle = sim.vclock()
+    def underglow():
+        code, pol = sim.api('/api/action_policy')
+        if code != 200: return None
+        for item in (pol.get('controls') or pol.get('commands') or []) if isinstance(pol, dict) else []:
+            if item.get('cmd') == 'ToggleAvBayUnderglow': return item.get('actuated')
+        return None
+    while sim.vclock() < t_end and not sim.stop.is_set():
+        now = sim.vclock()
+        if now - last_sample >= 5000:
+            last_sample = now
+            code, topo = sim.api('/api/network_topology', timeout=20)
+            health = topo.get('health') if code == 200 and isinstance(topo, dict) else []
+            offs = {h.get('sender_id'): h.get('clock_offset_ms') for h in (health or []) if h.get('sender_id') in ('RF', 'FC', 'PB')}
+            rec = sim.st().get('rec') or {}
+            pending = {x.get('id'): (x.get('operation') or {}).get('age_ms') for x in (rec.get('boards') or [])
+                       if x.get('id') in ('RF', 'FC', 'PB') and (x.get('operation') or {}).get('action') == 'query' and not (x.get('operation') or {}).get('completed')}
+            rows.append({'v': now, 'clock_offset_ms': offs, 'pending_query_age_ms': pending})
+            sim.log_action('bench_sample', v=now, clock_offset_ms=offs, pending_query_age_ms=pending)
+        if now - last_toggle >= 20000:
+            last_toggle = now; before = underglow(); v0 = sim.vclock()
+            code, body = sim.command('ToggleAvBayUnderglow'); got = None
+            while code == 200 and sim.vclock() - v0 < 45000 and not sim.stop.is_set():
+                after = underglow()
+                if after is not None and after != before: got = sim.vclock() - v0; break
+                time.sleep(.1)
+            confirms.append(got); sim.log_action('underglow_confirm', http=code, before=before, confirm_ms=got)
+        time.sleep(.1)
+    warm = [r for r in rows if r['v'] >= 60000]
+    worst = {b: max((abs(r['clock_offset_ms'].get(b)) for r in warm if isinstance(r['clock_offset_ms'].get(b), (int, float))), default=None) for b in ('RF', 'FC', 'PB')}
+    ok = [c for c in confirms if c is not None]
+    summary = {'underglow_confirm_ms': confirms, 'underglow_confirm_p50_ms': sorted(ok)[len(ok) // 2] if ok else None,
+               'underglow_unconfirmed': sum(c is None for c in confirms), 'worst_abs_clock_offset_ms': worst,
+               'longest_pending_query_ms': max((age or 0 for r in warm for age in r['pending_query_age_ms'].values()), default=0)}
+    sim.result['bench_symptoms'] = summary; sim.log_action('bench_symptoms', **summary)
+    sim.check('bench: operator underglow confirmation within 1 s (median) and none unconfirmed',
+              summary['underglow_confirm_p50_ms'] is not None and summary['underglow_confirm_p50_ms'] <= 1000 and summary['underglow_unconfirmed'] == 0, **summary)
+    sim.check('bench: AV-bay clock offsets within 500 ms', all(w is not None and w <= 500 for w in worst.values()), worst_abs_clock_offset_ms=worst)
+SCENARIOS['bench_symptoms'] = sc_bench_symptoms
+
+
 def reset_all_with_retry(sim, boards, label, attempts=6):
     for n in range(attempts):
         r = sim.recovery('reset_startup', boards=boards, label=f'{label} (attempt {n + 1})', expect_ok=False)
