@@ -32,7 +32,7 @@ RADIO = {
     # after SER_BRK_DETMS=50 ms of UART idle or at MAX_DATA, every packet to the broadcast DESTID is sent
     # 1 + GLOBAL_RETRIES(10) times (FIRMWARE_SIM_RFD_GLOBAL_RETRIES), about 20 B of air framing per copy.
     'rfd-faithful': dict(air_bits_per_second=64000, uart_baud=115200, tx_fifo_bytes=4096, rx_fifo_bytes=4096, max_burst_bytes=3968,
-                         packet_idle_us=50000, overhead_bits=160, turn_us=2000),
+                         packet_idle_us=50000, overhead_bits=160, turn_us=1000),
     'backlog': dict(air_bits_per_second=16000, uart_baud=115200, tx_fifo_bytes=8192, rx_fifo_bytes=8192, max_burst_bytes=256,
                     packet_idle_us=2000, overhead_bits=160, turn_us=4000),
 }
@@ -141,6 +141,14 @@ def build_config(a):
         for snd, rcv in (('groundstation', 'rf'), ('rf', 'groundstation')):
             topo['radio_link_events'] += [dict(link='rocket_radio', sender=snd, receiver=rcv, after_sample=s0_, connected=False),
                                           dict(link='rocket_radio', sender=snd, receiver=rcv, after_sample=s1_, connected=True)]
+    # Weak path, not a cut: sender:receiver:s0:s1:ppm (stations gs, rf, rrls), loss per air copy on top of the
+    # calibrated base loss from virtual second s0 until s1 (docs/rfd-radio-model-audit.md, per-path loss).
+    for spec_ in a.radio_path_loss:
+        snd_, rcv_, s0_, s1_, ppm_ = spec_.split(':')
+        name = {'gs': 'groundstation', 'rf': 'rf', 'rrls': 'rrls'}
+        topo.setdefault('radio_link_events', [])
+        topo['radio_link_events'] += [dict(link='rocket_radio', sender=name[snd_], receiver=name[rcv_], after_sample=int(s0_), connected=True, loss_ppm=int(ppm_)),
+                                      dict(link='rocket_radio', sender=name[snd_], receiver=name[rcv_], after_sample=int(s1_), connected=True, loss_ppm=0)]
     for spec_ in a.can_cut:
         node, s0, s1 = spec_.split(':'); node = NODE_OF.get(node, node); link, per = CAN_EP[node]
         topo['can_link_events'] += [{'link': link, 'node': node, 'peripheral': per, 'after_sample': int(s0), 'connected': False},
@@ -2104,12 +2112,16 @@ if __name__ == '__main__':
     p.add_argument('--phase-a-ms', type=int, default=180000)
     p.add_argument('--gps-initial', type=int, choices=[0, 1, 2], default=0, help='RF GPS fixture at power-up: 0 no fix, 1 fix, 2 u-blox placeholder date, no fix')
     p.add_argument('--rfd-modem', default='')
-    p.add_argument('--rfd-profile', choices=['', 'drain', 'field'], default='',
+    p.add_argument('--rfd-profile', choices=['', 'shipped', 'drain', 'field'], default='',
                    help='model every radio station\'s modem with these registers (docs/rfd-radio-model-audit.md): '
-                        'drain = deployed rfd-async-64k-drain (S5=1, S6=10), field = 2026-10-28 readback (S5=10, S6=50)')
-    p.add_argument('--rfd-broadcast-retry', choices=['', 'blind', 'on_loss'], default='', help='GLOBAL_RETRIES reading (open assumption A1)')
+                        'shipped = GS 84a8c13 / RF b26ed55 default (S5=0, S6=10), drain = previous rfd-async-64k-drain '
+                        '(S5=1, S6=10), field = 2026-10-28 readback (S5=10, S6=50)')
+    p.add_argument('--rfd-broadcast-retry', choices=['', 'ack', 'blind', 'on_loss'], default='',
+                   help='GLOBAL_RETRIES reading; default ack under the bench calibration (provisional, docs/rfd-radio-model-audit.md)')
     p.add_argument('--rfd-carrier-sense', choices=['', 'register', 'always', 'never'], default='', help='LBT reading (open assumption A2)')
-    p.add_argument('--rfd-air-loss-ppm', type=int, default=0, help='independent per-copy air loss')
+    p.add_argument('--rfd-air-loss-ppm', type=int, default=0, help='per-copy base air loss; 0 keeps the calibrated 0.5%%')
+    p.add_argument('--radio-path-loss', action='append', default=[],
+                   help='sender:receiver:s0:s1:ppm (gs, rf, rrls): extra loss on one directed path between virtual seconds s0 and s1')
     p.add_argument('--radio-trace', action='store_true')
     p.add_argument('--radio-trace-max-mb', type=int, default=4, help='per-stream radio trace bound (4..256)')
     p.add_argument('--gs-reboot', action='append', default=[])
@@ -2135,7 +2147,8 @@ if __name__ == '__main__':
     a.station_mode = {'hitl_mode': 'hitl', 'test_fire_mode': 'test_fire'}.get(a.mode, a.mode)
     a.mode = {'hitl': 'hitl_mode', 'test_fire': 'test_fire_mode'}.get(a.station_mode, 'normal')
     if a.rfd_profile and not a.rfd_modem:
-        regs = {'drain': '5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10', 'field': '5:GLOBAL_RETRIES=10,6:SER_BRK_DETMS=50'}[a.rfd_profile]
+        regs = {'shipped': '5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=10', 'drain': '5:GLOBAL_RETRIES=1,6:SER_BRK_DETMS=10',
+                'field': '5:GLOBAL_RETRIES=10,6:SER_BRK_DETMS=50'}[a.rfd_profile]
         # Station indexes are the rocket_radio endpoint order: rf, groundstation, then rrls.
         a.rfd_modem = ';'.join(f'{i}={regs}' for i in range(3 if a.rrls else 2))
     if a.sched.get('can0'): a.can_cut.append(f"DAQ:{a.sched['can0']}:{a.sched['can1']}")

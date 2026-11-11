@@ -407,8 +407,83 @@ class Program
         var rfFramesKept=events.Count(e=>e.Station==0);
         Console.WriteLine($"RADIO_REPLAY rf_keep_percent={keep} rf_frames={rfFramesKept} gs_frames={sent} gs_to_rf_delivered={got} loss={(sent==0?0:1.0-(double)got/sent):F3} p50_ms={P(.5):F1} p95_ms={P(.95):F1} rf_air_s={medium.ReadCounter(0,11)} collided_at_rf={medium.ReadCounter(0,12)}");
     }
+    // RADIO_CALIBRATION=1 runs the bench calibration table only; it is also
+    // part of the default suite once the medium reproduces the bench.
+    static bool BenchCalibrationTable()
+    {
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC","async");
+        var all=true;
+        Console.WriteLine("RADIO_BENCH_CALIBRATION (rfd_link_test.py replay vs 2026-11-10 bench pair)");
+        foreach(var row in BenchCalibration.Rows)
+        {
+            Fresh();
+            var r=BenchCalibration.Run(row,()=>Medium(rate:64000,baud:115200,tx:BenchCalibration.TxFifo,rx:4096,burst:3968,idle:50000,overhead:160,turn:BenchCalibration.TurnUs),Advance,()=>Clock.NowUs);
+            var ok=BenchCalibration.Check(row,r,out var detail);
+            var status=ok?"PASS":row.Residual!=null?"RESIDUAL":"FAIL";
+            if(row.Residual==null)all&=ok;
+            Console.WriteLine($"  {status,-8} {row.Name,-20} {detail}{(row.Residual!=null?"  ["+row.Residual+"]":"")}");
+        }
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
+        return all;
+    }
+    // A weak path, not a cut: SetLinkLoss degrades one direction of one
+    // pair (bench: the GS heard RF at about 7 frames/s while the RRLS heard
+    // it at about 25). Other paths keep the calibrated base loss.
+    static void PerPathLinkLoss()
+    {
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC","async");
+        Fresh();var m=new Machine();var rf=new SedsRadioHostPort(m);var gs=new SedsRadioHostPort(m);var rrls=new SedsRadioHostPort(m);
+        var medium=Medium(rate:64000,baud:115200,tx:4096,rx:4096,burst:3968,idle:50000,overhead:160,turn:1000);
+        foreach(var i in new[]{0,1,2})medium.ConfigureModem(i,"5:GLOBAL_RETRIES=0,6:SER_BRK_DETMS=10");
+        medium.AttachHost(0,rf);medium.AttachHost(1,gs);medium.AttachHost(2,rrls);
+        var atGs=0;var atRrls=0;gs.CharReceived+=_=>atGs++;rrls.CharReceived+=_=>atRrls++;
+        medium.SetLinkLoss(0,1,720000);
+        ulong t=1000000;for(var k=0;k<500;k++){foreach(var b in Enumerable.Range(0,40))rf.WriteChar((byte)b);t+=100000;Advance(t);}
+        Advance(t+2000000);
+        var gsRate=atGs/40.0/50.0;var rrlsRate=atRrls/40.0/50.0;
+        Console.WriteLine($"RADIO_PER_PATH_LOSS rf_to_gs={gsRate:F1}/s rf_to_rrls={rrlsRate:F1}/s of 10/s");
+        Assert(gsRate>=2.2&&gsRate<=3.4,"72% path loss must leave about 2.8 of 10 frames/s");
+        Assert(rrlsRate>=9.6,"the other path keeps the 0.5% base loss");
+        medium.SetLinkLoss(0,1,0);atGs=0;
+        for(var k=0;k<100;k++){foreach(var b in Enumerable.Range(0,40))rf.WriteChar((byte)b);t+=100000;Advance(t);}
+        Advance(t+2000000);
+        Assert(atGs>=40*96,"clearing the path loss restores the link");
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_MAC",null);
+        Console.WriteLine("RADIO_PER_PATH_LOSS_PASS");
+    }
     static void Main()
     {
+        var sweep=Environment.GetEnvironmentVariable("RADIO_CALIBRATION_SWEEP");
+        if(sweep!=null)
+        {
+            // "setup,jitter,rxdelay,copygap,lossppm,hostread,ackdelay,acktimeout,turn;..." one table each.
+            foreach(var combo in sweep.Split(';'))
+            {
+                var v=combo.Split(',');
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_TX_SETUP_US",v[0]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_TX_JITTER_US",v[1]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_RX_DELAY_US",v[2]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_COPY_GAP_US",v[3]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_AIR_LOSS_PPM",v[4]);
+                BenchCalibration.HostReadUs=ulong.Parse(v[5]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_ACK_DELAY_US",v[6]);
+                Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_ACK_TIMEOUT_US",v[7]);
+                BenchCalibration.TurnUs=ulong.Parse(v[8]);
+                if(v.Length>9)Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_INPUT_BUFFER_BYTES",v[9]);
+                if(v.Length>10)BenchCalibration.HostJitterUs=ulong.Parse(v[10]);
+                Console.WriteLine("SWEEP "+combo);
+                BenchCalibrationTable();
+            }
+            return;
+        }
+        if(Environment.GetEnvironmentVariable("RADIO_CALIBRATION")!=null){var ok=BenchCalibrationTable();Console.WriteLine(ok?"RADIO_BENCH_CALIBRATION_PASS":"RADIO_BENCH_CALIBRATION_FAIL");return;}
+        // The bench calibration is part of every run: rows not marked as known
+        // residuals must reproduce the 2026-11-10 bench within tolerance.
+        Assert(BenchCalibrationTable(),"bench calibration regressed");
+        Console.WriteLine("RADIO_BENCH_CALIBRATION_PASS");
+        PerPathLinkLoss();
+        // The mechanics tests below pin the uncalibrated timing model.
+        Environment.SetEnvironmentVariable("FIRMWARE_SIM_RFD_CALIBRATION","none");
         var replay=Environment.GetEnvironmentVariable("RADIO_REPLAY_TRACE_DIR");
         if(replay!=null){Replay(replay);return;}
         var schedule=Environment.GetEnvironmentVariable("RADIO_PACKETIZATION_SCHEDULE");

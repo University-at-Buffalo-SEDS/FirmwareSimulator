@@ -164,6 +164,10 @@ pub struct RadioLinkEvent {
     pub receiver: String,
     pub after_sample: usize,
     pub connected: bool,
+    /// Partial loss on this directed path (0..=1_000_000 ppm per air copy) on
+    /// top of the medium's base loss: a weak link rather than a cut.
+    #[serde(default)]
+    pub loss_ppm: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,6 +256,10 @@ fn validate_radio_links(topology: &BayTopology) -> Result<()> {
             event.after_sample < topology.sample_count,
             "radio outage outside sample range"
         );
+        ensure!(
+            event.loss_ppm.is_none_or(|ppm| ppm <= 1_000_000),
+            "radio path loss must be 0..=1000000 ppm"
+        );
     }
     Ok(())
 }
@@ -271,7 +279,7 @@ fn render_radio_link_event(topology: &BayTopology, event: &RadioLinkEvent) -> St
         .iter()
         .position(|ep| ep.node == event.receiver)
         .unwrap();
-    format!(
+    let mut script = format!(
         "{} SetLink {} {} {}\necho \"SEDS_BAY_RADIO_LINK {} {} {} {} {}\"\n",
         safe(&link.name),
         sender,
@@ -282,7 +290,22 @@ fn render_radio_link_event(topology: &BayTopology, event: &RadioLinkEvent) -> St
         safe(&event.receiver),
         event.after_sample,
         event.connected
-    )
+    );
+    if let Some(ppm) = event.loss_ppm {
+        script += &format!(
+            "{} SetLinkLoss {} {} {}\necho \"SEDS_BAY_RADIO_LINK_LOSS {} {} {} {} {}\"\n",
+            safe(&link.name),
+            sender,
+            receiver,
+            ppm,
+            safe(&link.name),
+            safe(&event.sender),
+            safe(&event.receiver),
+            event.after_sample,
+            ppm
+        );
+    }
+    script
 }
 fn radio_host_name(link: &str, host: &str) -> String {
     // Length-prefix the link so underscores cannot alias another link/host pair.
@@ -4764,6 +4787,16 @@ mod radio_profile_tests {
             render_radio_link_event(&t, &t.radio_link_events[0]),
             "air SetLink 1 0 false\necho \"SEDS_BAY_RADIO_LINK air groundstation rf 2 false\"\n"
         );
+        t.radio_link_events[0].connected = true;
+        t.radio_link_events[0].loss_ppm = Some(720_000);
+        assert_eq!(
+            render_radio_link_event(&t, &t.radio_link_events[0]),
+            "air SetLink 1 0 true\necho \"SEDS_BAY_RADIO_LINK air groundstation rf 2 true\"\n\
+             air SetLinkLoss 1 0 720000\necho \"SEDS_BAY_RADIO_LINK_LOSS air groundstation rf 2 720000\"\n"
+        );
+        t.radio_link_events[0].loss_ppm = Some(1_000_001);
+        assert!(validate_radio_links(&t).is_err());
+        t.radio_link_events[0].loss_ppm = None;
         t.radio_link_events[0].after_sample = 0;
         validate_radio_links(&t).unwrap();
         t.radio_link_events[0].after_sample = 4;
