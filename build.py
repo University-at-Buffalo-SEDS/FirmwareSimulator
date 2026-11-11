@@ -138,6 +138,25 @@ def run(command: list[str], root: Path, jobs: int) -> int:
     return subprocess.run(command, cwd=root, env=environment).returncode
 
 
+def source_revision(root: Path) -> tuple[str, str]:
+    """The checkout's commit (with -dirty for uncommitted changes) and its
+    commit time in UTC, for the image labels."""
+    git = ["git", "-C", str(root)]
+    revision = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+    dirty = subprocess.run([*git, "diff", "--quiet", "HEAD", "--"]).returncode != 0
+    stamp = subprocess.check_output([*git, "show", "-s", "--format=%ct", "HEAD"], text=True).strip()
+    when = datetime.fromtimestamp(int(stamp), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (revision + ("-dirty" if dirty else ""), when)
+
+
+def image_command(root: Path, tag: str) -> list[str]:
+    revision, when = source_revision(root)
+    return ["docker", "build",
+            "--build-arg", f"SOURCE_REVISION={revision}",
+            "--build-arg", f"SOURCE_COMMIT_TIME={when}",
+            "-t", tag, str(root)]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs", type=int, default=2)
@@ -171,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             before = usage(ROOT)
             if command == "image":
-                code = run(["docker", "build", "-t", args.tag, "."], ROOT, args.jobs)
+                code = run(image_command(ROOT, args.tag), ROOT, args.jobs)
             else:
                 cargo = ["cargo", command, "--locked"]
                 if command == "build" and not getattr(args, "debug", False):

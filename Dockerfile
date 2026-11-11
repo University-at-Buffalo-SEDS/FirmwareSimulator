@@ -94,6 +94,15 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim
 # One image contains every bundled profile. The board layout's `mcu` and
 # optional runtime descriptor select the exact silicon platform.
 LABEL org.opencontainers.image.source="https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator"
+# The commit this image was built from and its commit time (UTC). Board
+# runners reuse local tags across simulator revisions and refuse an image older
+# than the simulator their layout needs. `build.py image` and the board runners
+# pass both; a build without them carries empty labels and is judged by its
+# creation time instead.
+ARG SOURCE_REVISION=
+ARG SOURCE_COMMIT_TIME=
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      edu.buffalo.seds.firmware-sim.commit-time="${SOURCE_COMMIT_TIME}"
 ENV SIM_ARCH=all
 ENV FIRMWARE_SIM_ROOT=/opt/firmware-sim
 ENV FIRMWARE_SIM_CONTAINER=1

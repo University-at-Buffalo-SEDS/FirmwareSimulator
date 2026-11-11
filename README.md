@@ -120,9 +120,18 @@ The organization package administrator must make the `firmwaresimulator` contain
 Run from the simulator checkout on a native Docker host:
 
 ```sh
-docker build -t firmware-simulator:local .
+python3 build.py image --tag firmware-simulator:local
 bash scripts/test-image.sh firmware-simulator:local
 ```
+
+`build.py image` labels the image with the checkout's commit
+(`org.opencontainers.image.revision`, `-dirty` for uncommitted changes) and its
+UTC commit time (`edu.buffalo.seds.firmware-sim.commit-time`). Board runners
+reuse local tags such as `local-dev-v0.4.15` across simulator revisions; they
+read these labels and refuse an image older than the simulator revision their
+layout requires. A plain `docker build` must pass the same values with
+`--build-arg SOURCE_REVISION=... --build-arg SOURCE_COMMIT_TIME=...`; without
+them the labels are empty and runners fall back to the image creation time.
 
 The image builds the GroundStation backend from dev with its version4 SEDSnet
 selector. GroundStation's one binary holds every station mode: the image builds
