@@ -64,6 +64,11 @@ usb: USB.SedsStm32Usb @ sysbus 0x40040000
     IRQ -> nvic@74
     preinit:
         include @/opt/firmware-sim/renode/peripherals/SedsStm32Usb.cs
+// CRC calculation unit, non-secure alias (secure alias 0x50023000 unused).
+// RM0481 (H5) / RM0456 (U5): AHB1 + 0x3000; CMSIS CRC_BASE_NS.
+crc: Miscellaneous.SedsStm32Crc @ sysbus 0x40023000
+    preinit:
+        include @/opt/firmware-sim/renode/peripherals/SedsStm32Crc.cs
 gpdma: DMA.SedsStm32Gpdma @ sysbus 0x40020000
     channels: 8
     0 -> nvic@27
