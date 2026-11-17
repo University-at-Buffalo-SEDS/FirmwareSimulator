@@ -414,6 +414,11 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut pico_rx_free_at: u64 = 0;
     let mut bus_free: BTreeMap<String, u64> = BTreeMap::new();
     let mut node_wait: BTreeMap<String, f64> = BTreeMap::new();
+    let idle_grant = env::var("FIRMWARE_SIM_STATION_IDLE_GRANT").map(|v| v != "0").unwrap_or(false);
+    let busy_permille: f64 = env::var("FIRMWARE_SIM_STATION_BUSY_PERMILLE").ok().and_then(|v| v.parse().ok()).unwrap_or(300.0);
+    let mut last_busy_check = Instant::now();
+    let mut last_cpu: u64 = 0;
+    let mut station_waits: u64 = 0;
     let mut gpio_edges: BTreeMap<String, u64> = BTreeMap::new();
     let mut slowest_step: (f64, u64) = (0.0, 0); // virtual time the GB UART RX wire is free again
     let mut steps: u64 = 0;
@@ -443,6 +448,23 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             horizon = wake.min(t + max_skip);
         }
         horizon = horizon.min(duration_ns).min(next_second.max(t + 1));
+        // ---- station-idle grant: the stations' compute is not lockstepped, so while a station is busy (its threads
+        // used more than FIRMWARE_SIM_STATION_BUSY_PERMILLE of a core since the last check) virtual time waits for it,
+        // up to 20 ms of wall time per check; at high speed its work then lands at the right virtual time.
+        if station_clock.is_some() && idle_grant && last_busy_check.elapsed() >= Duration::from_millis(2) {
+            let mut waited = Duration::ZERO;
+            loop {
+                let cpu: u64 = hosts.iter().map(|h| host_cpu_ns(h.child.id())).sum();
+                let wall = last_busy_check.elapsed();
+                let busy = (cpu.saturating_sub(last_cpu) as f64) / (wall.as_nanos().max(1) as f64) * 1000.0;
+                last_cpu = cpu;
+                last_busy_check = Instant::now();
+                if busy <= busy_permille || waited >= Duration::from_millis(20) { break; }
+                station_waits += 1;
+                thread::sleep(Duration::from_micros(500));
+                waited += Duration::from_micros(500);
+            }
+        }
         // ---- pace against the wall clock
         if cfg.pace > 0.0 {
             let target = Duration::from_nanos((horizon as f64 / cfg.pace) as u64);
@@ -830,7 +852,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
         "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
         "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
-        "station_clock": cfg.station_clock.is_some(),
+        "station_clock": cfg.station_clock.is_some(), "station_idle_grant": idle_grant, "station_busy_waits": station_waits,
         "radio": radios.iter().map(|r| (r.0.link.clone(), r.0.modems.iter().map(|m| (m.name.clone(), m.stats)).collect::<Vec<_>>())).collect::<Vec<_>>(),
         "pico": pico_model.as_ref().map(|p| p.stats)});
     atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
@@ -864,4 +886,17 @@ fn ctrlc_like(flag: Arc<AtomicBool>) -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     });
     Ok(())
+}
+
+/// CPU time used so far by every thread of a process (ns, /proc/<pid>/task/*/schedstat).
+fn host_cpu_ns(pid: u32) -> u64 {
+    let mut total = 0;
+    if let Ok(dir) = fs::read_dir(format!("/proc/{pid}/task")) {
+        for e in dir.flatten() {
+            if let Ok(t) = fs::read_to_string(e.path().join("schedstat")) {
+                total += t.split_whitespace().next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+            }
+        }
+    }
+    total
 }

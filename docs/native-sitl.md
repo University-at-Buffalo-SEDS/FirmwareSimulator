@@ -176,12 +176,41 @@ latest Renode acceptance runs keeps the native tier honest.
   With `--native-blank-flash all`, config_resync's "went through resyncing" check fails: the station restores so fast
   that the controller's 1 s wall-clock watch polls (10 s of virtual time at 10x) never see the intermediate state. This
   is a controller sampling artifact, not a board difference.
-* Phase 3 (in progress): FC (STM32H523), RF and PB build and boot natively. FC needs `ENABLE_TELEMETRY=ON` (its
-  build.py default), its startup's link symbols and its watchdog-retained RAM (`.fc_watchdog_retained`), which
-  persists across software/watchdog resets and is lost on power cycles. A coarse shared-air RFD900x medium
-  (src/bay/native_radio.rs: FIFOs, idle/burst packetization, air time, turnaround, retries, directed cuts and loss)
-  carries station and RF traffic both ways. Not done yet:
-  * the AV-bay boards do not reach readback_current over it in HITL;
-  * the FC spins without its SPI sensor-bus model (BMI088/baro/mag);
-  * the RF GPS (NEO-M9N UART model) is missing;
-  * so bench_symptoms, rrls_takeover and rrls_idle do not run natively yet.
+* Phase 3: FC (STM32H523), RF and PB build and boot natively, and all seven boards reach readback_current over the
+  native radio in HITL. What it took:
+  * RF decoded no station frame at first: it reads USART CR3.DMAR to know reception is armed, and restarted it every
+    10 ms. The UART shim now mirrors CR3 DMAR/DMAT, CR1 RE/IDLEIE and the DMA handle state.
+  * FC sensors: the FC sensor bus (BMP390/BMI088) is modelled at rest.
+  * FC boot Abort: the FC held an Abort latch from boot because, without LSI and a binary-mode RTC, it refused
+    watchdog resume. LSI/RTC handshakes now complete, and RTC SSR runs from global virtual time.
+  * Radio: the air medium has the Renode medium's RFD ASYNC command-mode model (FIRMWARE_SIM_RFD_MODEM) with
+    per-modem GLOBAL_RETRIES, SER_BRK_DETMS, MAX_DATA and AIR_SPEED.
+  * Stations: they log in UTC, and host stations restart on scheduled reboots (pairing needs both restarted).
+  * Not modelled yet: the RF NEO-M9N GPS. Startup does not need it; gps_time does.
+
+  | scenario (dev boards, station f34453b) | Renode | native | checks |
+  |---|---|---|---|
+  | rrls_takeover (cut 200-320 s, GS->RRLS loss 0-14 s) | 7215 s (TS-takeover-70f5f97) | 38 s | 9/9 both; RRLS Abort latched 503 ms vs 507-509 ms |
+  | bench_symptoms (normal, RRLS, 200 s) | 5208 s (dev-confirm) | 23 s (pace 10), 103 s (pace 2) | both checks pass |
+  | rrls_relay (new; cut 120-400 s) | - | 47 s | reproduces both field reports (below) |
+
+  Latency parity caveat: the controllers measure latencies by polling on the wall clock (0.1-0.5 s). Natively the
+  resolution is that poll period times the pace: underglow confirmation p50 measured 914 ms at 10x and 409 ms at 2x,
+  against 221 ms in Renode (whose 1/20 pace makes polling fine-grained). Use `--native-pace 1` or lower when a
+  sub-second latency is the result.
+
+  rrls_relay reproduces the 2026-11-17 field reports. In relay mode (only the primary's direct path is cut, and the
+  primary asks for the relay):
+  * the boards apply every underglow toggle from either station within 1-2 s;
+  * the RRLS never shows the underglow requested or confirmed within 45 s (`requested`/`actuated` stay null);
+  * one RRLS-proxied toggle that the boards applied ended `unknown` ("Primary response was not confirmed").
+* Station-idle grant (open): `FIRMWARE_SIM_STATION_IDLE_GRANT=1` holds virtual time while the stations' threads use
+  more than 30% of a core (schedstat, checked every 2 ms). Measured uncapped on clock_steps: 1 of 3 runs passed and
+  the run slowed from 9 s to 16 s, so it is off by default. The failures are the station's final-clock 100 ms retry
+  budget, which is measured on the (virtual) monotonic clock: lock contention lasting under a millisecond of wall
+  time costs 18 ms of virtual time at 18x, so the sampler cannot see it. Two fixes would work:
+  * lockstep at the station's thread level: simclock counts runnable threads in its wait wrappers, and the
+    coordinator grants only when none are runnable;
+  * a sim-only station switch that measures that busy budget on the wall clock.
+  
+  Until then `--native-pace 10` (stable) remains the default.
