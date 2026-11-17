@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Full seven-board linked simulation (see docs/hardware-faithful-radio.md for --radio rfd-faithful
---faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, vb_stale, stale_auto_abort and gse_flows scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
+--faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, clock_steps, vb_stale, stale_auto_abort and gse_flows scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
 umbilical) with the one-binary GS (+firmware_sim) started in a runtime station mode
 (GS_STATION_MODE=hitl|test_fire|normal; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
 recorder (virtual-time stamped API snapshots) and scripted scenarios.
