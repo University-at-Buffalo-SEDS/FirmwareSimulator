@@ -257,6 +257,12 @@ __attribute__((constructor)) static void uart_register(void) { sim_register_rx(S
 HAL_StatusTypeDef HAL_DMA_Init(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_READY; return HAL_OK; }
 HAL_StatusTypeDef HAL_DMA_DeInit(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_RESET; return HAL_OK; }
 void HAL_DMA_IRQHandler(DMA_HandleTypeDef *h) { (void)h; }
+#if defined(STM32U5) || defined(STM32H5)
+HAL_DMA_StateTypeDef HAL_DMA_GetState(const DMA_HandleTypeDef *h)
+#else
+HAL_DMA_StateTypeDef HAL_DMA_GetState(DMA_HandleTypeDef *h)
+#endif
+{ return h ? h->State : HAL_DMA_STATE_RESET; }
 HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_READY; return HAL_OK; }
 HAL_StatusTypeDef HAL_DMA_Abort_IT(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_READY; return HAL_OK; }
 #if defined(DMA_CBR1_BNDT)

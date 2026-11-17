@@ -152,8 +152,36 @@ latest Renode acceptance runs keeps the native tier honest.
 
 ## Status
 
-* Phase 1 (done): shim library; GB, AB, VB, DAQ native builds (dev heads and cohorts); CAN with link cuts; Pico-Fi
-  umbilical; native station; clock_steps and vent_countdown pass natively with parity to their Renode runs.
-* Phase 2 (next): MCP3564R SPI model + EXTI data-ready, ADC fault/rail injection patterns (KG1000 rail, supply dips),
-  config_resync (blank-flash boot option), launch_reset_idle, gse_flows.
-* Phase 3: FC, RF, PB builds (H5/H7/U5 variants), the RFD900x air model, bench_symptoms, rrls_takeover, rrls_idle.
+* Phase 1 (done): shim library; GB, AB, VB, DAQ native builds; CAN with link cuts; Pico-Fi umbilical; native station;
+  clock_steps and vent_countdown pass natively with parity to their Renode runs.
+* Station lockstep (done): `native/simclock` (above).
+* Phase 2 (done), current dev boards (DAQ 55fe7a8, AB 9fa7b58, VB 1ac09c9, GB c68c3b5) and station f34453b:
+  * MCP3564R model with data-ready (native/shim/src/sim_mcp3564r.c); with it the DAQ's stamp median matches Renode
+    (-4..-11 ms) and its packet rate (~6.7k per window vs Renode ~6.1k);
+  * `input_faults`: the 2026-11-16 fire patterns (VMAIN 11.1 V at boot, KG1000 clip at code 0xB40000 and the
+    recorded clip, KG1000 low rail, P6 S+ dropout, dead chamber) replayed at their sample times
+    (scripts/native_signals.py, diagnostics/native-signals.txt); the station reports and clears each DAQ input fault;
+  * `--native-blank-flash NODES|all`: first boot on erased flash (no bootloader/app/metadata);
+  * config_resync (with daq/actuator reboots), launch_reset_idle and gse_flows pass natively.
+
+  | scenario | Renode wall | native wall | checks |
+  |---|---|---|---|
+  | clock_steps (dev) | - | 14 s | 38/38 |
+  | vent_countdown cut 190 / 60 (dev) | 3589 / 3079 s | 37 / 30 s | 9/9, 7/7 |
+  | config_resync + reboots (dev) | 3217 s (cfg1) | 32 s | 6/6 |
+  | launch_reset_idle (dev) | 1110 s (fix-dev) | 15 s | 11/11 |
+  | gse_flows, test fire, umbilical (dev) | - | 18 s | all pass |
+  | input_faults (dev) | - | 13 s | 14/14 |
+
+  With `--native-blank-flash all`, config_resync's "went through resyncing" check fails: the station restores so fast
+  that the controller's 1 s wall-clock watch polls (10 s of virtual time at 10x) never see the intermediate state. This
+  is a controller sampling artifact, not a board difference.
+* Phase 3 (in progress): FC (STM32H523), RF and PB build and boot natively. FC needs `ENABLE_TELEMETRY=ON` (its
+  build.py default), its startup's link symbols and its watchdog-retained RAM (`.fc_watchdog_retained`), which
+  persists across software/watchdog resets and is lost on power cycles. A coarse shared-air RFD900x medium
+  (src/bay/native_radio.rs: FIFOs, idle/burst packetization, air time, turnaround, retries, directed cuts and loss)
+  carries station and RF traffic both ways. Not done yet:
+  * the AV-bay boards do not reach readback_current over it in HITL;
+  * the FC spins without its SPI sensor-bus model (BMI088/baro/mag);
+  * the RF GPS (NEO-M9N UART model) is missing;
+  * so bench_symptoms, rrls_takeover and rrls_idle do not run natively yet.

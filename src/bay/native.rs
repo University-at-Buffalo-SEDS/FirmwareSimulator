@@ -336,6 +336,39 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         }
     }
 
+    // Radio links: one shared air medium per link; host stations reach it through a PTY (their serial port).
+    let mut radios: Vec<(super::native_radio::Medium, Vec<Option<fs::File>>, Vec<(String, String)>)> = Vec::new();
+    for link in topology.links.iter().filter(|l| matches!(l.kind, LinkKind::Radio)) {
+        let profile = link.radio.clone().unwrap_or(super::radio_link::RadioProfile {
+            air_bits_per_second: 64000, uart_baud: 115200, tx_fifo_bytes: 8192, rx_fifo_bytes: 8192, max_burst_bytes: 256,
+            packet_idle_us: 2000, overhead_bits: 160, turn_us: 2000 });
+        let names: Vec<String> = link.endpoints.iter().map(|e| e.node.clone()).collect();
+        let mut masters = Vec::new();
+        let mut eps = Vec::new();
+        for ep in &link.endpoints {
+            eps.push((ep.node.clone(), ep.peripheral.clone()));
+            if topology.host_nodes.iter().any(|h| h.name == ep.node) {
+                let (mut master, mut slave) = (-1, -1);
+                let mut name = [0 as libc::c_char; 256];
+                ensure!(unsafe { libc::openpty(&mut master, &mut slave, name.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) } == 0, "openpty");
+                configure_raw_nonblocking(master)?;
+                configure_raw_nonblocking(slave)?;
+                let path = PathBuf::from(unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str()?);
+                std::mem::forget(unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(slave) });
+                host_serial_paths.insert((ep.node.clone(), link.name.clone()), path);
+                masters.push(Some(unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(master) }));
+            } else {
+                masters.push(None);
+            }
+        }
+        let mut m = super::native_radio::Medium::new(&link.name, profile, &names, cfg.seed);
+        for ev in topology.radio_link_events.iter().filter(|e| e.link == link.name && e.after_sample == 0) {
+            m.cut.insert((ev.sender.clone(), ev.receiver.clone()), !ev.connected);
+            if let Some(l) = ev.loss_ppm { m.loss_ppm.insert((ev.sender.clone(), ev.receiver.clone()), l); }
+        }
+        radios.push((m, masters, eps));
+    }
+
     // Nodes.
     let mut procs: Vec<Proc> = Vec::new();
     for node in &topology.nodes {
@@ -403,7 +436,8 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         let earliest_need = procs.iter().filter(|p| p.alive).map(|p| p.next_wakeup).min().unwrap_or(u64::MAX);
         let earliest_in = procs.iter().flat_map(|p| p.inbound.iter().map(|m| m.0)).min().unwrap_or(u64::MAX);
         let next_second = (second + 1) * 1_000_000_000;
-        let wake = earliest_need.min(earliest_in).min(next_second);
+        let radio_next = radios.iter().map(|r| r.0.next_event()).min().unwrap_or(u64::MAX);
+        let wake = earliest_need.min(earliest_in).min(next_second).min(radio_next.max(t + 1));
         if wake > horizon {
             horizon = wake.min(t + max_skip);
         }
@@ -453,6 +487,34 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     p.inbound.push((start, MSG_UART_RX, m));
                 }
                 uart_bytes[1] += frame.len() as u64;
+            }
+        }
+        // ---- radio: station bytes into their modems, the air to the horizon, modem bytes out to the UARTs
+        for (medium, masters, eps) in radios.iter_mut() {
+            for (i, master) in masters.iter_mut().enumerate() {
+                if let Some(f) = master.as_mut() {
+                    let mut buf = [0u8; 8192];
+                    if let Ok(n) = f.read(&mut buf) {
+                        if n > 0 { medium.uart_in(i, t, &buf[..n]); }
+                    }
+                }
+            }
+            medium.step(t);
+            for i in 0..eps.len() {
+                while let Some((start, bytes)) = medium.uart_out(i, t, horizon) {
+                    if let Some(f) = masters[i].as_mut() {
+                        let _ = f.write_all(&bytes);
+                    } else {
+                        let (node, periph) = &eps[i];
+                        if *gate_cut.get(&format!("{node}:{periph}")).unwrap_or(&false) { continue; }
+                        if let Some(p) = procs.iter_mut().find(|p| &p.name == node && p.alive) {
+                            let mut m = start.to_le_bytes().to_vec();
+                            m.extend_from_slice(&port8(periph));
+                            m.extend_from_slice(&bytes);
+                            p.inbound.push((start, MSG_UART_RX, m));
+                        }
+                    }
+                }
             }
         }
         // ---- scripted signals: diagnostics/native-signals.txt lines "<virtual ms> <node> <device> <codes>" (appended by
@@ -574,6 +636,15 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     }
                     MSG_UART_TX => {
                         let periph = port_str(&body[8..16]);
+                        let ts = u64::from_le_bytes(body[..8].try_into().unwrap());
+                        let from = procs[i].name.clone();
+                        for (medium, _, eps) in radios.iter_mut() {
+                            if let Some(k) = eps.iter().position(|(n, p)| n == &from && p == &periph) {
+                                if !*gate_cut.get(&format!("{from}:{periph}")).unwrap_or(&false) {
+                                    medium.uart_in(k, ts, &body[20..]);
+                                }
+                            }
+                        }
                         if let (Some(pm), Some((_, node, pp, _))) = (pico_model.as_mut(), pico.as_ref()) {
                             if node == &procs[i].name && pp == &periph && !*gate_cut.get(&format!("{node}:{pp}")).unwrap_or(&false) {
                                 let data = &body[20..];
@@ -677,6 +748,13 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             if changed {
                 push_link_state(&mut procs, &can, t);
             }
+            for ev in topology.radio_link_events.iter().filter(|e| e.after_sample as u64 == second) {
+                for (medium, _, _) in radios.iter_mut().filter(|r| r.0.link == ev.link) {
+                    medium.cut.insert((ev.sender.clone(), ev.receiver.clone()), !ev.connected);
+                    medium.loss_ppm.insert((ev.sender.clone(), ev.receiver.clone()), ev.loss_ppm.unwrap_or(0));
+                    let _ = writeln!(gpio_out, "{} radio {} {}->{} connected={} loss_ppm={}", t, ev.link, ev.sender, ev.receiver, ev.connected as u8, ev.loss_ppm.unwrap_or(0));
+                }
+            }
             for rb in reboots.iter().filter(|r| r.after_sample as u64 == second) {
                 if let Some(i) = procs.iter().position(|p| p.name == rb.node) {
                     let _ = procs[i].child.kill();
@@ -718,6 +796,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
         "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
         "station_clock": cfg.station_clock.is_some(),
+        "radio": radios.iter().map(|r| (r.0.link.clone(), r.0.modems.iter().map(|m| (m.name.clone(), m.stats)).collect::<Vec<_>>())).collect::<Vec<_>>(),
         "pico": pico_model.as_ref().map(|p| p.stats)});
     atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
     eprintln!("[native-bay] done: {:.1} s virtual in {:.1} s wall, {} steps", t as f64 / 1e9, wall0.elapsed().as_secs_f64(), steps);

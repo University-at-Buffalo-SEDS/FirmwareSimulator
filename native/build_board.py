@@ -29,7 +29,15 @@ REPO_NODE = {'gateway-board26': 'gateway', 'ActuatorBoard26': 'actuator', 'Valve
 # Hardware-only translation units, replaced by the shim (matched against the path).
 EXCLUDE = [r'/Drivers/STM32[A-Z0-9]+xx_HAL_Driver/Src/', r'/threadx/ports/', r'/startup_stm32', r'/Core/Src/syscalls\.c$',
            r'/Core/Src/sysmem\.c$', r'/Core/Src/system_stm32', r'\.[sS]$', r'/usbx/', r'/USBX/', r'/Core/Src/stm32[a-z0-9]+xx_it\.c$', r'/Middlewares/ST/usbx',
-           r'/ux_', r'_hal_timebase_tim\.c$', r'/filex/ports/', r'/levelx/']
+           r'/ux_', r'_hal_timebase_tim\.c$', r'/Core/Src/abort_unwind\.c$', r'/filex/ports/', r'/levelx/']
+
+
+# Options each board's own build.py passes on a normal firmware build (CMake defaults differ).
+BOARD_DEFINES = {'FlightComputer26': ['ENABLE_TELEMETRY=ON']}
+# Retained-RAM output sections (names from the board's link script) and link-time symbols the replaced startup
+# code would have provided.
+BOARD_RETAINED = {'FlightComputer26': ('.fc_watchdog_retained', '__fc_watchdog_retained_start', '__fc_watchdog_retained_end')}
+BOARD_DEFSYMS = {'FlightComputer26': {'g_pfnVectors': 0x08002200, '__data_source_end': 0x08002200 + 0x70000}}
 
 
 def log(*a):
@@ -102,6 +110,8 @@ def configure(src: Path, out: Path, a):
            '-DSEDSNET_ENV_CARGO_TARGET_DIR=' + str(out / 'cargo-arm'), '-DSEDS_FIRMWARE_SIM_TEST=OFF']
     for k, (t, v) in stamp['cohort_options'].items():
         cfg.append(f'-D{k}:{t}={v}')
+    if not stamp['cohort_options']:
+        cfg += [f'-D{d}' for d in BOARD_DEFINES.get(src.name, [])]
     cfg += [f'-D{d}' for d in a.define]
     env = {k: v for k, v in os.environ.items() if not k.startswith(('CARGO_', 'RUSTFLAGS', 'SEDSNET_TEST_'))}
     log('configure', src.name, '(ARM, configure only)')
@@ -310,7 +320,7 @@ def main():
         name = re.sub(r'[^A-Za-z0-9_.]', '_', os.path.relpath(file, src) if file.startswith(str(src)) else file)[-120:]
         jobs.append((file, SHIM_FLAGS + shim_inc + flags + extra, objdir / f'{i:03d}_{name}.o'))
     for i, f in enumerate(sorted((SHIM / 'src').glob('*.c'))):
-        jobs.append((str(f), SHIM_FLAGS + ['-Wall', '-Wno-unused-function', '-D_GNU_SOURCE'] + shim_inc + app_flags, objdir / f'shim_{f.stem}.o'))
+        jobs.append((str(f), SHIM_FLAGS + ['-Wall', '-Wno-unused-function', '-D_GNU_SOURCE', '-DSIM_SHIM_TU'] + shim_inc + app_flags, objdir / f'shim_{f.stem}.o'))
     log(node, f'{len(sources)} firmware sources ({family}), {len(skipped)} replaced by the shim; compiling with {a.jobs} jobs')
     fails = []
     with ThreadPoolExecutor(a.jobs) as ex:
@@ -321,9 +331,17 @@ def main():
             print('---', s, '\n', err, file=sys.stderr)
         (out / 'failed-compile.txt').write_text('\n'.join(shlex.join(c) for _, _, c in fails))
         raise SystemExit(f'{len(fails)} compile failures')
+    extra_link = []
+    ret = BOARD_RETAINED.get(src.name)
+    script = out / 'native-retained.ld'
+    sec, a0, a1 = ret if ret else ('.sim_retained_none', '__sim_retained_unused0', '__sim_retained_unused1')
+    script.write_text(f'''SECTIONS {{ .sim_retained (NOLOAD) : ALIGN(32) {{ __sim_retained_start = .; {a0} = .; KEEP(*({sec})) {a1} = .; __sim_retained_end = .; }} }} INSERT AFTER .bss;\n''')
+    extra_link += [f'-Wl,-T,{script}']
+    for k, v in BOARD_DEFSYMS.get(src.name, {}).items():
+        extra_link.append(f'-Wl,--defsym,{k}=0x{v:08x}')
     exe = out / f'{node}.native'
     link = ['gcc', '-m32', '-no-pie', '-Wl,-Ttext-segment=0x70000000', '-g', '-o', str(exe), *[str(j[2]) for j in jobs], str(lib), '-Wl,--allow-multiple-definition',
-            '-lpthread', '-lm', '-ldl', '-Wl,-z,noexecstack']
+            '-lpthread', '-lm', '-ldl', '-Wl,-z,noexecstack', *extra_link]
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode:
         undef = sorted(set(re.findall(r"undefined reference to `([^']+)'", r.stderr)))

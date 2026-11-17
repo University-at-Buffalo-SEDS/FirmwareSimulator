@@ -27,6 +27,12 @@ void sim_barrier(void);
 #define _Static_assert(...) _Static_assert(1, "ARM layout assertion (not evaluated in native SITL)")
 #endif
 
+/* Firmware file-scope names that the host C library also declares (newlib does not): keep them the board's. */
+#ifndef SIM_SHIM_TU
+#include <sys/select.h>   /* the C library's declaration keeps its name; later firmware uses get the alias */
+#define select sim_fw_select
+#endif
+
 /* Skip the real ARM cmsis_gcc.h (its intrinsics are inline ARM assembly). */
 #define __CMSIS_GCC_H
 

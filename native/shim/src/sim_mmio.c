@@ -56,6 +56,7 @@ static int state_file(const char *name, size_t size, int *created)
 }
 
 static size_t flash_size;
+static void retained_restore(void);
 volatile uint8_t *sim_ppb_alias;
 uint64_t sim_next_tick_ns(void);
 void sim_advance_raw_ns(uint64_t ns);
@@ -113,7 +114,7 @@ __attribute__((constructor(101))) static void sim_mmio_reserve(void)
 {
     /* Reserve the fixed ranges before the C library places anything there. */
     static const struct { uintptr_t a; size_t s; } ranges[] = {
-        {0x08000000u, 0x00400000u}, {0x0BF00000u, 0x00100000u}, {0x0C000000u, 0x00400000u}, {0x1FFF0000u, 0x00010000u},
+        {0x08000000u, 0x00400000u}, {0x08F00000u, 0x00100000u}, {0x0BF00000u, 0x00100000u}, {0x0C000000u, 0x00400000u}, {0x1FFF0000u, 0x00010000u},
         {0x20000000u, 0x00100000u}, {0x40000000u, 0x20000000u}, {0xE0000000u, 0x00100000u}};
     for (size_t i = 0; i < sizeof ranges / sizeof ranges[0]; i++) {
         if (!reserve_ok(ranges[i].a, ranges[i].s)) {
@@ -191,11 +192,42 @@ void sim_mmio_init(void)
     RCC->CSR = csr;
 #endif
     (void)csr;
+    /* Supply/oscillator ready flags that clock setup code polls without a timeout. */
+#if defined(PWR_VOSSR_VOSRDY)
+    PWR->VOSSR |= PWR_VOSSR_VOSRDY;
+#endif
+#if defined(PWR_VOSSR_ACTVOSRDY)
+    PWR->VOSSR |= PWR_VOSSR_ACTVOSRDY;
+#endif
+#if defined(PWR_VOSR_VOSRDY)
+    PWR->VOSR |= PWR_VOSR_VOSRDY;
+#endif
+#if defined(PWR_VOSR_BOOSTRDY)
+    PWR->VOSR |= PWR_VOSR_BOOSTRDY;
+#endif
+    retained_restore();
     if (!sim_env_long("SIM_NO_CORE_TRAP", 0)) trap_core_pages();
 }
 
+extern uint8_t __sim_retained_start[], __sim_retained_end[];
+static void retained_restore(void)
+{
+    size_t n = (size_t)(__sim_retained_end - __sim_retained_start);
+    if (!n) return;
+    char path[1024]; snprintf(path, sizeof path, "%s/retained-ram.bin", sim_state_dir());
+    long cause = sim_env_long("SIM_RESET_CAUSE", SIM_RESET_POR);
+    FILE *f = fopen(path, "rb");
+    if (f && cause != SIM_RESET_POR) { if (fread(__sim_retained_start, 1, n, f) != n) memset(__sim_retained_start, 0, n); }
+    if (f) fclose(f);
+    if (cause == SIM_RESET_POR) unlink(path);  /* power cycle: RAM is lost */
+}
 void sim_mmio_persist(void)
 {
+    size_t rn = (size_t)(__sim_retained_end - __sim_retained_start);
+    if (rn) {
+        char path[1024]; snprintf(path, sizeof path, "%s/retained-ram.bin", sim_state_dir());
+        FILE *f = fopen(path, "wb"); if (f) { fwrite(__sim_retained_start, 1, rn, f); fclose(f); }
+    }
     if (flash_size) msync(flash_mem, flash_size, MS_SYNC);
 }
 

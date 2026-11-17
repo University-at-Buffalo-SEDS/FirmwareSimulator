@@ -83,6 +83,9 @@ HAL_StatusTypeDef HAL_PWREx_ControlVoltageScaling(uint32_t v) { (void)v; return 
 #if defined(PWR_CR3_UCPD_DBDIS) || defined(STM32G4)
 void HAL_PWREx_DisableUCPDDeadBattery(void) {}
 #endif
+#if defined(STM32H5)
+void HAL_PWREx_EnableVddUSB(void) {}
+#endif
 #if defined(PWR_SVMCR_USV) || defined(STM32U5)
 void HAL_PWREx_EnableVddUSB(void) {}
 void HAL_PWREx_EnableVddA(void) {}
@@ -105,6 +108,10 @@ void HAL_NVIC_SystemReset(void) { sim_reset(SIM_RESET_SOFT); }
 uint32_t HAL_SYSTICK_Config(uint32_t t) { (void)t; return 0; }
 void HAL_SYSTICK_CLKSourceConfig(uint32_t s) { (void)s; }
 void HAL_MPU_Enable(uint32_t c) { (void)c; }
+#if defined(STM32H5) || defined(STM32U5)
+void HAL_MPU_ConfigRegion(const MPU_Region_InitTypeDef *const r) { (void)r; }
+void HAL_MPU_ConfigMemoryAttributes(const MPU_Attributes_InitTypeDef *const a) { (void)a; }
+#endif
 void HAL_MPU_Disable(void) {}
 
 /* ---------------------------------------------------------------- GPIO / EXTI */
@@ -260,12 +267,16 @@ HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t addr, uint64_t data)
 }
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *e, uint32_t *err)
 {
-    uint32_t page = e->Page, n = e->NbPages, base = 0x08000000u;
+#if defined(FLASH_SECTOR_SIZE)
+    uint32_t page = e->Sector, n = e->NbSectors, base = 0x08000000u, unit = FLASH_SECTOR_SIZE;
+#else
+    uint32_t page = e->Page, n = e->NbPages, base = 0x08000000u, unit = FLASH_PAGE_SIZE;
+#endif
 #if defined(FLASH_BANK_2) && defined(FLASH_BANK_SIZE)
     if (e->Banks == FLASH_BANK_2) base += FLASH_BANK_SIZE;
 #endif
-    if (e->TypeErase == FLASH_TYPEERASE_MASSERASE) { page = 0; n = (uint32_t)sim_env_long("SIM_FLASH_SIZE", 524288) / FLASH_PAGE_SIZE; }
-    memset((void *)(uintptr_t)(base + page * FLASH_PAGE_SIZE), 0xFF, (size_t)n * FLASH_PAGE_SIZE);
+    if (e->TypeErase == FLASH_TYPEERASE_MASSERASE) { page = 0; n = (uint32_t)sim_env_long("SIM_FLASH_SIZE", 524288) / unit; }
+    memset((void *)(uintptr_t)(base + page * unit), 0xFF, (size_t)n * unit);
     if (err) *err = 0xFFFFFFFFu;
     sim_busy_wait_ns((uint64_t)n * 22000000ull);
     return HAL_OK;
@@ -549,6 +560,7 @@ HAL_StatusTypeDef HAL_ICACHE_Enable(void) { return HAL_OK; }
 HAL_StatusTypeDef HAL_ICACHE_Disable(void) { return HAL_OK; }
 HAL_StatusTypeDef HAL_ICACHE_ConfigAssociativityMode(uint32_t m) { (void)m; return HAL_OK; }
 HAL_StatusTypeDef HAL_ICACHE_Invalidate(void) { return HAL_OK; }
+uint32_t HAL_ICACHE_IsEnabled(void) { return 1; }
 #endif
 #ifdef HAL_DCACHE_MODULE_ENABLED
 __attribute__((weak)) void HAL_DCACHE_MspInit(DCACHE_HandleTypeDef *h) { (void)h; }
