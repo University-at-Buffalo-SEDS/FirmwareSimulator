@@ -213,6 +213,10 @@ def build_config(a):
     if a.radio_trace:
         cmd += ['-e', 'FIRMWARE_SIM_RADIO_TRACE_DIR=/diagnostics/radio-trace', '-e', f'FIRMWARE_SIM_RADIO_TRACE_UNTIL_MS={a.duration_ms - 1000}']
         cmd += ['-e', f'FIRMWARE_SIM_RADIO_TRACE_MAX_MB={a.radio_trace_max_mb}']
+    if a.can_trace:
+        # Passive CAN wire capture (SedsCanTrace: SEDSCAN1, 80-byte records) of every board's FDCAN, both directions.
+        (diag / 'can-trace').mkdir(mode=0o770, exist_ok=True); (diag / 'can-trace').chmod(0o770)
+        cmd += ['-e', 'FIRMWARE_SIM_CAN_TRACE_DIR=/diagnostics/can-trace', '-e', f'FIRMWARE_SIM_CAN_TRACE_UNTIL_MS={min(a.duration_ms, 3600000)}']
     if a.faithful_time:
         cmd += ['-e', f'FIRMWARE_SIM_WALL_PACE={a.faithful_time}']
     if a.radio == 'rfd-faithful':
@@ -2503,6 +2507,7 @@ if __name__ == '__main__':
     p.add_argument('--radio-path-loss', action='append', default=[],
                    help='sender:receiver:s0:s1:ppm (gs, rf, rrls): extra loss on one directed path between virtual seconds s0 and s1')
     p.add_argument('--radio-trace', action='store_true')
+    p.add_argument('--can-trace', action='store_true', help='capture every board CAN frame to diagnostics/can-trace (SedsCanTrace)')
     p.add_argument('--radio-trace-max-mb', type=int, default=4, help='per-stream radio trace bound (4..256)')
     p.add_argument('--gs-reboot', action='append', default=[])
     p.add_argument('--board-reboot', action='append', default=[])
