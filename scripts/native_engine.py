@@ -170,6 +170,8 @@ class LocalDocker:
         return self.real.check_output(cmd, *a, **kw)
 
     def Popen(self, cmd, *a, **kw):
+        if NativeState.native_cmd is not None and list(cmd) == list(NativeState.native_cmd):
+            kw['env'] = {**(kw.get('env') or os.environ), **(NativeState.bay_env or {})}
         p = self.real.Popen(cmd, *a, **kw)
         if NativeState.native_cmd is not None and list(cmd) == list(NativeState.native_cmd):
             self.procs.append(p)
@@ -180,7 +182,7 @@ class LocalDocker:
 
 
 class NativeState:
-    opts = None; net = None; native_cmd = None; scratch = None
+    opts = None; net = None; native_cmd = None; scratch = None; bay_env = None
 
 
 def native_symbols(builds: Path, node: str):
@@ -229,6 +231,16 @@ def devices_text(layout):
             for i in range(8, 12): codes[i] = (codes[2 * (i - 8)] - codes[2 * (i - 8) + 1]) & 0xffffff
             codes[12] = 305652
             lines.append(f"mcp3564r {bus} {cs} {irq} {','.join(map(str, codes))}")
+    models = {p.get('model') for p in layout.get('peripherals', [])}
+    if 'bmi088' in models or 'bmp390' in models:
+        # FC sensor bus: chip selects gpio.N -> layoutFlightSensors@k, data-ready layoutFlightSensors.k -> exti@N
+        cs, irq = [35, 3, 2], [39, 16, 36]
+        for c in layout.get('board', {}).get('connections', []):
+            fr, to = c.get('from', ''), c.get('to', '')
+            if fr.startswith('gpio.') and 'FlightSensors@' in to: cs[int(to.split('@')[1])] = int(fr.split('.')[1])
+            if 'FlightSensors.' in fr and '@' in to: irq[int(fr.split('.')[1])] = int(to.split('@')[1])
+        bus = next(p.get('bus') for p in layout['peripherals'] if p.get('model') in ('bmi088', 'bmp390'))
+        lines.append(f"flightsensors {bus} {' '.join(map(str, cs))} {' '.join(map(str, irq))}")
     for pin in layout.get('board', {}).get('pins', []):
         lines.append(f"pin {pin['pin']} {1 if pin.get('initial') == 'high' else 0}")
     return '\n'.join(lines) + '\n'
@@ -332,6 +344,8 @@ def install(FN, opts):
         (config / 'native.json').write_text(json.dumps(native, indent=1))
         ncmd = [str(opts.firmware_sim), 'native-bay', '--topology', str(config / 'topology.json'), '--native', str(config / 'native.json')]
         NativeState.native_cmd = ncmd; NativeState.net = net
+        # The Renode container's simulator settings (radio retries, modem models, traces) apply to the native bay too.
+        NativeState.bay_env = {k: remap(v, mapping) for k, v in env_opts.items() if k.startswith(('FIRMWARE_SIM_', 'SEDS_'))}
         (out / 'command.json').write_text(json.dumps({'engine': 'native', 'command': ncmd, 'renode_equivalent': cmd}, indent=2))
         return out, diag, key, ncmd, name, net, missing
 

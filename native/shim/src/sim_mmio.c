@@ -57,6 +57,7 @@ static int state_file(const char *name, size_t size, int *created)
 
 static size_t flash_size;
 static void retained_restore(void);
+static void rtc_live(void);
 volatile uint8_t *sim_ppb_alias;
 uint64_t sim_next_tick_ns(void);
 void sim_advance_raw_ns(uint64_t ns);
@@ -89,6 +90,7 @@ void sim_mmio_live(void)
     ALIAS32(0xE018) = done > load ? 0 : load - done;
     ALIAS32(0xE010) |= 7u;
     ALIAS32(0xED04) = (ALIAS32(0xED04) & ~(1u << 26)) | (pend << 26);
+    rtc_live();
 }
 extern volatile int sim_core_busy;
 static uint64_t stall_last;
@@ -285,8 +287,30 @@ static void settle_adc(ADC_TypeDef *adc, const char *name)
 #endif
 }
 
+/* Backup-domain RTC in binary mode (H5/U5 BIN): SSR is a free-running down counter at ck_apre (LSI / (PREDIV_A+1),
+ * 1 kHz as configured by the boards), continuous across resets: derived from global virtual time. */
+static void rtc_live(void)
+{
+#if defined(RTC_ICSR_BIN) && defined(RCC_BDCR_RTCEN)
+    if (!(RCC->BDCR & RCC_BDCR_RTCEN)) return;
+    if ((RTC->ICSR & RTC_ICSR_BIN) == 0) return;
+    uint32_t prediv = ((RTC->PRER & RTC_PRER_PREDIV_A) >> RTC_PRER_PREDIV_A_Pos) + 1u;
+    uint64_t ticks = sim_local_to_global(sim_now_ns()) / (1000000000ull / (32000u / prediv));
+    RTC->SSR = 0xFFFFFFFFu - (uint32_t)ticks;
+#endif
+}
 void sim_mmio_settle(void)
 {
+#if defined(RCC_BDCR_LSION) && defined(RCC_BDCR_LSIRDY)
+    if (RCC->BDCR & RCC_BDCR_LSION) RCC->BDCR |= RCC_BDCR_LSIRDY;
+#endif
+#if defined(RCC_CSR_LSION) && defined(RCC_CSR_LSIRDY)
+    if (RCC->CSR & RCC_CSR_LSION) RCC->CSR |= RCC_CSR_LSIRDY;
+#endif
+#if defined(RTC_ICSR_INIT) && defined(RTC_ICSR_INITF)
+    if (RTC->ICSR & RTC_ICSR_INIT) RTC->ICSR |= RTC_ICSR_INITF; else RTC->ICSR &= ~RTC_ICSR_INITF;
+#endif
+    rtc_live();
 #ifdef ADC1
     settle_adc(ADC1, "adc1");
 #endif

@@ -132,8 +132,11 @@ static uint8_t transmit(uint8_t v)
     return out;
 }
 
+int sim_flight_sensors_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n);
+void sim_flight_sensors_cs(unsigned global_index, int value);
 void sim_spi_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n)
 {
+    if (sim_flight_sensors_xfer(bus, tx, rx, n)) return;
     if (!m.present || strcmp(bus, m.bus)) { if (rx) memset(rx, 0xFF, n); return; }
     for (uint16_t i = 0; i < n; i++) { uint8_t r = transmit(tx ? tx[i] : 0); if (rx) rx[i] = r; }
 }
@@ -141,6 +144,7 @@ void sim_spi_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n)
 /* chip select from the board's GPIO writes (hal_core.c) */
 void sim_gpio_changed(unsigned global_index, int value)
 {
+    sim_flight_sensors_cs(global_index, value);
     if (!m.present || (int)global_index != m.cs) return;
     m.selected = !value;
     if (value) { m.position = 0; m.reading = 0; }

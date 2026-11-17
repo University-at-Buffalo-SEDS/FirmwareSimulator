@@ -495,7 +495,12 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 if let Some(f) = master.as_mut() {
                     let mut buf = [0u8; 8192];
                     if let Ok(n) = f.read(&mut buf) {
-                        if n > 0 { medium.uart_in(i, t, &buf[..n]); }
+                        if n > 0 {
+                            if let Ok(path) = env::var("FIRMWARE_SIM_NATIVE_RADIO_DUMP") {
+                                let _ = OpenOptions::new().create(true).append(true).open(path).and_then(|mut d| d.write_all(&buf[..n]));
+                            }
+                            medium.uart_in(i, t, &buf[..n]);
+                        }
                     }
                 }
             }
@@ -736,6 +741,23 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 }
             }
             let _ = probes_out.write_all(out.as_bytes());
+            // FIRMWARE_SIM_NATIVE_DUMP="node:0xADDR:len[,...]": raw memory snapshots for debugging (native-dump.txt)
+            if let Ok(spec) = env::var("FIRMWARE_SIM_NATIVE_DUMP") {
+                let mut d = String::new();
+                for item in spec.split(',') {
+                    let parts: Vec<&str> = item.split(':').collect();
+                    if parts.len() != 3 { continue; }
+                    let (Ok(addr), Ok(len)) = (u64::from_str_radix(parts[1].trim_start_matches("0x"), 16), parts[2].parse::<usize>()) else { continue };
+                    if let Some(p) = procs.iter().find(|p| p.name == parts[0] && p.alive) {
+                        use std::os::unix::fs::FileExt;
+                        let mut b = vec![0u8; len.min(4096)];
+                        if fs::File::open(format!("/proc/{}/mem", p.child.id())).and_then(|f| f.read_exact_at(&mut b, addr)).is_ok() {
+                            d += &format!("{} {} {} {}\n", second, parts[0], parts[1], b.iter().map(|x| format!("{x:02x}")).collect::<String>());
+                        }
+                    }
+                }
+                let _ = OpenOptions::new().create(true).append(true).open(cfg.diagnostics.join("native-dump.txt")).and_then(|mut f| f.write_all(d.as_bytes()));
+            }
             let _ = gpio_out.flush();
             let mut changed = false;
             for ev in topology.can_link_events.iter().filter(|e| e.after_sample as u64 == second) {

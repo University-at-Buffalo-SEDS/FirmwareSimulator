@@ -124,6 +124,8 @@ static void tx_done(void *arg, uintptr_t a2)
     UART_HandleTypeDef *h = arg;
     if (h->gState != HAL_UART_STATE_BUSY_TX) return;
     h->gState = HAL_UART_STATE_READY;
+    h->Instance->CR3 &= ~USART_CR3_DMAT;
+    if (h->hdmatx) h->hdmatx->State = HAL_DMA_STATE_READY;
     HAL_UART_TxCpltCallback(h);
 }
 static HAL_StatusTypeDef tx_async(UART_HandleTypeDef *h, const uint8_t *data, uint16_t len)
@@ -133,6 +135,8 @@ static HAL_StatusTypeDef tx_async(UART_HandleTypeDef *h, const uint8_t *data, ui
     if (!data || !len) return HAL_ERROR;
     uart_t *u = uart_of(h);
     h->gState = HAL_UART_STATE_BUSY_TX; h->ErrorCode = HAL_UART_ERROR_NONE;
+    h->Instance->CR3 |= USART_CR3_DMAT;
+    if (h->hdmatx) h->hdmatx->State = HAL_DMA_STATE_BUSY;
     h->pTxBuffPtr = (const uint8_t *)data; h->TxXferSize = len; h->TxXferCount = 0;
     send_bytes(u, data, len);
     sim_schedule(sim_now_ns() + (uint64_t)len * byte_ns(h), u->irqn, tx_done, h, 0);
@@ -151,7 +155,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h, const uint8_t *d, uin
     h->gState = HAL_UART_STATE_READY;
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *h) { sim_cancel(tx_done, h); h->gState = HAL_UART_STATE_READY; return HAL_OK; }
+HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *h) { sim_cancel(tx_done, h); h->Instance->CR3 &= ~USART_CR3_DMAT; if (h->hdmatx) h->hdmatx->State = HAL_DMA_STATE_READY; h->gState = HAL_UART_STATE_READY; return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(UART_HandleTypeDef *h) { HAL_UART_AbortTransmit(h); HAL_UART_AbortTransmitCpltCallback(h); return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_DMAStop(UART_HandleTypeDef *h) { HAL_UART_AbortTransmit(h); uart_of(h)->active = 0; h->RxState = HAL_UART_STATE_READY; return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_DMAPause(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
@@ -170,6 +174,10 @@ static HAL_StatusTypeDef rx_start(UART_HandleTypeDef *h, uint8_t *buf, uint16_t 
     h->RxState = HAL_UART_STATE_BUSY_RX; h->ErrorCode = HAL_UART_ERROR_NONE;
     h->ReceptionType = to_idle ? HAL_UART_RECEPTION_TOIDLE : HAL_UART_RECEPTION_STANDARD;
     if (dma) set_counter(h->hdmarx, size);
+    /* register mirrors firmware checks directly (receiver armed: DMAR, IDLE interrupt) */
+    if (dma) h->Instance->CR3 |= USART_CR3_DMAR;
+    h->Instance->CR1 |= USART_CR1_RE | (to_idle ? USART_CR1_IDLEIE : 0);
+    if (h->hdmarx) h->hdmarx->State = HAL_DMA_STATE_BUSY;
     sim_cancel(idle_isr, u);
     return HAL_OK;
 }
@@ -180,6 +188,8 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *h, uint8_t *b, uint16_
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h)
 {
     uart_t *u = uart_of(h); u->active = 0; sim_cancel(idle_isr, u);
+    h->Instance->CR3 &= ~USART_CR3_DMAR; h->Instance->CR1 &= ~USART_CR1_IDLEIE;
+    if (h->hdmarx) h->hdmarx->State = HAL_DMA_STATE_READY;
     h->RxState = HAL_UART_STATE_READY; h->ReceptionType = HAL_UART_RECEPTION_STANDARD;
     return HAL_OK;
 }
@@ -197,6 +207,8 @@ static void rx_event(uart_t *u, uint32_t type, uint16_t size)
 }
 static void finish_normal(uart_t *u)
 {
+    u->h->Instance->CR3 &= ~USART_CR3_DMAR; u->h->Instance->CR1 &= ~USART_CR1_IDLEIE;
+    if (u->h->hdmarx) u->h->hdmarx->State = HAL_DMA_STATE_READY;
     u->active = 0; u->h->RxState = HAL_UART_STATE_READY; u->h->ReceptionType = HAL_UART_RECEPTION_STANDARD;
 }
 static void idle_isr(void *arg, uintptr_t a2)
@@ -263,7 +275,16 @@ HAL_DMA_StateTypeDef HAL_DMA_GetState(const DMA_HandleTypeDef *h)
 HAL_DMA_StateTypeDef HAL_DMA_GetState(DMA_HandleTypeDef *h)
 #endif
 { return h ? h->State : HAL_DMA_STATE_RESET; }
-HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_READY; return HAL_OK; }
+HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *h)
+{
+    if (!h) return HAL_ERROR;
+    h->State = HAL_DMA_STATE_READY;
+#ifdef HAL_UART_MODULE_ENABLED
+    for (int i = 0; i < MAX_UART; i++)  /* the UART behind an aborted RX channel stops receiving */
+        if (uarts[i].h && uarts[i].h->hdmarx == h && uarts[i].active) { uarts[i].active = 0; sim_cancel(idle_isr, &uarts[i]); }
+#endif
+    return HAL_OK;
+}
 HAL_StatusTypeDef HAL_DMA_Abort_IT(DMA_HandleTypeDef *h) { if (h) h->State = HAL_DMA_STATE_READY; return HAL_OK; }
 #if defined(DMA_CBR1_BNDT)
 HAL_StatusTypeDef HAL_DMA_ConfigChannelAttributes(DMA_HandleTypeDef *h, uint32_t a) { (void)h; (void)a; return HAL_OK; }
