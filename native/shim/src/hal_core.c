@@ -113,11 +113,13 @@ static unsigned gpio_port_index(const GPIO_TypeDef *g) { return (unsigned)(((uin
 static unsigned pin_bit(uint16_t pin) { return pin ? (unsigned)__builtin_ctz(pin) : 0; }
 void HAL_GPIO_Init(GPIO_TypeDef *g, const GPIO_InitTypeDef *i) { (void)g; (void)i; }
 void HAL_GPIO_DeInit(GPIO_TypeDef *g, uint32_t p) { (void)g; (void)p; }
+__attribute__((weak)) void sim_gpio_changed(unsigned global_index, int value) { (void)global_index; (void)value; }
 static void gpio_report(GPIO_TypeDef *g, uint16_t pins, uint32_t before)
 {
     uint32_t after = g->ODR, changed = (before ^ after) & pins;
     for (unsigned b = 0; changed; b++, changed >>= 1) {
         if (!(changed & 1u)) continue;
+        sim_gpio_changed(gpio_port_index(g) * 16 + b, (int)((after >> b) & 1u));
         struct __attribute__((packed)) { uint64_t t; uint8_t port, pin, value, pad; } m = {sim_local_to_global(sim_now_ns()), (uint8_t)gpio_port_index(g), (uint8_t)b, (uint8_t)((after >> b) & 1u), 0};
         sim_send(SIM_MSG_GPIO, &m, sizeof m);
     }

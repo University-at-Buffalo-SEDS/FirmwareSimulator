@@ -217,7 +217,15 @@ def devices_text(layout):
             vals = p.get('channel_samples') or []
             lines.append(f"ltc2990 {b} {addr} {','.join(map(str, vals[:4])) if vals else '-'} {p.get('failure_every', 0)}")
         elif model == 'mcp3564r':
-            lines.append(f"mcp3564r {bus} {','.join(map(str, p.get('channel_samples') or [0]))}")
+            # chip select and data-ready pins from the layout's connections (Renode: gpio.N -> device@0, device.IRQ -> gpio@N)
+            cs, irq = 28, 26
+            for c in layout.get('board', {}).get('connections', []):
+                if c.get('from', '').startswith('gpio.') and c.get('to', '').endswith('@0'): cs = int(c['from'].split('.')[1])
+                if c.get('from', '').endswith('.IRQ') and c.get('to', '').startswith('gpio@'): irq = int(c['to'].split('@')[1])
+            codes = [((i + 1) * 0x100000) & 0xffffff for i in range(16)]
+            for i in range(8, 12): codes[i] = (codes[2 * (i - 8)] - codes[2 * (i - 8) + 1]) & 0xffffff
+            codes[12] = 305652
+            lines.append(f"mcp3564r {bus} {cs} {irq} {','.join(map(str, codes))}")
     for pin in layout.get('board', {}).get('pins', []):
         lines.append(f"pin {pin['pin']} {1 if pin.get('initial') == 'high' else 0}")
     return '\n'.join(lines) + '\n'

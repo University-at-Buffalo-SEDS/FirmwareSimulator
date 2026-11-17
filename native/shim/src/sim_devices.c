@@ -65,6 +65,7 @@ int32_t sim_adc_sample(const char *device, unsigned ch, int32_t fallback)
 int sim_adc_count(const char *device) { adc_t *a = adc_find(device, 0); return a ? a->n : 0; }
 
 int sim_pin_input(unsigned global_index) { return global_index < 256 ? pins[global_index] : -1; }
+void sim_pin_set_input(unsigned global_index, int value) { if (global_index < 256) pins[global_index] = (int8_t)value; }
 
 /* ---------------------------------------------------------------- LTC2990 (Rev. F register map) */
 static ltc_t *ltc_find(const char *bus, int addr)
@@ -129,7 +130,7 @@ static void on_adc(uint16_t type, const uint8_t *b, uint32_t len)
     sim_adc_set_samples(dev, csv);
 }
 
-__attribute__((constructor)) static void devices_load(void)
+__attribute__((constructor(150))) static void devices_load(void)
 {
     memset(pins, -1, sizeof pins);
     sim_register_rx(SIM_MSG_ADC, on_adc);
@@ -139,8 +140,8 @@ __attribute__((constructor)) static void devices_load(void)
     if (!f) return;
     char line[2048];
     while (fgets(line, sizeof line, f)) {
-        char kind[32] = {0}, a1[64] = {0}, a2[1600] = {0}, a3[1600] = {0}, a4[64] = {0};
-        int k = sscanf(line, "%31s %63s %1599s %1599s %63s", kind, a1, a2, a3, a4);
+        char kind[32] = {0}, a1[64] = {0}, a2[1600] = {0}, a3[1600] = {0}, a4[1600] = {0};
+        int k = sscanf(line, "%31s %63s %1599s %1599s %1599s", kind, a1, a2, a3, a4);
         if (k < 2) continue;
         if (!strcmp(kind, "adc") && k >= 5) {
             adc_t *a = adc_find(a1, 1); a->bits = atoi(a2); a->noise = atoi(a3);
@@ -148,8 +149,9 @@ __attribute__((constructor)) static void devices_load(void)
             /* values may be longer than a4: re-read the rest of the line */
             char *p = strstr(line, a3); p = p ? strchr(p, ' ') : NULL;
             if (p) { while (*p == ' ') p++; char *nl = strchr(p, '\n'); if (nl) *nl = 0; a->n = 0; sim_adc_set_samples(a1, p); }
-        } else if (!strcmp(kind, "mcp3564r") && k >= 3) {
-            adc_t *a = adc_find("mcp3564r", 1); a->bits = 24; sim_adc_set_samples("mcp3564r", a2);
+        } else if (!strcmp(kind, "mcp3564r") && k >= 5) {
+            /* mcp3564r <bus> <cs-pin> <irq-pin> <16 codes>: codes are the device's channel samples */
+            adc_t *a = adc_find("mcp3564r", 1); a->bits = 24; sim_adc_set_samples("mcp3564r", a4);
         } else if (!strcmp(kind, "ltc2990") && k >= 3 && nltc < 4) {
             ltc_t *l = &ltcs[nltc++]; memset(l, 0, sizeof *l);
             snprintf(l->bus, sizeof l->bus, "%s", a1); l->addr = (int)strtol(a2, NULL, 0); l->expect_reg = 1;
