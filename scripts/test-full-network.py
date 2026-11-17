@@ -1515,9 +1515,12 @@ def sc_rrls_takeover(sim):
     # RRLS and show latched in its recovery view.
     c, b = r.api('/api/command', 'Abort'); v2 = sim.vclock(); latched = {}
     while sim.vclock() - v2 < 10000 and not sim.stop.is_set() and len(latched) < 3:
-        c3, d = r.api('/api/board-recovery/status')
-        for row in (d or {}).get('boards') or [] if c3 == 200 else []:
-            if row.get('id') in ('RF', 'FC', 'PB') and row.get('abort_latched') and row['id'] not in latched: latched[row['id']] = sim.vclock() - v2
+        # A pushed Abort latch shows as the board's active Abort error (/api/board_abort); a readback as its row.
+        c3, d = r.api('/api/board-recovery/status'); c4, ab = r.api('/api/board_abort')
+        shown = {row.get('id') for row in ((d or {}).get('boards') or [] if c3 == 200 else []) if row.get('abort_latched')}
+        shown |= {e.get('board') for e in ((ab or {}).get('active_errors') or [] if c4 == 200 else []) if str(e.get('source', '')).startswith('board_abort:')}
+        for b_ in ('RF', 'FC', 'PB'):
+            if b_ in shown and b_ not in latched: latched[b_] = sim.vclock() - v2
         sim.wait_v(250)
     rec(kind='abort', http=c, body=str(b)[:200], latched_ms=latched)
     sim.check('Abort from the RRLS in takeover: RF, FC and PB show latched on the RRLS within 10 s (ordered status delivered)',
