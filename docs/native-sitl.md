@@ -93,25 +93,29 @@ identical 6808-frame CAN trace). With the station it is reproducible up to the s
 
 ## The station and the speed limit
 
-The GroundStation backend is a tokio application on the wall clock. Its router and procedure clocks already follow the
-simulation (`GS_SIM_CLOCK_FILE`), but its heartbeats, retries, refresh intervals and freshness ages are wall timers.
-The engine therefore runs it under libfaketime at the bay's pace (`FAKETIME=@<start> x<pace>`, monotonic faked too;
-libfaketime scales `epoll_wait` and sleeps, so tokio timers keep their virtual periods) and paces the lockstep against
-the wall clock. Consequences:
+The GroundStation backend is a tokio application on the wall clock (heartbeats, retries, refresh intervals,
+freshness ages; about 800 `Instant`/`SystemTime` reads and 50 OS threads). By default (`--station-clock lockstep`)
+its clocks follow the bay instead, with no station code change: `native/simclock/simclock.c`, preloaded into the
+station, derives every clock read (`clock_gettime`, `gettimeofday`, `time`) from a shared page the coordinator updates
+before each lockstep window (window start, horizon, measured virtual/wall rate) and turns every timed wait (sleeps,
+`epoll_wait`/`poll`/`ppoll`, raw futex waits under Rust's Mutex/Condvar/park) into short wall slices of the remaining
+virtual time. The station's time never runs ahead of the boards': when the host is loaded the bay slows and the
+station waits with it, and when the bay runs faster the station's timers run faster with it.
 
-* speed is capped by the pace the lockstep can hold: 10x holds with margin on this host (4 boards, ~25% of the
-  wall time is node compute); 25x completed clock_steps but the lockstep lagged up to 4.8 s; 50x failed (DAQ status
-  ages, recovery tickets expired). `native_pace_held` in result.json is false when the lag exceeded 0.5 s;
-* a heavily loaded host makes the bay lag the station; use `fullnet-queue/native-lane.sh` (6 slots, load < 20);
-* station-side scheduling (HTTP handling, task order) is wall-clock dependent, so runs with a station are not
-  bit-reproducible.
+Measured (clock_steps, current dev boards and station f34453b):
 
-Minimal hook that removes the limit: an injectable clock in the backend, active only with
-`GS_SIM_TIME_SOCKET=<path>`: build the runtime with `start_paused(true)` (tokio test-util `time::pause`), route the
-wall-clock reads that are not already behind `simulation_clock_ms()` (the `SystemTime::now()` call sites in recording,
-freshness and launch-clock code) through one `sim_now()`, and run a task that receives grants on the socket and calls
-`tokio::time::advance()` to them, answering when the runtime is idle. The coordinator then grants the station like a
-node: fully lockstep, deterministic, and as fast as the compute allows (projected 25-40x for four boards).
+* load-insensitive: four runs in parallel at load 16 each fell ~7 s behind the 10x pace and all passed 38/38 (with
+  the earlier fixed-rate libfaketime clock, two parallel runs already failed the DAQ launch-log checks);
+* unlimited pace (`--native-pace 0`, `--native-quantum-us 2000`): 165 s of virtual time in 9 s (18x); with 1 ms quanta
+  12x. The lockstep's process hand-offs are now the bound, not the station;
+* above ~12x the station's own compute (not lockstepped: a request handled in 1 ms of wall time costs 18 ms of
+  virtual time) shows: 1 of 3 unlimited runs passed every check; the others hit the station's 100 ms final-clock retry
+  budget or an empty recording window right after StartWritingNow. The default stays a 10x cap
+  (`--native-pace 10`), stable; use `--native-pace 0` for exploratory sweeps.
+
+Removing the remaining limit needs the station's compute in the lockstep too: grant it virtual time only while all of
+its threads are blocked (the simclock can report that through the same page from its wait wrappers), after which the
+whole system is lockstep and deterministic. `--station-clock faketime` keeps the previous fixed-rate libfaketime mode.
 
 ## What stays Renode-only
 

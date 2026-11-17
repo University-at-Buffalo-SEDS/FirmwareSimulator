@@ -45,6 +45,9 @@ def own_args(argv):
     p.add_argument('--drift', action='append', default=[])
     p.add_argument('--firmware-sim', type=Path)
     p.add_argument('--native-build-jobs', type=int, default=8)
+    p.add_argument('--station-clock', choices=['lockstep', 'faketime'], default='lockstep',
+                   help='lockstep: the station clocks follow the bay (native/simclock; --native-pace is then only a cap, '
+                        '0 = none); faketime: the station runs at a fixed rate (--native-pace) and the bay is paced to it')
     return p.parse_known_args(argv)
 
 
@@ -103,6 +106,14 @@ def ensure_builds(builds: Path, cohort: Path, nodes, jobs):
         src = cohort / NODE_REPO[node]
         print(f'[native] building {node} from {src}', flush=True)
         _sp.check_call([sys.executable, str(NATIVE / 'build_board.py'), str(src), '--out', str(builds), '--jobs', str(jobs)])
+
+
+def ensure_simclock():
+    src = NATIVE / 'simclock/simclock.c'; out = ROOT / 'build/native/simclock.so'
+    if not out.exists() or src.stat().st_mtime > out.stat().st_mtime:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _sp.check_call(['gcc', '-O2', '-shared', '-fPIC', '-o', str(out), str(src), '-ldl'])
+    return out
 
 
 def ensure_firmware_sim(explicit):
@@ -257,9 +268,18 @@ def install(FN, opts):
             # One time base: the station runs at the coordinator's pace (FAKETIME start kept, rate = pace).
             env.pop('GS_SIM_WALL_FRESHNESS_SCALE', None)
             start = re.match(r'@(\S+ \S+)', env.get('FAKETIME', ''))
-            env['FAKETIME'] = '@%s x%.6f' % (start.group(1) if start else '2026-01-01 00:00:00', pace)
-            env['LD_PRELOAD'] = str(gsdir / 'libfaketimeMT.so.1')
-            env['FAKETIME_DONT_FAKE_MONOTONIC'] = '0'
+            start = start.group(1) if start else '2026-01-01 00:00:00'
+            if opts.station_clock == 'lockstep':
+                # The station's clocks follow the bay's virtual clock (FAKETIME start = its wall clock at virtual 0).
+                import calendar
+                for k in ('FAKETIME', 'FAKETIME_DONT_FAKE_MONOTONIC'): env.pop(k, None)
+                env['LD_PRELOAD'] = str(ensure_simclock())
+                env['SIMCLOCK_FILE'] = str(scratch / 'station-clock.page')
+                env['SIMCLOCK_EPOCH_MS'] = str(calendar.timegm(time.strptime(start, '%Y-%m-%d %H:%M:%S')) * 1000)
+            else:
+                env['FAKETIME'] = '@%s x%.6f' % (start, pace)
+                env['LD_PRELOAD'] = str(gsdir / 'libfaketimeMT.so.1')
+                env['FAKETIME_DONT_FAKE_MONOTONIC'] = '0'
             if host.get('network_variable_cache'):
                 host['network_variable_cache'] = remap(host['network_variable_cache'], mapping)
         (config / 'topology.json').write_text(json.dumps(topo, indent=2))
@@ -295,7 +315,8 @@ def install(FN, opts):
                 gates.append({'node': parts[0], 'peripheral': parts[1], 'path': remap(parts[2], mapping)})
         native = {'nodes': nodes, 'pace': pace, 'quantum_us': opts.native_quantum_us, 'max_skip_us': opts.native_max_skip_us,
                   'scratch': str(scratch), 'diagnostics': str(diag), 'stimulus': stimulus, 'probes': probes, 'uart_gates': gates,
-                  'seed': opts.native_seed, 'can_trace': 'FIRMWARE_SIM_CAN_TRACE_DIR' in env_opts}
+                  'seed': opts.native_seed, 'can_trace': 'FIRMWARE_SIM_CAN_TRACE_DIR' in env_opts,
+                  'station_clock': str(scratch / 'station-clock.page') if opts.station_clock == 'lockstep' else None}
         (config / 'native.json').write_text(json.dumps(native, indent=1))
         ncmd = [str(opts.firmware_sim), 'native-bay', '--topology', str(config / 'topology.json'), '--native', str(config / 'native.json')]
         NativeState.native_cmd = ncmd; NativeState.net = net
@@ -318,6 +339,7 @@ def main():
             sys.argv += ['--gs-dir', str(opts.gs_dir)]
         if not opts.firmware_sim:
             sys.argv += ['--firmware-sim', str(ensure_firmware_sim(None))]
+        ensure_simclock()
         reexec_in_netns()
         return
     reexec_in_netns()
@@ -343,7 +365,7 @@ def main():
             if res_p.exists() and rep_p.exists():
                 res = json.loads(res_p.read_text()); rep = json.loads(rep_p.read_text())
                 res['engine'] = 'native'; res['native_engine'] = rep
-                res['native_pace_held'] = rep.get('max_lag_ms', 0) <= 500
+                res['native_pace_held'] = bool(rep.get('station_clock')) or rep.get('max_lag_ms', 0) <= 500
                 res_p.write_text(json.dumps(res, indent=2, default=str) + '\n')
         except (OSError, ValueError):
             pass

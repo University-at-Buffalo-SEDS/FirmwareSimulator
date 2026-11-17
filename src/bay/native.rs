@@ -87,6 +87,52 @@ pub struct NativeConfig {
     pub seed: u64,
     #[serde(default)]
     pub can_trace: bool,
+    /// Shared page the host station's clocks follow (native/simclock): the station runs on the bay's virtual time.
+    #[serde(default)]
+    pub station_clock: Option<PathBuf>,
+}
+
+/// The station clock page (layout shared with native/simclock/simclock.c).
+struct StationClock {
+    map: *mut u64,
+    rate_milli: u64,
+    mark: (u64, Instant),
+}
+impl StationClock {
+    fn open(path: &Path, initial_rate: f64) -> Result<Self> {
+        let f = OpenOptions::new().create(true).read(true).write(true).truncate(true).open(path)?;
+        f.set_len(4096)?;
+        let map = unsafe { libc::mmap(std::ptr::null_mut(), 4096, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0) };
+        ensure!(map != libc::MAP_FAILED, "mapping the station clock page");
+        let mut c = Self { map: map as *mut u64, rate_milli: (initial_rate.max(0.1) * 1000.0) as u64, mark: (0, Instant::now()) };
+        c.publish(0, 0);
+        Ok(c)
+    }
+    fn real_mono_ns() -> u64 {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+        ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+    }
+    /// The window [t, horizon] the station may observe next, and the measured virtual/wall rate.
+    fn publish(&mut self, t: u64, horizon: u64) {
+        let el = self.mark.1.elapsed();
+        if el >= Duration::from_millis(100) {
+            let r = ((t - self.mark.0) as f64 / el.as_nanos() as f64 * 1000.0) as u64;
+            self.rate_milli = (self.rate_milli * 3 + r.max(50)) / 4;
+            self.mark = (t, Instant::now());
+        }
+        unsafe {
+            let seq = std::ptr::read_volatile(self.map);
+            std::ptr::write_volatile(self.map, seq + 1);
+            std::sync::atomic::fence(Ordering::SeqCst);
+            std::ptr::write_volatile(self.map.add(1), t);
+            std::ptr::write_volatile(self.map.add(2), horizon);
+            std::ptr::write_volatile(self.map.add(3), Self::real_mono_ns());
+            std::ptr::write_volatile(self.map.add(4), self.rate_milli);
+            std::sync::atomic::fence(Ordering::SeqCst);
+            std::ptr::write_volatile(self.map, seq + 2);
+        }
+    }
 }
 fn default_quantum_us() -> u64 {
     1000
@@ -152,6 +198,7 @@ fn spawn_node(name: &str, n: &NativeNode, cfg: &NativeConfig, t_global: u64, cau
         .append(true)
         .open(cfg.diagnostics.join(format!("native-{name}.log")))?;
     let fd = child_sock.as_raw_fd();
+    let node_nice: i32 = env::var("FIRMWARE_SIM_NODE_NICE").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
     let mut cmd = Command::new(&n.exe);
     cmd.env("SIM_NODE", name)
         .env("SIM_FD", fd.to_string())
@@ -174,6 +221,9 @@ fn spawn_node(name: &str, n: &NativeNode, cfg: &NativeConfig, t_global: u64, cau
     unsafe {
         cmd.pre_exec(move || {
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            // Board processes yield the host CPU to the station: its compute is not lockstepped, so preempting it
+            // stretches its work in virtual time.
+            libc::nice(node_nice);
             let flags = libc::fcntl(fd, libc::F_GETFD);
             libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
             Ok(())
@@ -231,6 +281,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let clock_mirror = clock_dir.join("virtual-clock.txt");
     atomic_write(&clock_file, "0\n");
     atomic_write(&clock_mirror, "0\n");
+    let mirror_distinct = fs::canonicalize(&clock_mirror).ok() != fs::canonicalize(&clock_file).ok();
     let mut probes_out = OpenOptions::new().create(true).append(true).open(live.join("memory-probes.txt"))?;
     let mut gpio_out = std::io::BufWriter::new(OpenOptions::new().create(true).append(true).open(cfg.diagnostics.join("native-gpio.log"))?);
     let mut can_trace = if cfg.can_trace {
@@ -307,6 +358,10 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let scratch = cfg.scratch.clone();
     let sample_path = scratch.join("sample.txt");
     atomic_write(&sample_path, "0\n");
+    let mut station_clock = match &cfg.station_clock {
+        Some(p) => Some(StationClock::open(p, if cfg.pace > 0.0 { cfg.pace } else { 10.0 })?),
+        None => None,
+    };
     let mut hosts = Vec::new();
     for host in &topology.host_nodes {
         hosts.push(spawn_host_node(host, topology_path.parent().unwrap_or(Path::new(".")), &scratch, &sample_path, &host_serial_paths, false)?);
@@ -314,7 +369,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let wall0 = Instant::now();
     let mut t: u64 = 0;
     let mut second: u64 = 0;
-    let mut last_clock_write = Instant::now();
+    let mut last_clock_ms: u64 = u64::MAX;
     let mut stim_last: BTreeMap<String, String> = BTreeMap::new();
     let mut next_stim: u64 = 0;
     let mut gate_cut: BTreeMap<String, bool> = BTreeMap::new();
@@ -418,6 +473,9 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     }
                 }
             }
+        }
+        if let Some(c) = station_clock.as_mut() {
+            c.publish(t, horizon);
         }
         // ---- step every node to the horizon
         for p in procs.iter_mut().filter(|p| p.alive) {
@@ -547,11 +605,13 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             }
         }
         // ---- virtual clock for the station and the controller
-        if last_clock_write.elapsed() >= Duration::from_micros(500) || t % 1_000_000_000 == 0 {
+        if t / 1_000_000 != last_clock_ms {
+            last_clock_ms = t / 1_000_000;
             let text = format!("{}\n", t / 1_000_000);
             atomic_write(&clock_file, &text);
-            atomic_write(&clock_mirror, &text);
-            last_clock_write = Instant::now();
+            if mirror_distinct {
+                atomic_write(&clock_mirror, &text);
+            }
         }
         // ---- per virtual second: probes, scheduled events
         if t >= next_second {
@@ -618,6 +678,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
         "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
         "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
+        "station_clock": cfg.station_clock.is_some(),
         "pico": pico_model.as_ref().map(|p| p.stats)});
     atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
     eprintln!("[native-bay] done: {:.1} s virtual in {:.1} s wall, {} steps", t as f64 / 1e9, wall0.elapsed().as_secs_f64(), steps);
