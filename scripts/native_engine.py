@@ -51,6 +51,9 @@ def own_args(argv):
     p.add_argument('--station-clock', choices=['lockstep', 'faketime'], default='lockstep',
                    help='lockstep: the station clocks follow the bay (native/simclock; --native-pace is then only a cap, '
                         '0 = none); faketime: the station runs at a fixed rate (--native-pace) and the bay is paced to it')
+    p.add_argument('--station-lockstep', choices=['threads', 'off'], default='off',
+                   help='threads (with --station-clock lockstep): virtual time advances only once every station thread is '
+                        'parked past it, so the stations keep up at any speed; off: the station clock follows the bay only')
     return p.parse_known_args(argv)
 
 
@@ -115,7 +118,10 @@ def ensure_simclock():
     src = NATIVE / 'simclock/simclock.c'; out = ROOT / 'build/native/simclock.so'
     if not out.exists() or src.stat().st_mtime > out.stat().st_mtime:
         out.parent.mkdir(parents=True, exist_ok=True)
-        _sp.check_call(['gcc', '-O2', '-shared', '-fPIC', '-o', str(out), str(src), '-ldl'])
+        # build beside and rename: stations of other runs may have the current library mapped
+        tmp = out.with_name(f'{out.name}.{os.getpid()}')
+        _sp.check_call(['gcc', '-O2', '-shared', '-fPIC', '-o', str(tmp), str(src), '-ldl', '-lpthread'])
+        os.replace(tmp, out)
     return out
 
 
@@ -282,7 +288,7 @@ def install(FN, opts):
         (diag / 'temp' / 'native').symlink_to(scratch)
         mapping = container_map(out, config, diag, gsroot, gsdir, rtmp)
         pace = opts.native_pace
-        for host in topo['host_nodes']:
+        for slot, host in enumerate(topo['host_nodes']):
             host['binary'] = str(native_gs_binary(gsdir)) if host['binary'] == '/usr/local/bin/groundstation_backend' else remap(host['binary'], mapping)
             host['cwd'] = str(gsroot) if host.get('cwd') in (None, '/opt/groundstation') else remap(host['cwd'], mapping)
             env = host['env']
@@ -299,6 +305,9 @@ def install(FN, opts):
                 for k in ('FAKETIME', 'FAKETIME_DONT_FAKE_MONOTONIC'): env.pop(k, None)
                 env['LD_PRELOAD'] = str(ensure_simclock())
                 env['SIMCLOCK_FILE'] = str(scratch / 'station-clock.page')
+                if opts.station_lockstep == 'threads':
+                    env['SIMCLOCK_ACCT_FILE'] = str(scratch / 'station-clock.acct')
+                    env['SIMCLOCK_SLOT'] = str(slot)
                 env['SIMCLOCK_EPOCH_MS'] = str(calendar.timegm(time.strptime(start, '%Y-%m-%d %H:%M:%S')) * 1000)
             else:
                 env['FAKETIME'] = '@%s x%.6f' % (start, pace)
@@ -347,6 +356,10 @@ def install(FN, opts):
         NativeState.native_cmd = ncmd; NativeState.net = net
         # The Renode container's simulator settings (radio retries, modem models, traces) apply to the native bay too.
         NativeState.bay_env = {k: remap(v, mapping) for k, v in env_opts.items() if k.startswith(('FIRMWARE_SIM_', 'SEDS_'))}
+        if opts.station_clock == 'lockstep' and opts.station_lockstep == 'threads':
+            NativeState.bay_env.setdefault('FIRMWARE_SIM_STATION_LOCKSTEP', 'threads')
+            # station timers may fire up to two quanta late, so a window holds a station tick and board work together
+            NativeState.bay_env.setdefault('FIRMWARE_SIM_STATION_DEADLINE_SLACK_US', str(2 * opts.native_quantum_us))
         (out / 'command.json').write_text(json.dumps({'engine': 'native', 'command': ncmd, 'renode_equivalent': cmd}, indent=2))
         return out, diag, key, ncmd, name, net, missing
 

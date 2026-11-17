@@ -113,9 +113,8 @@ Measured (clock_steps, current dev boards and station f34453b):
   budget or an empty recording window right after StartWritingNow. The default stays a 10x cap
   (`--native-pace 10`), stable; use `--native-pace 0` for exploratory sweeps.
 
-Removing the remaining limit needs the station's compute in the lockstep too: grant it virtual time only while all of
-its threads are blocked (the simclock can report that through the same page from its wait wrappers), after which the
-whole system is lockstep and deterministic. `--station-clock faketime` keeps the previous fixed-rate libfaketime mode.
+`--station-lockstep threads` puts the station's compute in the lockstep too: virtual time is granted only while
+all of its threads are parked (see Status, Phase 3). `--station-clock faketime` keeps the previous fixed-rate libfaketime mode.
 
 ## What stays Renode-only
 
@@ -192,25 +191,67 @@ latest Renode acceptance runs keeps the native tier honest.
   |---|---|---|---|
   | rrls_takeover (cut 200-320 s, GS->RRLS loss 0-14 s) | 7215 s (TS-takeover-70f5f97) | 38 s | 9/9 both; RRLS Abort latched 503 ms vs 507-509 ms |
   | bench_symptoms (normal, RRLS, 200 s) | 5208 s (dev-confirm) | 23 s (pace 10), 103 s (pace 2) | both checks pass |
-  | rrls_relay (new; cut 120-400 s) | - | 47 s | reproduces both field reports (below) |
+  | rrls_relay (new; cut 120-560 s) | - | 47 s (pace 10), 294 s (pace 2) | reproduces both field reports on f34453b, all pass on a2bd517 (below) |
+  | rrls_idle (600 s idle) | 16320 s (I3-idle-dev-b15b54c) | 467 s (pace 2) | 7/7 on f34453b and a2bd517 |
 
   Latency parity caveat: the controllers measure latencies by polling on the wall clock (0.1-0.5 s). Natively the
   resolution is that poll period times the pace: underglow confirmation p50 measured 914 ms at 10x and 409 ms at 2x,
   against 221 ms in Renode (whose 1/20 pace makes polling fine-grained). Use `--native-pace 1` or lower when a
   sub-second latency is the result.
 
-  rrls_relay reproduces the 2026-11-17 field reports. In relay mode (only the primary's direct path is cut, and the
-  primary asks for the relay):
-  * the boards apply every underglow toggle from either station within 1-2 s;
-  * the RRLS never shows the underglow requested or confirmed within 45 s (`requested`/`actuated` stay null);
-  * one RRLS-proxied toggle that the boards applied ended `unknown` ("Primary response was not confirmed").
-* Station-idle grant (open): `FIRMWARE_SIM_STATION_IDLE_GRANT=1` holds virtual time while the stations' threads use
-  more than 30% of a core (schedstat, checked every 2 ms). Measured uncapped on clock_steps: 1 of 3 runs passed and
-  the run slowed from 9 s to 16 s, so it is off by default. The failures are the station's final-clock 100 ms retry
-  budget, which is measured on the (virtual) monotonic clock: lock contention lasting under a millisecond of wall
-  time costs 18 ms of virtual time at 18x, so the sampler cannot see it. Two fixes would work:
-  * lockstep at the station's thread level: simclock counts runnable threads in its wait wrappers, and the
-    coordinator grants only when none are runnable;
-  * a sim-only station switch that measures that busy budget on the wall clock.
-  
-  Until then `--native-pace 10` (stable) remains the default.
+  rrls_relay reproduces the 2026-11-17 field reports, and shows them fixed by GS a2bd517. In relay mode (only the
+  primary's direct path is cut, and the primary asks for the relay), the scenario toggles the underglow 3 times from
+  each station, then changes the primary's flight state (Advance, Armed, Rewind) and T clock (Launch, ResetTClock)
+  and times the RRLS's view (websocket FlightState, `/api/launch_clock`). Two runs per station build, pace 2,
+  `--sched '{"cut0":120,"cut1":560}'`:
+
+  | in relay | f34453b (before) | a2bd517 (after) |
+  |---|---|---|
+  | boards apply every toggle (either origin) | 0.6-2.0 s | 0.6-1.9 s |
+  | RRLS underglow row requested + confirmed | never within 45 s (0 of 12 toggles) | 11 of 12 at or before the primary's row; 1 at 3.9 s after the boards, the same moment as the primary's own row |
+  | RRLS-proxied outcome | `unknown` in 3 of 6 ("Primary response was not confirmed"), others `accepted_by_primary` | `accepted_by_primary` in 6 of 6 |
+  | RRLS flight state after the primary's change | Startup throughout (the RRLS presents its own) | 0.3-1.0 s after the primary |
+  | RRLS T clock after Launch | never (run 1); 3.4 s (run 2) | 0-0.6 s |
+  | RRLS T clock after ResetTClock | stays t_minus (run 2) | 0-0.6 s |
+
+  `device_confirmed` stays false on accepted proxied toggles in both builds (the RRLS's own confirmation is the
+  underglow row). While relaying, the primary's own underglow row sometimes confirms 3.9-4.7 s after the boards
+  applied the toggle (3 of 24 toggles: 2 on a2bd517, 1 on f34453b), so it is not a regression of a2bd517. On
+  a2bd517 the RRLS row then follows the primary's at once; that is the one RRLS row over 3 s.
+
+  rrls_idle (harness of radio-tx-storm-20261109, `--controller .../fullnet_calib.py`, 600 s idle, pace 2) passes 7/7
+  natively on both f34453b and a2bd517: RRLS capability after the restart in 8.5 s / 10.5 s, no capability gap and no
+  Offline over 600 s, RRLS underglow confirmed 4-5 ms after the GS. The Renode runs of that scenario on older
+  stations (b15b54c, 5216d24, 2664546) failed the capability/Offline checks; native does not reproduce those.
+* Thread-level station lockstep (`--station-lockstep threads`, opt-in). simclock keeps a table of every station
+  thread: running, parked without a deadline, or parked until a virtual deadline (sleep, timed futex,
+  epoll/poll/ppoll; fsync/fdatasync count as parked, so the host disk does not set the pace). In this mode:
+  * the station's clocks read the granted horizon;
+  * the bay grants the next window only once no station thread runs and none is due (seen quiet for 30 us,
+    capped at 50 ms per step);
+  * the bay wakes due threads with a signal;
+  * a window ends at the next station deadline plus `FIRMWARE_SIM_STATION_DEADLINE_SLACK_US` (default two quanta).
+
+  Station compute then costs no virtual time, so the final-clock retry budget cannot be starved at any speed.
+  Measured uncapped (`--native-pace 0`) on clock_steps (f34453b, host load ~20 from other work):
+
+  | quantum / slack | wall for ~130 s virtual | speed | checks |
+  |---|---|---|---|
+  | 2 ms / 0 | 44 s | 2.8x | 38/38 |
+  | 2 ms / 2 ms | 28 s | 4.7x | 38/38 |
+  | 4 ms / 4 ms | 16 s | 8.1x | 38/38 |
+  | 4 ms / 8 ms | 15 s | 9.4x | 38/38 |
+  | 4 ms / 8 ms, 3 runs in parallel | 23 s each | 6x each (18x total) | 38/38 x3 |
+  | 10 ms / 10 ms | - | - | 13/38 (the boards' CAN timing needs quanta of at most 4 ms) |
+
+  rrls_takeover in this mode (4 ms / 8 ms, uncapped): 9/9 in 52 s (6.9x, two stations and 7 boards). Its Abort latch
+  time reads 384-388 ms (507-509 ms at pace 10, 503 ms in Renode); at this speed the controller's wall-clock polling
+  is too coarse to compare.
+
+  The bound is now the station's own periodic work: its tokio runtime and Pico-Fi poller wake every 1 ms, and each
+  wake costs about 0.25 ms of wall time on this host, so a single run tops out near 10x. More than 12x needs coarser
+  station ticks (more slack, so timers fire later) or less station work per tick, not more lockstep. Throughput
+  scales with parallel runs: 3 at once all passed, where uncapped runs without the lockstep failed 2 of 3. The default
+  stays `--station-lockstep off` with `--native-pace 10`. For throughput, use
+  `--station-lockstep threads --native-pace 0 --native-quantum-us 4000` with several runs in parallel.
+  `FIRMWARE_SIM_STATION_IDLE_GRANT` (the earlier schedstat governor) is superseded.

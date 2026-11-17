@@ -92,6 +92,85 @@ pub struct NativeConfig {
     pub station_clock: Option<PathBuf>,
 }
 
+/// Per-thread accounting of the host stations (layout shared with native/simclock/simclock.c): per station slot,
+/// ACCT_THREADS u64 entries: 0 free, 1 running, 2 parked without deadline, 3 + virtual deadline when parked until then.
+const ACCT_THREADS: usize = 1024; // states, then as many thread ids
+const ACCT_SLOTS: usize = 8;
+struct StationAcct {
+    map: *mut u64,
+}
+impl StationAcct {
+    /// Forget a station's threads (it was killed; its restart starts a fresh table).
+    fn clear(&self, slot: usize) {
+        for i in slot * 2 * ACCT_THREADS..(slot + 1) * 2 * ACCT_THREADS {
+            unsafe { std::ptr::write_volatile(self.map.add(i), 0) };
+        }
+    }
+    fn open(path: &Path) -> Result<Self> {
+        let f = OpenOptions::new().create(true).read(true).write(true).truncate(true).open(path)?;
+        let len = ACCT_THREADS * 16 * ACCT_SLOTS;
+        f.set_len(len as u64)?;
+        let map = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0) };
+        ensure!(map != libc::MAP_FAILED, "mapping the station thread table");
+        Ok(Self { map: map as *mut u64 })
+    }
+    /// (threads running, threads due by `t`, threads parked): a station is idle at `t` when nothing runs and nothing is due.
+    fn state(&self, t: u64) -> (u32, u32, u32) {
+        let (mut run, mut due, mut parked) = (0, 0, 0);
+        for i in (0..ACCT_SLOTS).flat_map(|s| s * 2 * ACCT_THREADS..s * 2 * ACCT_THREADS + ACCT_THREADS) {
+            let v = unsafe { std::ptr::read_volatile(self.map.add(i)) };
+            match v {
+                0 => {}
+                1 => run += 1,
+                2 => parked += 1,
+                d if d - 3 <= t => due += 1,
+                _ => parked += 1,
+            }
+        }
+        (run, due, parked)
+    }
+    /// Wake every thread parked until a deadline at or before `h` (the window just granted).
+    fn kick(&self, h: u64) {
+        let sig = libc::SIGRTMIN() + 6;
+        for s in 0..ACCT_SLOTS {
+            for i in 0..ACCT_THREADS {
+                let v = unsafe { std::ptr::read_volatile(self.map.add(s * 2 * ACCT_THREADS + i)) };
+                if v >= 3 && v - 3 <= h {
+                    let tid = unsafe { std::ptr::read_volatile(self.map.add(s * 2 * ACCT_THREADS + ACCT_THREADS + i)) };
+                    if tid > 0 {
+                        unsafe { libc::syscall(libc::SYS_tkill, tid as libc::c_long, sig as libc::c_long) };
+                    }
+                }
+            }
+        }
+    }
+    /// The earliest deadline a station thread is parked until, after `t`.
+    fn next_deadline(&self, t: u64) -> Option<u64> {
+        (0..ACCT_SLOTS)
+            .flat_map(|s| s * 2 * ACCT_THREADS..s * 2 * ACCT_THREADS + ACCT_THREADS)
+            .map(|i| unsafe { std::ptr::read_volatile(self.map.add(i)) })
+            .filter(|&v| v >= 3 && v - 3 > t)
+            .map(|v| v - 3)
+            .min()
+    }
+    /// Names of the threads running or due at `t` (diagnostics for a step that hit the cap).
+    fn culprits(&self, t: u64) -> Vec<String> {
+        let mut out = Vec::new();
+        for s in 0..ACCT_SLOTS {
+            for i in 0..ACCT_THREADS {
+                let v = unsafe { std::ptr::read_volatile(self.map.add(s * 2 * ACCT_THREADS + i)) };
+                let busy = v == 1 || (v >= 3 && v - 3 <= t);
+                if busy {
+                    let tid = unsafe { std::ptr::read_volatile(self.map.add(s * 2 * ACCT_THREADS + ACCT_THREADS + i)) };
+                    let comm = fs::read_to_string(format!("/proc/{tid}/comm")).unwrap_or_default();
+                    out.push(format!("{s}:{}:{}", comm.trim(), if v == 1 { "run" } else { "due" }));
+                }
+            }
+        }
+        out
+    }
+}
+
 /// The station clock page (layout shared with native/simclock/simclock.c).
 struct StationClock {
     map: *mut u64,
@@ -396,6 +475,23 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         Some(p) => Some(StationClock::open(p, if cfg.pace > 0.0 { cfg.pace } else { 10.0 })?),
         None => None,
     };
+    // Thread-level station lockstep: virtual time moves on only once every station thread is parked past it.
+    let lockstep_threads = station_clock.is_some()
+        && env::var("FIRMWARE_SIM_STATION_LOCKSTEP").map(|v| v == "threads").unwrap_or(false);
+    let station_acct = match (&cfg.station_clock, lockstep_threads) {
+        (Some(p), true) => Some(StationAcct::open(&p.with_extension("acct"))?),
+        _ => None,
+    };
+    let idle_cap = Duration::from_micros(
+        env::var("FIRMWARE_SIM_STATION_IDLE_CAP_US").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000),
+    );
+    let quiet = Duration::from_micros(env::var("FIRMWARE_SIM_STATION_QUIET_US").ok().and_then(|v| v.parse().ok()).unwrap_or(30));
+    // a station timer may fire up to this late, so its window can hold board work too (0: exactly on time)
+    let deadline_slack: u64 =
+        env::var("FIRMWARE_SIM_STATION_DEADLINE_SLACK_US").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) * 1000;
+    let (mut idle_waits, mut idle_wait_ns, mut idle_cap_hits) = (0u64, 0u64, 0u64);
+    let mut idle_cap_state: (u32, u32, u32) = (0, 0, 0);
+    let mut idle_culprits: BTreeMap<String, u64> = BTreeMap::new();
     let mut hosts = Vec::new();
     for host in &topology.host_nodes {
         hosts.push(spawn_host_node(host, topology_path.parent().unwrap_or(Path::new(".")), &scratch, &sample_path, &host_serial_paths, false)?);
@@ -464,6 +560,51 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 thread::sleep(Duration::from_micros(500));
                 waited += Duration::from_micros(500);
             }
+        }
+        // ---- thread-level station lockstep: wait until no station thread runs or is due by the granted horizon `t`,
+        // and it stayed so for FIRMWARE_SIM_STATION_QUIET_US (a thread just woken by another is then seen running),
+        // up to the cap per step. Spins first (most steps settle in microseconds), then sleeps.
+        if let Some(acct) = station_acct.as_ref() {
+            let w0 = Instant::now();
+            let mut quiet_since: Option<Instant> = None;
+            let mut waited = false;
+            let mut last_kick = w0;
+            loop {
+                let st = acct.state(t);
+                let now = Instant::now();
+                if st.0 == 0 && st.1 == 0 {
+                    let q = *quiet_since.get_or_insert(now);
+                    if now - q >= quiet { break; }
+                } else {
+                    quiet_since = None;
+                    waited = true;
+                    if st.1 > 0 && now - last_kick >= Duration::from_micros(200) {
+                        acct.kick(t); // a thread that parked just after the last kick
+                        last_kick = now;
+                    }
+                }
+                if now - w0 >= idle_cap {
+                    idle_cap_hits += 1;
+                    idle_cap_state = st;
+                    for c in acct.culprits(t) {
+                        *idle_culprits.entry(c).or_default() += 1;
+                    }
+                    break;
+                }
+                if now - w0 < Duration::from_millis(2) {
+                    thread::yield_now();
+                } else {
+                    thread::sleep(Duration::from_micros(50));
+                }
+            }
+            if waited {
+                idle_waits += 1;
+                idle_wait_ns += w0.elapsed().as_nanos() as u64;
+            }
+        }
+        // lockstep: a station timer ends the window, so it fires at its own virtual time
+        if let Some(d) = station_acct.as_ref().and_then(|a| a.next_deadline(t)) {
+            horizon = horizon.min((d + deadline_slack).max(t + 1));
         }
         // ---- pace against the wall clock
         if cfg.pace > 0.0 {
@@ -605,6 +746,9 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         }
         if let Some(c) = station_clock.as_mut() {
             c.publish(t, horizon);
+        }
+        if let Some(a) = station_acct.as_ref() {
+            a.kick(horizon);
         }
         // ---- step every node to the horizon
         for p in procs.iter_mut().filter(|p| p.alive) {
@@ -813,6 +957,9 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     // Host station power cycle: same serial links and clock page, logs appended.
                     unsafe { libc::kill(hosts[h].child.id() as i32, libc::SIGKILL) };
                     let _ = hosts[h].child.wait();
+                    if let Some(a) = station_acct.as_ref() {
+                        a.clear(h);
+                    }
                     // The previous process's exclusive open (TIOCEXCL) outlives it on a line we keep open.
                     for (_, fd) in slave_fds.iter().filter(|(n, _)| n == &rb.node) {
                         unsafe { libc::ioctl(*fd, libc::TIOCNXCL) };
@@ -828,7 +975,8 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             }
             let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
                 "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets,
-                "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step});
+                "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step,
+                "station_idle_waits": idle_waits, "station_idle_cap_hits": idle_cap_hits, "station_idle_culprits": idle_culprits});
             atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
         }
     }
@@ -853,6 +1001,8 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
         "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
         "station_clock": cfg.station_clock.is_some(), "station_idle_grant": idle_grant, "station_busy_waits": station_waits,
+        "station_lockstep_threads": lockstep_threads, "station_idle_waits": idle_waits, "station_idle_wait_s": idle_wait_ns as f64 / 1e9,
+        "station_idle_cap_hits": idle_cap_hits, "station_idle_cap_last": [idle_cap_state.0, idle_cap_state.1, idle_cap_state.2], "station_idle_culprits": idle_culprits,
         "radio": radios.iter().map(|r| (r.0.link.clone(), r.0.modems.iter().map(|m| (m.name.clone(), m.stats)).collect::<Vec<_>>())).collect::<Vec<_>>(),
         "pico": pico_model.as_ref().map(|p| p.stats)});
     atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
