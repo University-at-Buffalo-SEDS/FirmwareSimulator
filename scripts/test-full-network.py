@@ -2611,6 +2611,12 @@ def ui_contract_check(sim):
 
 
 if __name__ == '__main__':
+    # --engine native: the same scenarios on host-compiled firmware (scripts/native_engine.py, docs/native-sitl.md).
+    if '--engine' in sys.argv:
+        i = sys.argv.index('--engine'); engine = sys.argv[i + 1]; del sys.argv[i:i + 2]
+        if engine == 'native':
+            os.execv(sys.executable, [sys.executable, str(W / 'native_engine.py'), '--controller', str(Path(__file__).resolve()), *sys.argv[1:]])
+        assert engine == 'renode', f'--engine {engine}: native or renode'
     p = argparse.ArgumentParser()
     p.add_argument('--mode', choices=['hitl', 'test_fire', 'normal', 'hitl_mode', 'test_fire_mode'], required=True,
                    help='GS_STATION_MODE for the one-binary backend (legacy *_mode names accepted)')

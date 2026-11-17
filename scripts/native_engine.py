@@ -331,6 +331,18 @@ def main():
         main_block = '\n' * src[:cut].count('\n') + src[cut:]
         exec(compile(main_block, str(opts.controller), 'exec'), FN.__dict__)
     finally:
+        ev = controller_arg(rest, '--evidence')
+        try:
+            # The engine's own record beside the scenario result: pace held (the station shares the time base only
+            # while the lockstep keeps up with it), steps, CAN/Pico traffic, resets.
+            res_p = Path(ev) / 'result.json'; rep_p = Path(ev) / 'diagnostics/native-report.json'
+            if res_p.exists() and rep_p.exists():
+                res = json.loads(res_p.read_text()); rep = json.loads(rep_p.read_text())
+                res['engine'] = 'native'; res['native_engine'] = rep
+                res['native_pace_held'] = rep.get('max_lag_ms', 0) <= 500
+                res_p.write_text(json.dumps(res, indent=2, default=str) + '\n')
+        except (OSError, ValueError):
+            pass
         if NativeState.scratch and NativeState.scratch.exists():
             for f in NativeState.scratch.glob('*.log'):
                 try: shutil.copyfile(f, Path(controller_arg(rest, '--evidence')) / 'diagnostics' / f'native-{f.name}')
