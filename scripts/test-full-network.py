@@ -63,7 +63,9 @@ def build_config(a):
              for n, k in [('self-test', 'valve_self_test'), ('nitrogen', 'nitrogen_test')]]
     (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': True, 'checklists': [
         {'id': 'checkout', 'title': 'Checkout', 'required_before_launch': True, 'items': items}]}))
-    (config / 'calibration.json').write_text(json.dumps({'version': 1, 'ch1': {'m': 100, 'b': 0}, 'iadc': {'m': 1, 'b': 0}, 'kg50_input': 'amp2',
+    (config / 'calibration.json').write_text(json.dumps({'version': 1, 'ch1': {'m': 100, 'b': 0}, 'iadc': {'m': 1, 'b': 0},
+        # input_faults selects the P6 differential so the DAQ runs its P6 leg checks.
+        'kg50_input': 'p6_differential' if a.scenario == 'input_faults' else 'amp2',
         'extra_channels': {'kg50': {'linear': {'m': 100, 'b': 0}, 'zero_raw': None, 'points': [], 'fit': None}}}))
     for n in ('checklists', 'calibration', 'gse'):
         p = diag / 'state' / f'{n}.json'; p.write_text((config / f'{n}.json').read_text()); p.chmod(0o660)
@@ -182,6 +184,11 @@ def build_config(a):
             F.add_probes(layout, symbols, [('valve_abort', 'g_sim_valve_aborted', 0), ('vb_op_stage_word', 'g_overpressure', 32), ('vb_op_trips_word', 'g_overpressure', 28)], miss)
         if name == 'daq':
             next(p for p in layout['peripherals'] if p.get('model') == 'mcp3564r')['stimulus_path'] = '/diagnostics/loadcell.raw'
+            adc1 = next((p for p in layout['peripherals'] if p.get('bus') == 'adc1'), None)
+            if adc1 is not None and a.scenario == 'input_faults':
+                # VMON (VMAIN / 11) and the other ADC1 inputs as a stimulus the scenario drives.
+                adc1['stimulus_path'] = '/diagnostics/daq-adc1.raw'
+                F.atomic(diag / 'daq-adc1.raw', ','.join(map(str, adc1['channel_samples'])))
         if name == 'rf':
             g = next(p for p in layout['peripherals'] if p.get('model') == 'neo_m9n'); g['stimulus_path'] = '/diagnostics/gps.fix'
         if name == 'actuator':
@@ -2609,6 +2616,77 @@ def ui_contract_check(sim):
                                      'log': str(d / 'ui-decode.log')})
     sim.result['passed'] = all(c['pass'] for c in sim.result['checks']); sim.write_result()
 
+
+
+INPUT_FAULT_PATTERNS = ['vmain_boot_low', 'kg1000_rail_code', 'kg1000_clip', 'kg1000_low_rail', 'p6_splus_dropout', 'dead_chamber']
+
+
+def daq_input_status(sim):
+    code, t = sim.api('/api/network_topology', timeout=20)
+    for h in ((t.get('health') or []) if code == 200 and isinstance(t, dict) else []):
+        if h.get('sender_id') == 'DAQ':
+            return h.get('daq_input') or (h.get('diagnostics') or {}).get('daq_input')
+    return None
+
+
+def sc_input_faults(sim):
+    """DAQ live input-fault detection on the 2026-11-16 test-fire input patterns (scripts/native_signals.py, DAQ-Board
+    tests/fixtures/input_faults_fire_20261116.json): VMAIN at 11.1 V at boot, the KG1000 amplifier clipped at code
+    0xB40000 and at its low rail, the P6 S+ leg dropout, the dead chamber transducer. Each pattern is replayed at its
+    recorded sample times into the DAQ's MCP3564R/ADC1 inputs (--flows selects patterns); the station must report the
+    matching DAQ input fault (/api/network_topology DAQ daq_input) and see it clear after the healthy input returns."""
+    import native_signals as NS
+    a = sim.a; boards = present_boards(sim)
+    snap = sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
+    sim.check('startup: present boards healthy', snap is not None, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in boards})
+    layout = json.loads((sim.out / 'config/daq.json').read_text())
+    adc1 = [int(x) for x in (sim.diag / 'daq-adc1.raw').read_text().split(',')]
+    adc1[NS.VMON_CHANNEL] = NS.adc1_vmon_code(14200)  # bench supply as on the fire day before the dips
+    mcp = NS.nominal_mcp([int(x) for x in (sim.diag / 'loadcell.raw').read_text().split(',')])
+    fx = NS.fixture(a.cohort / F.REPOS['daq']); pats = NS.patterns(fx)
+    native = (sim.diag / 'temp/native').exists()
+    sched = (sim.diag / 'native-signals.txt').open('a') if native else None
+
+    def apply(at_ms, mcp_codes, adc1_codes):
+        if native:
+            sched.write(f"{at_ms} daq mcp3564r {','.join(map(str, mcp_codes))}\n{at_ms} daq adc1 {','.join(map(str, adc1_codes))}\n"); sched.flush()
+        else:
+            wait_until_v(sim, at_ms, 'signal step')
+            F.atomic(sim.diag / 'loadcell.raw', ','.join(map(str, mcp_codes))); F.atomic(sim.diag / 'daq-adc1.raw', ','.join(map(str, adc1_codes)))
+
+    apply(sim.vclock() + 200, mcp, adc1)
+    sim.wait_v(12000)
+    st = daq_input_status(sim)
+    sim.check('baseline: DAQ input health reported, no active input fault', st is not None and not any(f.get('active') for f in st.get('faults') or []),
+              status=st)
+    for name in [x for x in a.flows.split(',') if x] or INPUT_FAULT_PATTERNS:
+        key, rows = pats[name]
+        t0 = sim.vclock() + 1000; cur_m, cur_a = list(mcp), list(adc1)
+        for t, step_ in rows:
+            for ch, c in (step_.get('mcp') or {}).items(): cur_m[ch] = c
+            for ch, c in (step_.get('adc1') or {}).items(): cur_a[ch] = c
+            apply(t0 + t, list(cur_m), list(cur_a))
+        end = t0 + rows[-1][0] + 300
+        apply(end, mcp, adc1)
+        seen = []; first = None
+        while sim.vclock() < end + 6000 and not sim.stop.is_set():
+            st = daq_input_status(sim) or {}
+            f = next((x for x in st.get('faults') or [] if x.get('key') == key), {})
+            if f.get('active') or f.get('latched'):
+                first = first or sim.vclock() - t0
+            seen.append((sim.vclock() - t0, bool(f.get('active')), bool(f.get('latched')), f.get('episodes')))
+            sim.wait_v(500)
+        sim.log_action('input_fault_pattern', pattern=name, key=key, first_ms=first, samples=seen[-6:])
+        sim.check(f'{name}: station reports the DAQ input fault {key}', first is not None, first_ms=first,
+                  last=seen[-3:], vmain_min_mv=st.get('vmain_min_mv'), chamber_min_mv=st.get('chamber_min_mv'),
+                  p6_imbalance_max_mv=st.get('p6_imbalance_max_mv'))
+        cleared = sim.wait_until(lambda s_: not next((x.get('active') for x in (daq_input_status(sim) or {}).get('faults') or [] if x.get('key') == key), False),
+                                 20000, f'{name} clears')
+        sim.check(f'{name}: the fault clears once the healthy input returns', cleared is not None)
+    sim.save_snapshot('end')
+
+
+SCENARIOS['input_faults'] = sc_input_faults
 
 if __name__ == '__main__':
     # --engine native: the same scenarios on host-compiled firmware (scripts/native_engine.py, docs/native-sitl.md).

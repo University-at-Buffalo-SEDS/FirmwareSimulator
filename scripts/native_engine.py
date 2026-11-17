@@ -45,6 +45,9 @@ def own_args(argv):
     p.add_argument('--drift', action='append', default=[])
     p.add_argument('--firmware-sim', type=Path)
     p.add_argument('--native-build-jobs', type=int, default=8)
+    p.add_argument('--native-blank-flash', default='',
+                   help='NODE[,NODE] or all: first boot on fully erased flash (no bootloader/app/metadata image) instead '
+                        'of the factory image, as a board flashed by debugger with storage wiped')
     p.add_argument('--station-clock', choices=['lockstep', 'faketime'], default='lockstep',
                    help='lockstep: the station clocks follow the bay (native/simclock; --native-pace is then only a cap, '
                         '0 = none); faketime: the station runs at a fixed rate (--native-pace) and the bay is paced to it')
@@ -313,7 +316,8 @@ def install(FN, opts):
             cohort_factory = None
             for f in sorted((a.cohort / NODE_REPO[nname]).glob('build/*/*.factory.bin')):
                 cohort_factory = str(f); break
-            nodes[nname] = {'exe': man['exe'], 'flash_init': cohort_factory or man.get('factory_bin'),
+            blank = opts.native_blank_flash == 'all' or nname in opts.native_blank_flash.split(',')
+            nodes[nname] = {'exe': man['exe'], 'flash_init': None if blank else (cohort_factory or man.get('factory_bin')),
                             'flash_size': (board_layout.get('memory') or {}).get('flash_size', 524288), 'devices': str(dev),
                             'drift_ppm': drift.get(nname, 0), 'env': {}}
         gates = []

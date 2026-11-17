@@ -372,6 +372,9 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut last_clock_ms: u64 = u64::MAX;
     let mut stim_last: BTreeMap<String, String> = BTreeMap::new();
     let mut next_stim: u64 = 0;
+    let mut next_sig_poll: u64 = 0;
+    let mut sig_offset: u64 = 0;
+    let mut sig_queue: Vec<(u64, String, String, String)> = Vec::new();
     let mut gate_cut: BTreeMap<String, bool> = BTreeMap::new();
     let mut next_gate_poll = Instant::now();
     let mut pico_rx_free_at: u64 = 0;
@@ -450,6 +453,42 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     p.inbound.push((start, MSG_UART_RX, m));
                 }
                 uart_bytes[1] += frame.len() as u64;
+            }
+        }
+        // ---- scripted signals: diagnostics/native-signals.txt lines "<virtual ms> <node> <device> <codes>" (appended by
+        // scenarios; applied at their virtual time, so fast fault patterns keep their sample spacing)
+        if t >= next_sig_poll {
+            next_sig_poll = t + 20_000_000;
+            if let Ok(mut f) = fs::File::open(cfg.diagnostics.join("native-signals.txt")) {
+                use std::io::Seek;
+                if f.seek(std::io::SeekFrom::Start(sig_offset)).is_ok() {
+                    let mut text = String::new();
+                    if f.read_to_string(&mut text).is_ok() {
+                        let complete = text.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                        sig_offset += complete as u64;
+                        for line in text[..complete].lines() {
+                            let parts: Vec<&str> = line.split_whitespace().collect();
+                            if parts.len() == 4 {
+                                if let Ok(ms) = parts[0].parse::<u64>() {
+                                    sig_queue.push((ms * 1_000_000, parts[1].to_string(), parts[2].to_string(), parts[3].to_string()));
+                                }
+                            }
+                        }
+                        sig_queue.sort_by_key(|x| x.0);
+                    }
+                }
+            }
+        }
+        while sig_queue.first().is_some_and(|x| x.0 <= horizon) {
+            let (at, node, device, codes) = sig_queue.remove(0);
+            if let Some(p) = procs.iter_mut().find(|p| p.name == node) {
+                let mut dev = [0u8; 16];
+                for (i, b) in device.bytes().take(16).enumerate() {
+                    dev[i] = b;
+                }
+                let mut m = dev.to_vec();
+                m.extend_from_slice(codes.as_bytes());
+                p.inbound.push((at.max(t), MSG_ADC, m));
             }
         }
         // ---- stimulus files (every 100 ms virtual)

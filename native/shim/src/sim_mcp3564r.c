@@ -20,7 +20,7 @@ int sim_adc_count(const char *device);
 static struct {
     int present; char bus[8]; int cs, irq;
     uint8_t regs[64]; uint32_t samples[16];
-    int running, data_ready, channel, latched_channel; uint32_t latched_code;
+    int running, data_ready, channel, latched_channel; int32_t latched_code;
     int position, reading, reg_addr, reg_byte, data_bytes; uint32_t data;
     int selected; uint64_t transactions;
 } m;
@@ -41,13 +41,13 @@ static void select_channel(void)
     if (!mask) { m.channel = (reg(6) >> 4) & 7; return; }
     for (int i = 0; i < 16; i++) { if (mask & (1u << m.channel)) return; m.channel = (m.channel + 15) & 15; }
 }
-static uint32_t sample(int ch)
+/* Channel codes: 24-bit two's complement (0..0xFFFFFF, as the Renode fixtures), or 0x1000000 + c for a positive
+ * overrange code c beyond full scale (the 25-bit range the 32-bit formats carry, e.g. 0x1B40000 = +0xB40000). */
+static int32_t sample(int ch)
 {
-    if (sim_adc_count("mcp3564r") >= 16) {
-        int32_t v = sim_adc_sample("mcp3564r", (unsigned)ch, 0);
-        return (uint32_t)v & 0x00FFFFFFu;
-    }
-    return m.samples[ch];
+    uint32_t v = sim_adc_count("mcp3564r") >= 16 ? (uint32_t)sim_adc_sample("mcp3564r", (unsigned)ch, 0) : m.samples[ch];
+    if (v >= 0x1000000u) return (int32_t)(v - 0x1000000u);
+    return (v & 0x00800000u) ? (int32_t)(v | 0xFF000000u) : (int32_t)v;
 }
 static void convert_sample(void) { select_channel(); m.latched_channel = m.channel; m.latched_code = sample(m.channel); }
 static void advance_channel(void)
@@ -102,8 +102,10 @@ static uint8_t transmit(uint8_t v)
             m.data_ready = 0; set_irq(1);
             int fmt = (reg(4) >> 4) & 3;
             m.data_bytes = fmt == 0 ? 3 : 4;
-            uint32_t code = m.latched_code & 0x00FFFFFFu, s = (code & 0x00800000u) ? code | 0xFF000000u : code;
-            m.data = fmt == 0 ? code : fmt == 1 ? code << 8 : fmt == 2 ? s : (((scan_mask() ? (uint32_t)m.latched_channel : 0u) << 28) | (s & 0x0FFFFFFFu));
+            int32_t c = m.latched_code;
+            int32_t clipped = c > 0x7FFFFF ? 0x7FFFFF : c < -0x800000 ? -0x800000 : c;  /* 24-bit formats saturate */
+            uint32_t code = (uint32_t)clipped & 0x00FFFFFFu, s = (uint32_t)c;
+            m.data = fmt == 0 ? code : fmt == 1 ? code << 8 : fmt == 2 ? (uint32_t)clipped : (((scan_mask() ? (uint32_t)m.latched_channel : 0u) << 28) | (s & 0x0FFFFFFFu));
         }
         uint8_t status = (uint8_t)(0x13 | (ready_before ? 0 : 4));
         if (v == 0x78) reset_regs();
