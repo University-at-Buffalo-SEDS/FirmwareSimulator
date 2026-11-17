@@ -290,6 +290,7 @@ def install(FN, opts):
                 env[k] = remap(env[k], mapping)
             # One time base: the station runs at the coordinator's pace (FAKETIME start kept, rate = pace).
             env.pop('GS_SIM_WALL_FRESHNESS_SCALE', None)
+            env.setdefault('TZ', 'UTC')  # as in the container: log stamps are UTC (controllers parse them)
             start = re.match(r'@(\S+ \S+)', env.get('FAKETIME', ''))
             start = start.group(1) if start else '2026-01-01 00:00:00'
             if opts.station_clock == 'lockstep':

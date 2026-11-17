@@ -9,8 +9,49 @@
 use super::*;
 use std::collections::VecDeque;
 
+/// RFD ASYNC 4.03 command mode for a modelled station modem (FIRMWARE_SIM_RFD_MODEM, as the Renode medium):
+/// "+++" with 1 s guard times, echoed command lines, ATI/ATI5/ATSn?/ATSn=/AT&W/ATZ/ATO/AT+F?; ATSn= changes RAM,
+/// AT&W saves it and ATZ (a 1.5 s reboot) makes it active. No air data passes in command mode or while rebooting.
+#[derive(Clone)]
+pub struct ModemRegs {
+    regs: BTreeMap<u32, (String, i64, i64, i64)>, // number -> (name, ram, eeprom, active)
+    state: u8,                                    // 0 data, 1 command, 2 rebooting
+    pluses: u8,
+    plus_t: u64,
+    last_host_t: u64,
+    line: String,
+    reboot_until: u64,
+}
+impl ModemRegs {
+    fn new(overrides: &str) -> Self {
+        let mut regs = BTreeMap::new();
+        for (n, name, v) in [(0, "FORMAT", 27), (1, "SERIAL_SPEED", 115), (2, "AIR_SPEED", 64), (3, "MAX_DATA", 3968), (4, "MAX_RETRIES", 10),
+            (5, "GLOBAL_RETRIES", 10), (6, "SER_BRK_DETMS", 50), (7, "TX_ENCAP_METHOD", 0), (8, "RX_ENCAP_METHOD", 0), (9, "NETID", 25),
+            (10, "NODEID", 2), (11, "DESTID", 32768), (12, "TXPOWER", 30), (13, "MAVLINK1", 0), (14, "MIN_FREQ", 915000),
+            (15, "MAX_FREQ", 928000), (16, "NUM_CHANNELS", 20), (17, "DUTY_CYCLE", 100), (18, "LBT_RSSI", 0), (19, "RTSCTS", 0),
+            (20, "MAX_WINDOW", 131), (22, "RESV", 0)] {
+            regs.insert(n, (name.to_string(), v, v, v));
+        }
+        for item in overrides.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+            if let Some((left, v)) = item.rsplit_once('=') {
+                let (num, name) = left.split_once(':').map(|(a, b)| (a, Some(b))).unwrap_or((left, None));
+                if let (Ok(n), Ok(v)) = (num.parse::<u32>(), v.parse::<i64>()) {
+                    let e = regs.entry(n).or_insert((format!("S{n}"), v, v, v));
+                    if let Some(nm) = name { e.0 = nm.to_string(); }
+                    e.1 = v; e.2 = v; e.3 = v;
+                }
+            }
+        }
+        Self { regs, state: 0, pluses: 0, plus_t: 0, last_host_t: 0, line: String::new(), reboot_until: 0 }
+    }
+    fn active(&self, name: &str) -> Option<i64> {
+        self.regs.values().find(|r| r.0 == name).map(|r| r.3)
+    }
+}
+
 pub struct Modem {
     pub name: String,
+    pub cmd: Option<ModemRegs>,
     tx: VecDeque<u8>,
     tx_last_byte: u64,
     rx: VecDeque<u8>,
@@ -30,14 +71,94 @@ pub struct Medium {
     rng: u64,
 }
 
+fn modem_spec(index: usize) -> Option<ModemRegs> {
+    let spec = env::var("FIRMWARE_SIM_RFD_MODEM").ok()?;
+    for part in spec.split(';') {
+        if let Some((i, o)) = part.split_once('=') {
+            if i.trim().parse::<usize>().ok() == Some(index) {
+                return Some(ModemRegs::new(o));
+            }
+        }
+    }
+    None
+}
+
 impl Medium {
+    fn say(&mut self, i: usize, text: &str) {
+        let m = &mut self.modems[i];
+        for b in text.bytes() {
+            if m.rx.len() < self.p.rx_fifo_bytes { m.rx.push_back(b); } else { m.stats[4] += 1; }
+        }
+    }
+    fn execute(&mut self, i: usize, cmd: &str, t: u64) {
+        let mut reply = String::new();
+        {
+            let r = self.modems[i].cmd.as_mut().unwrap();
+            if cmd == "AT" { reply += "OK\r\n"; }
+            else if cmd == "ATI" { reply += "RFD ASYNC 4.03 on RFD900X2\r\n"; }
+            else if cmd == "ATI5" { for (n, v) in &r.regs { reply += &format!("S{}:{}={}\r\n", n, v.0, v.1); } }
+            else if cmd == "AT+F?" { for slot in 0..10 { reply += &format!("{slot}:0->0,"); } reply += " | FwdBuff=13320\r\n"; }
+            else if cmd == "AT&W" { for v in r.regs.values_mut() { v.2 = v.1; } reply += "OK\r\n"; }
+            else if cmd == "ATZ" { r.state = 2; r.reboot_until = t + 1_500_000_000; }
+            else if cmd == "ATO" { r.state = 0; }
+            else if let Some(rest) = cmd.strip_prefix("ATS") {
+                if let Some(q) = rest.strip_suffix('?') {
+                    match q.parse::<u32>().ok().and_then(|n| r.regs.get(&n)) { Some(v) => reply += &format!("{}\r\n", v.1), None => reply += "ERROR\r\n" }
+                } else if let Some((n, v)) = rest.split_once('=') {
+                    match (n.parse::<u32>(), v.parse::<i64>()) {
+                        (Ok(n), Ok(v)) if r.regs.contains_key(&n) => { r.regs.get_mut(&n).unwrap().1 = v; reply += "OK\r\n"; }
+                        _ => reply += "ERROR\r\n",
+                    }
+                } else { reply += "ERROR\r\n"; }
+            } else { reply += "ERROR\r\n"; }
+        }
+        if !reply.is_empty() { self.say(i, &reply); }
+    }
+    /// Command-mode handling of one host byte; false: the byte is air data.
+    fn modem_input(&mut self, i: usize, b: u8, t: u64) -> bool {
+        let Some(r) = self.modems[i].cmd.as_mut() else { return false };
+        let silent = t >= r.last_host_t + 1_000_000_000;
+        r.last_host_t = t;
+        match r.state {
+            2 => true,
+            1 => {
+                let mut line = None;
+                if b == b'\r' { let l = r.line.trim().to_string(); r.line.clear(); if !l.is_empty() { line = Some(l); } }
+                else if r.line.len() < 128 { r.line.push(b as char); }
+                self.say(i, &(b as char).to_string());
+                if let Some(l) = line { self.execute(i, &l, t); }
+                true
+            }
+            _ => {
+                if b == b'+' && (r.pluses > 0 || silent) && r.pluses < 3 { r.pluses += 1; r.plus_t = t; true }
+                else {
+                    let held = r.pluses; r.pluses = 0;
+                    let m = &mut self.modems[i];
+                    for _ in 0..held { m.tx.push_back(b'+'); }
+                    false
+                }
+            }
+        }
+    }
+    fn modem_tick(&mut self, t: u64) {
+        for i in 0..self.modems.len() {
+            let mut ok = false;
+            if let Some(r) = self.modems[i].cmd.as_mut() {
+                if r.state == 2 && t >= r.reboot_until { r.state = 0; for v in r.regs.values_mut() { v.1 = v.2; v.3 = v.2; } }
+                if r.pluses == 3 && t >= r.plus_t + 1_000_000_000 && r.last_host_t <= r.plus_t { r.pluses = 0; r.state = 1; ok = true; }
+            }
+            if ok { self.say(i, "OK\r\n"); }
+        }
+    }
+    fn reg(&self, i: usize, name: &str) -> Option<i64> { self.modems[i].cmd.as_ref().and_then(|r| r.active(name)) }
     pub fn new(link: &str, p: RadioProfile, names: &[String], seed: u64) -> Self {
         let retries = env::var("FIRMWARE_SIM_RFD_GLOBAL_RETRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
         Self {
             link: link.into(),
             modems: names
                 .iter()
-                .map(|n| Modem { name: n.clone(), tx: VecDeque::new(), tx_last_byte: 0, rx: VecDeque::new(), rx_free_at: 0, stats: [0; 5] })
+                .enumerate()
+                .map(|(i, n)| Modem { name: n.clone(), cmd: modem_spec(i), tx: VecDeque::new(), tx_last_byte: 0, rx: VecDeque::new(), rx_free_at: 0, stats: [0; 5] })
                 .collect(),
             p,
             air_free_at: 0,
@@ -59,39 +180,48 @@ impl Medium {
     }
     /// UART bytes from a station into its modem at virtual time t.
     pub fn uart_in(&mut self, i: usize, t: u64, bytes: &[u8]) {
-        let m = &mut self.modems[i];
-        for &b in bytes {
+        let byte_ns0 = 10_000_000_000 / self.p.uart_baud as u64;
+        for (k, &b) in bytes.iter().enumerate() {
+            if self.modem_input(i, b, t + k as u64 * byte_ns0) { continue; }
+            let m = &mut self.modems[i];
             if m.tx.len() < self.p.tx_fifo_bytes {
                 m.tx.push_back(b);
             } else {
                 m.stats[1] += 1;
             }
         }
+        let m = &mut self.modems[i];
         m.stats[0] += bytes.len() as u64;
         let byte_ns = 10_000_000_000 / self.p.uart_baud as u64;
         m.tx_last_byte = t + bytes.len() as u64 * byte_ns;
     }
     /// Advance the air to `t`: send closed packets, deliver arrivals into RX FIFOs.
     pub fn step(&mut self, t: u64) {
-        let idle_ns = self.p.packet_idle_us * 1000;
+        self.modem_tick(t);
+        let idle_default = self.p.packet_idle_us * 1000;
         loop {
             let mut sent = false;
             for i in 0..self.modems.len() {
+                if self.modems[i].cmd.as_ref().is_some_and(|r| r.state != 0) { continue; }
+                let idle_ns = self.reg(i, "SER_BRK_DETMS").map(|v| v.max(1) as u64 * 1_000_000).unwrap_or(idle_default);
+                let max_burst = self.reg(i, "MAX_DATA").map(|v| (v.max(1) as usize).min(self.p.max_burst_bytes.max(v as usize))).unwrap_or(self.p.max_burst_bytes);
+                let air = self.reg(i, "AIR_SPEED").filter(|v| (4..=1000).contains(v)).map(|v| v as u64 * 1000).unwrap_or(self.p.air_bits_per_second as u64);
+                let retries = self.reg(i, "GLOBAL_RETRIES").map(|v| v.max(0) as u64).unwrap_or(self.retries as u64);
                 let ready = {
                     let m = &self.modems[i];
-                    !m.tx.is_empty() && (m.tx.len() >= self.p.max_burst_bytes || t >= m.tx_last_byte + idle_ns)
+                    !m.tx.is_empty() && (m.tx.len() >= max_burst || t >= m.tx_last_byte + idle_ns)
                 };
                 if !ready {
                     continue;
                 }
-                let start = self.air_free_at.max(self.modems[i].tx_last_byte.min(t)).max(t.saturating_sub(idle_ns));
+                let start = self.air_free_at.max(t);
                 if start > t {
                     continue;
                 }
-                let n = self.modems[i].tx.len().min(self.p.max_burst_bytes);
+                let n = self.modems[i].tx.len().min(max_burst);
                 let bytes: Vec<u8> = self.modems[i].tx.drain(..n).collect();
-                let copy_ns = ((bytes.len() as u64 * 8 + self.p.overhead_bits as u64) * 1_000_000_000) / self.p.air_bits_per_second as u64;
-                let copies = 1 + self.retries as u64;
+                let copy_ns = ((bytes.len() as u64 * 8 + self.p.overhead_bits as u64) * 1_000_000_000) / air;
+                let copies = 1 + retries;
                 let end = start + self.p.turn_us * 1000 + copy_ns * copies;
                 self.air_free_at = end;
                 self.modems[i].stats[2] += 1;
