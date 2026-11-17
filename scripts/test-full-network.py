@@ -19,6 +19,7 @@ if not _fsim.exists(): _fsim = W / 'src/FirmwareSimulator/scripts/test-operation
 spec = importlib.util.spec_from_file_location('fsim', _fsim)
 F = importlib.util.module_from_spec(spec); spec.loader.exec_module(F)
 BOARDS = ['RF', 'FC', 'PB', 'AB', 'VB', 'GB', 'DAQ']
+SIM_EPOCH_MS = 1767225600000  # GS_SIM_NETWORK_EPOCH_MS: 2026-01-01T00:00:00Z at virtual time 0
 NODE_OF = {'RF': 'rf', 'FC': 'flight', 'PB': 'power', 'AB': 'actuator', 'VB': 'valve', 'GB': 'gateway', 'DAQ': 'daq'}
 CAN_EP = {'rf': ('avionics_can', 'fdcan2'), 'power': ('avionics_can', 'fdcan2'), 'flight': ('avionics_can', 'fdcan1'),
           'gateway': ('fill_can', 'fdcan2'), 'actuator': ('fill_can', 'fdcan2'), 'valve': ('fill_can', 'fdcan2'), 'daq': ('fill_can', 'fdcan1')}
@@ -92,8 +93,13 @@ def build_config(a):
         env['LD_PRELOAD'] = '/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1'
         # Start the dilated station clock at the simulation network epoch (GS_SIM_NETWORK_EPOCH_MS,
         # 2026-01-01T00:00:00Z) so host wall time and the boards' network time share one base.
-        env['FAKETIME'] = '@2026-01-01 00:00:00 x%.6f' % (1.0 / a.faithful_time)
+        start = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(SIM_EPOCH_MS // 1000 + a.gs_clock_offset_ms // 1000))
+        env['FAKETIME'] = '@%s x%.6f' % (start, 1.0 / a.faithful_time)
         env['FAKETIME_DONT_FAKE_MONOTONIC'] = '0'
+    if a.gs_clock_offset_ms:
+        # A station host clock that is off at boot (a Pi without RTC/NTP): the firmware_sim station takes its host
+        # time source from GS_SIM_NETWORK_EPOCH_MS + virtual time, and its wall clock from FAKETIME; move both.
+        env['GS_SIM_NETWORK_EPOCH_MS'] = str(SIM_EPOCH_MS + a.gs_clock_offset_ms)
     for kv in a.gs_env:
         k, v = kv.split('=', 1); env[k] = v
     # A station whose modem the medium models runs its startup modem check against that model
@@ -1318,6 +1324,213 @@ def sc_gps_time(sim):
 SCENARIOS['gps_time'] = sc_gps_time
 
 
+# ------------------------------------------------------------------ operator network clock steps
+CLOCK_FOLLOW_MS = 2000      # board / station clock agreement after a step
+CLOCK_REACH_MS = 5000       # virtual time for the station to read the operator's UTC
+LAUNCH_LOG_MAX_AGE_MS = 11000  # DAQ reports DAQ_LAUNCH_LOG_STATUS with BOARD_HEALTH every 5 s
+
+
+def true_utc_ms(sim):
+    """The operator's (true) UTC: the simulation network epoch plus virtual time."""
+    return SIM_EPOCH_MS + sim.vclock()
+
+
+def network_gap_ms(sim, offset_ms):
+    """Station network time (/api/network_time) minus the expected network time (true UTC + offset_ms)."""
+    code, body = sim.api('/api/network_time')
+    v = sim.vclock()
+    ts = body.get('timestamp_ms') if code == 200 and isinstance(body, dict) else None
+    return (ts - (SIM_EPOCH_MS + v + offset_ms)) if isinstance(ts, (int, float)) else None
+
+
+def clock_spread(rows, w0, w1, boards):
+    """Per board, source stamp minus the station's own interpolated source stamps at the same receive time
+    (recording DB, as clock_report), over station-wall window [w0, w1]."""
+    import bisect
+    gs = sorted((w, src) for w, src, snd in rows if snd == 'GS' and src and src > 1.5e12 and w0 - 5000 <= w <= w1 + 5000)
+    gw = [g[0] for g in gs]
+    def net(w):
+        i = bisect.bisect_left(gw, w)
+        if i <= 0 or i >= len(gs): return None
+        (a0, s0), (a1, s1) = gs[i - 1], gs[i]; return s0 + (s1 - s0) * ((w - a0) / (a1 - a0) if a1 > a0 else 0)
+    out = {}
+    for b in boards:
+        d = sorted(src - n for w, src, snd in rows if snd == b and w0 <= w <= w1 and src for n in [net(w)] if n is not None)
+        out[b] = {'packets': len(d), 'min_ms': round(d[0]) if d else None, 'median_ms': round(d[len(d) // 2]) if d else None,
+                  'max_ms': round(d[-1]) if d else None, 'max_abs_ms': round(max(abs(d[0]), abs(d[-1]))) if d else None}
+    return out
+
+
+def recording_wall_now(sim):
+    """The station's receive wall clock now: the newest recording row's timestamp_ms."""
+    rows = board_clock_rows(sim)
+    return max((w for w, _, _ in rows), default=None), rows
+
+
+def clock_window_sample(sim, label, ms, offset_ms, boards):
+    """Every 2 s for ms virtual: station network gap, valve report health (/api/gse/status valve_reports, valves)
+    and the DAQ launch-log status the station accepted (/api/network_topology health DAQ diagnostics.launch_log)."""
+    out = []; end = sim.vclock() + ms
+    with (sim.out / 'clock-steps.jsonl').open('a') as f:
+        while sim.vclock() < end and not sim.stop.is_set():
+            row = {'label': label, 'v': sim.vclock(), 'net_gap_ms': network_gap_ms(sim, offset_ms)}
+            code, g = sim.api('/api/gse/status')
+            if code == 200 and isinstance(g, dict):
+                row['valves'] = g.get('valves')
+                row['valve_reports'] = {x.get('sender_id'): x for x in (g.get('valve_reports') or [])}
+            code, t = sim.api('/api/network_topology', timeout=20)
+            h = next((x for x in ((t.get('health') or []) if code == 200 and isinstance(t, dict) else []) if x.get('sender_id') == 'DAQ'), {})
+            row['launch_log'] = (h.get('diagnostics') or {}).get('launch_log')
+            row['daq_clock_offset_ms'] = h.get('clock_offset_ms')
+            r = sim.rows()
+            row['boards'] = {b: {k: (r.get(b) or {}).get(k) for k in ('readback_status', 'state', 'recovery_required', 'abort_latched', 'age_ms')} for b in boards}
+            row['flight_state'] = (sim.st().get('rec') or {}).get('flight_state')
+            f.write(json.dumps(row, default=str) + '\n'); f.flush(); out.append(row)
+            sim.wait_v(2000)
+    return out
+
+
+def plumbing_drive_change(sim, label, target=None, timeout_ms=20000):
+    """Operator drive selection (/api/actuator/plumbing/settings, Startup/Idle): switch the actuator's fill drive to
+    target (default: the other of stepper/auxiliary) and wait for the actuator's own readback of it."""
+    t0 = sim.vclock(); tries = []; posted = None
+    while sim.vclock() - t0 < timeout_ms and not sim.stop.is_set():
+        sim.api('/api/actuator/plumbing/query', {}); sim.wait_v(1000)
+        code, st = sim.api('/api/actuator/plumbing/status')
+        board = (st or {}).get('board') or {} if code == 200 and isinstance(st, dict) else {}
+        if target is None and board.get('mode') in ('stepper', 'auxiliary'):
+            target = 'auxiliary' if board['mode'] == 'stepper' else 'stepper'
+        tries.append({'v': sim.vclock(), 'mode': board.get('mode'), 'result': board.get('result'), 'fresh': board.get('fresh'),
+                      'can_configure': (st or {}).get('can_configure') if isinstance(st, dict) else None,
+                      'blocked_reason': (st or {}).get('blocked_reason') if isinstance(st, dict) else None})
+        if posted and board.get('mode') == target and board.get('fresh') and board.get('result') == 'ok':
+            res = {'ok': True, 'target': target, 'confirm_ms': sim.vclock() - posted, 'board': board}
+            break
+        if not posted and isinstance(st, dict) and st.get('can_configure') and target:
+            body = {'mode': target, 'expected_generation': board.get('generation'), 'expected_epoch': board.get('epoch'),
+                    'backend_instance': st.get('backend_instance'), 'expected_revision': (st.get('desired') or {}).get('revision'),
+                    'expected_reset_epoch': st.get('reset_epoch'), 'release_stepper': board.get('mode') == 'stepper' and target == 'auxiliary'}
+            code, reply = sim.api('/api/actuator/plumbing/settings', body)
+            tries[-1].update(post_http=code, post_reply=reply if code >= 300 else {k: (reply or {}).get(k) for k in ('message', 'pending')})
+            if code in (200, 202): posted = sim.vclock()
+        sim.wait_v(1000)
+    else:
+        res = {'ok': False, 'target': target, 'posted': posted is not None}
+    res['attempts'] = tries[-8:]
+    sim.log_action('plumbing_drive_change', label=label, **{k: v for k, v in res.items() if k != 'attempts'}, last=tries[-1:] if tries else None)
+    with (sim.out / 'plumbing.jsonl').open('a') as f: f.write(json.dumps({'label': label, **res}, default=str) + '\n')
+    return res
+
+
+def clock_step_checks(sim, label, offset_ms, boards, settle_ms=10000, window_ms=24000):
+    """The checks settle_ms after a station clock change (or in the steady state), over a window_ms window."""
+    # 1. every board and the station agree, from the recording's source stamps
+    sim.wait_v(settle_ms)
+    w0, _ = recording_wall_now(sim)
+    rows = clock_window_sample(sim, label, window_ms, offset_ms, boards)
+    w_end, db = recording_wall_now(sim)
+    spread = clock_spread(db, w0 or 0, w_end or 0, boards)
+    sim.result.setdefault('clock_spread', {})[label] = spread
+    gaps = [r['net_gap_ms'] for r in rows if r['net_gap_ms'] is not None]
+    sim.check(f'{label}: station network time is the expected UTC (within {CLOCK_FOLLOW_MS} ms) through the window',
+              len(gaps) >= 3 and all(abs(g) <= CLOCK_FOLLOW_MS for g in gaps), net_gap_ms=[gaps[0], gaps[-1]] if gaps else None,
+              worst=max(gaps, key=abs) if gaps else None, samples=len(gaps))
+    sim.check(f'{label}: every board stamps within {CLOCK_FOLLOW_MS} ms of the station (recording source stamps)',
+              w0 is not None and all(s['packets'] >= 3 and s['max_abs_ms'] <= CLOCK_FOLLOW_MS for s in spread.values()), spread=spread, window_wall=[w0, w_end])
+    # 2. boards stay healthy and read back the station's FLIGHT_STATE
+    last = rows[-1] if rows else {}
+    ok = bool(rows) and all(all(r['boards'][b]['readback_status'] == 'readback_current' and not r['boards'][b]['recovery_required']
+                                for b in boards) for r in rows[1:] or rows)
+    sim.check(f'{label}: every board readback_current, no recovery required, through the window', ok, last=last.get('boards'))
+    sim.check(f'{label}: every board reads back the station flight state', bool(rows) and all(last['boards'][b]['state'] == last['flight_state'] for b in boards),
+              flight_state=last.get('flight_state'), boards={b: last.get('boards', {}).get(b, {}).get('state') for b in boards})
+    # 3. valve reports admitted (not stale, no clock refusal) and valves confirmed at the station
+    vb = [b for b in ('VB', 'AB') if b in boards]
+    def skew(r, b):
+        x = (r.get('valve_reports') or {}).get(b) or {}
+        return (x.get('last_refusal') or {}).get('kind') == 'clock_skew' and (x.get('last_refusal_age_ms') or 10**9) <= 2500
+    stale = {b: sum(1 for r in rows if ((r.get('valve_reports') or {}).get(b) or {}).get('stale') is not False) for b in vb}
+    skews = {b: sum(1 for r in rows if skew(r, b)) for b in vb}
+    refused = {b: [((rows[i].get('valve_reports') or {}).get(b) or {}).get('refused_reports') for i in (0, -1)] for b in vb} if rows else {}
+    unconfirmed = sum(1 for r in rows if not (isinstance(r.get('valves'), list) and r['valves'] and all(type(x) is bool for x in r['valves'])))
+    sim.check(f'{label}: valve reports stay fresh at the station (never stale, no clock-skew refusal, valves confirmed)',
+              bool(rows) and not any(stale.values()) and not any(skews.values()) and unconfirmed == 0,
+              stale_samples=stale, clock_skew_samples=skews, refused_reports_first_last=refused, unconfirmed_valve_samples=unconfirmed,
+              last=last.get('valve_reports'))
+    # 4. DAQ_LAUNCH_LOG_STATUS keeps being accepted
+    if 'DAQ' in boards:
+        ages = [(r.get('launch_log') or {}).get('received_age_ms') for r in rows]
+        sim.check(f'{label}: DAQ_LAUNCH_LOG_STATUS accepted by the station (launch_log age <= {LAUNCH_LOG_MAX_AGE_MS} ms in every sample)',
+                  bool(ages) and all(a is not None and a <= LAUNCH_LOG_MAX_AGE_MS for a in ages), received_age_ms=ages,
+                  daq_clock_offset_ms=last.get('daq_clock_offset_ms'))
+    # 5. an actuator fill-drive command is accepted and applied by AB
+    if 'AB' in boards:
+        r = plumbing_drive_change(sim, label)
+        sim.check(f'{label}: AB accepts and applies an operator fill-drive change (plumbing settings)', r['ok'],
+                  target=r.get('target'), confirm_ms=r.get('confirm_ms'), attempts=r['attempts'][-4:])
+
+
+def clock_operator_set(sim, label, utc_ms, offset_ms):
+    """POST /api/network_time {source: client}, then wait for the station's network time to read it."""
+    code, body = sim.api('/api/network_time', {'source': 'client', 'utc_ms': int(utc_ms)})
+    v0 = sim.vclock(); sim.log_action('operator_network_utc', label=label, utc_ms=int(utc_ms), http=code, body=body)
+    sim.check(f'{label}: operator network UTC set accepted', code in (200, 202, 204), http=code, body=body)
+    reached = None; gaps = []
+    while sim.vclock() - v0 < CLOCK_REACH_MS + 5000 and not sim.stop.is_set():
+        g = network_gap_ms(sim, offset_ms); gaps.append((sim.vclock() - v0, g))
+        if g is not None and abs(g) <= 1000: reached = sim.vclock() - v0; break
+        sim.wait_v(250)
+    sim.check(f'{label}: station network time reads the operator UTC within {CLOCK_REACH_MS} ms (a step, not a slew)',
+              reached is not None and reached <= CLOCK_REACH_MS, reached_ms=reached, gaps=gaps[:3] + gaps[-3:])
+
+
+def clock_reset_all(sim, label, boards):
+    r = sim.recovery('reset_startup', boards=boards, label=label, timeout_ms=30000)
+    sim.check(f'{label}: Reset all boards succeeds', r.get('success') is True, duration_ms=r.get('duration_ms'), op=r.get('op') or r.get('body'))
+    snap = sim.wait_ready(boards, timeout_ms=30000)
+    sim.check(f'{label}: every board healthy after the Reset', snap is not None,
+              rows={b: {k: (sim.rows().get(b) or {}).get(k) for k in ('readback_status', 'recovery_required', 'recovery_reason', 'state')} for b in boards})
+
+
+def sc_clock_steps(sim):
+    """Today's network-clock field failures (test fire 2026-11-16). The station boots with its host clock off
+    (--gs-clock-offset-ms, e.g. -13680000: 3.8 h behind) and the boards follow it; then operator network UTC sets
+    (POST /api/network_time, source client), in --clock-steps order: forward = the true time, backward = the true
+    time minus 4 h. After each: the station reads the set time at once, every board follows within 2 s (recording
+    source stamps), boards stay readback_current at the station flight state, valve reports stay fresh, DAQ
+    launch-log status is accepted and AB applies an operator fill-drive change; the boards are Reset (stamped after
+    the next backward set's clock); after a backward set Reset all, Abort and per-board recovery succeed."""
+    a = sim.a; boards = present_boards(sim); offset = a.gs_clock_offset_ms
+    snap = sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
+    sim.check('startup: every board healthy', snap is not None, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in boards})
+    code, body = sim.api('/api/command', 'StartWritingNow'); sim.log_action('start_recording', http=code, body=body)
+    sim.save_snapshot('ready')
+    clock_step_checks(sim, 'boot (station %+.1f h)' % (offset / 3.6e6), offset, boards, settle_ms=4000, window_ms=16000)
+    for n, kind in enumerate(x for x in a.clock_steps.split(',') if x):
+        label = f'{kind} set {n + 1}'
+        utc = true_utc_ms(sim) - (0 if kind == 'forward' else 4 * 3600 * 1000)
+        offset = utc - true_utc_ms(sim)
+        clock_operator_set(sim, label, utc, offset)
+        clock_step_checks(sim, label, offset, boards)
+        if kind == 'backward':
+            # Recovery after the step: Reset all (each board's last Reset was stamped after this clock), then an
+            # Abort and single-board recovery of every board.
+            clock_reset_all(sim, f'{label}: Reset all after the step', boards)
+            latch_all(sim, f'{label}', expect=boards)
+            for b in boards:
+                r = sim.recovery('recover_abort', board=b, label=f'{label} recover {b}', timeout_ms=30000)
+                sim.check(f'{label}: single-board recovery {b}', r.get('success') is True, duration_ms=r.get('duration_ms'), op=r.get('op') or r.get('body'))
+            verify_clear(sim, f'{label}: after recovery', boards=boards)
+        else:
+            # Leaves every board's last Reset stamped at this (later) clock for a following backward set.
+            clock_reset_all(sim, f'{label}: Reset all', boards)
+        sim.save_snapshot(f'after-{kind}-{n + 1}')
+    sim.result['passed'] = all(c['pass'] for c in sim.result['checks'])
+
+
+SCENARIOS['clock_steps'] = sc_clock_steps
+
+
 class Rrls:
     def __init__(self, sim):
         self.sim = sim; self.fwd = F.Forwarder(sim.addr); self.fwd.destination = (sim.addr, 3001); sim.rrls_fwd = self.fwd; self.tok = None
@@ -2267,6 +2480,10 @@ if __name__ == '__main__':
     p.add_argument('--radio', choices=['hub', 'rfd', 'rfd-faithful', 'backlog'], default='rfd')
     p.add_argument('--rfd-global-retries', type=int, default=3, help='extra air copies per packet; 3 is calibrated against the bench uplink (see docs)')
     p.add_argument('--faithful-time', type=float, default=0, help='wall seconds per virtual second (Renode pace + time-dilated station)')
+    p.add_argument('--gs-clock-offset-ms', type=int, default=0, help='station host clock offset at boot (FAKETIME start and the '
+                   'firmware_sim host time source), e.g. -13680000 for a station 3.8 h behind')
+    p.add_argument('--clock-steps', default='forward,backward', help='clock_steps: operator network UTC sets in order: forward '
+                   '(set the true time) and/or backward (true time minus 4 h)')
     p.add_argument('--phase-a-ms', type=int, default=180000)
     p.add_argument('--gps-initial', type=int, choices=[0, 1, 2], default=0, help='RF GPS fixture at power-up: 0 no fix, 1 fix, 2 u-blox placeholder date, no fix')
     p.add_argument('--rfd-modem', default='')
