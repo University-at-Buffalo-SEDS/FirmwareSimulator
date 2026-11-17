@@ -178,10 +178,11 @@ def build_config(a):
             # Board-side network-variable apply: the value each owner drives and its applied-update count.
             F.add_probes(layout, symbols, [('underglow_enabled', 'g_av_bay_underglow_enabled', 0), ('underglow_updates', 'g_av_bay_underglow_updates', 0)]
                          + ([('buzzer_enabled', 'g_flight_buzzer_enabled', 0), ('buzzer_updates', 'g_flight_buzzer_updates', 0)] if name == 'flight' else []), miss)
-        if name in ('gateway', 'daq'):
+        if name in ('gateway', 'daq', 'rf', 'power'):
             # Flight-state cache: shows when the board itself took an Abort (15), apart from the station's readback.
             F.add_probes(layout, symbols, [(f'fsc_{k}', f'g_flight_state_cache_{k}', 0) for k in ('value', 'updates', 'errors', 'writes')]
-                         + [('reliable_refusals', 'g_reliable_refusal_count', 0)], miss)
+                         + [('reliable_refusals', 'g_reliable_refusal_count', 0)]
+                         + ([('fsc_reports_ignored', 'g_flight_state_cache_reports_ignored', 0)] if name == 'power' else []), miss)
         if name == 'flight':
             F.add_probes(layout, symbols, [('fc_state', 'sm', 0), ('fc_config_flags', 'g_conf', 0), ('fc_commands_received', 'g_network_flight_commands_received', 0)], miss)
             if 'owner' in symbols:  # fc_recovery_owner.c static mailbox: epoch @0, phase/sensor_restart @20, manual_stop.. @22
