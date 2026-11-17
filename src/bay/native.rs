@@ -338,6 +338,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
 
     // Radio links: one shared air medium per link; host stations reach it through a PTY (their serial port).
     let mut radios: Vec<(super::native_radio::Medium, Vec<Option<fs::File>>, Vec<(String, String)>)> = Vec::new();
+    let mut slave_fds: Vec<(String, i32)> = Vec::new();
     for link in topology.links.iter().filter(|l| matches!(l.kind, LinkKind::Radio)) {
         let profile = link.radio.clone().unwrap_or(super::radio_link::RadioProfile {
             air_bits_per_second: 64000, uart_baud: 115200, tx_fifo_bytes: 8192, rx_fifo_bytes: 8192, max_burst_bytes: 256,
@@ -354,7 +355,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 configure_raw_nonblocking(master)?;
                 configure_raw_nonblocking(slave)?;
                 let path = PathBuf::from(unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str()?);
-                std::mem::forget(unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(slave) });
+                slave_fds.push((ep.node.clone(), slave)); // kept open: a station restart must not hang up the line
                 host_serial_paths.insert((ep.node.clone(), link.name.clone()), path);
                 masters.push(Some(unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(master) }));
             } else {
@@ -786,6 +787,18 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     let boots = procs[i].boots + 1;
                     procs[i] = spawn_node(&name, &cfg.nodes[&name], &cfg, t, 0, boots)?;
                     push_link_state(&mut procs, &can, t);
+                } else if let Some(h) = hosts.iter().position(|h| h.name == rb.node) {
+                    // Host station power cycle: same serial links and clock page, logs appended.
+                    unsafe { libc::kill(hosts[h].child.id() as i32, libc::SIGKILL) };
+                    let _ = hosts[h].child.wait();
+                    // The previous process's exclusive open (TIOCEXCL) outlives it on a line we keep open.
+                    for (_, fd) in slave_fds.iter().filter(|(n, _)| n == &rb.node) {
+                        unsafe { libc::ioctl(*fd, libc::TIOCNXCL) };
+                    }
+                    let spec = topology.host_nodes.iter().find(|x| x.name == rb.node).unwrap();
+                    hosts[h] = spawn_host_node(spec, topology_path.parent().unwrap_or(Path::new(".")), &scratch, &sample_path, &host_serial_paths, true)?;
+                    resets.push(serde_json::json!({"node": rb.node, "t_ms": t / 1_000_000, "cause": "scheduled host restart"}));
+                    let _ = writeln!(gpio_out, "{} host_restart {}", t, rb.node);
                 }
             }
             if let Some(msg) = exited_host(&mut hosts)? {

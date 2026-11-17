@@ -2688,6 +2688,117 @@ def sc_input_faults(sim):
 
 SCENARIOS['input_faults'] = sc_input_faults
 
+
+def station_log_events(sim, pattern, host='groundstation'):
+    """Virtual seconds of a host station's log lines matching pattern (station clock starts at 2026-01-01 00:00:00)."""
+    out = []
+    for f in (sim.diag / 'temp').glob(f'*/{host}-stderr.log'):
+        for line in f.read_text(errors='replace').splitlines():
+            m = re.match(r'2026-01-01 (\d\d):(\d\d):(\d\d\.\d+)', line)
+            if m and re.search(pattern, line): out.append(int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]))
+    return sorted(out)
+
+
+def sc_rrls_relay(sim):
+    """RRLS relay mode (field reports 2026-11-17): the primary loses its direct AV-bay path (sched cut0..cut1: GS<->RF
+    radio cut only; the RRLS still hears both) and asks the RRLS to relay. In relay, --cycles times: (A) the primary
+    toggles the AV-bay underglow; (B) the RRLS toggles it (its command proxy to the primary). Checks: the primary
+    requests the relay; the boards apply every toggle (RF/PB/FC underglow probes); the RRLS shows the underglow
+    requested and confirmed within 3 s of the boards applying it, for toggles from either station (field: 15-20 s
+    stale both ways); an RRLS-proxied command the boards act on is reported accepted, not "outcome unknown ... Primary
+    response was not confirmed" (field); the relay ends after the direct path returns. Evidence: rrls_relay.jsonl."""
+    a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'rrls_relay.jsonl').open('a')
+    def rec(**kw):
+        out.write(json.dumps({'v': sim.vclock(), **kw}, default=str) + '\n'); out.flush()
+    snap = sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
+    sim.check('startup: every board healthy', snap is not None, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in boards})
+    r = Rrls(sim); sim.check('RRLS login', r.login())
+    # Pair the stations over the radio (Administration > Station pairing) so the RRLS may proxy primary commands.
+    ph = lambda d: ((d or {}).get('exchange') or {}).get('phase')
+    sim.api('/api/station/pairing/start', {}); r.api('/api/station/pairing/start', {}); code = None; v0 = sim.vclock()
+    while sim.vclock() - v0 < 120000 and not sim.stop.is_set():
+        c1, p1 = sim.api('/api/station/pairing'); c2, p2 = r.api('/api/station/pairing')
+        cp, cr = ((p1 or {}).get('exchange') or {}).get('code'), ((p2 or {}).get('exchange') or {}).get('code')
+        if ph(p1) == 'compare' and ph(p2) == 'compare' and cp and cp == cr: code = cp; break
+        if 'failed' in (ph(p1), ph(p2)): break
+        sim.wait_v(500)
+    paired = None
+    if code:
+        sim.api('/api/station/pairing/confirm', {'code': code}); r.api('/api/station/pairing/confirm', {'code': code}); v1 = sim.vclock()
+        while sim.vclock() - v1 < 120000 and not sim.stop.is_set():
+            c1, p1 = sim.api('/api/station/pairing'); c2, p2 = r.api('/api/station/pairing')
+            if (p1 or {}).get('paired') and (p2 or {}).get('paired'): paired = sim.vclock() - v0; break
+            sim.wait_v(500)
+    c1, p1 = sim.api('/api/station/pairing'); c2, p2 = r.api('/api/station/pairing')
+    rec(kind='pairing', code=code, paired_ms=paired, primary=p1, rrls=p2)
+    sim.check('stations paired over the radio before the cut', paired is not None, paired_ms=paired,
+              rrls={k: (p2 or {}).get(k) for k in ('paired', 'restart_required', 'primary_link')})
+    wait_until_v(sim, (S['cut0'] + 2) * 1000, 'direct path cut')
+    t_req = None
+    while sim.vclock() < (S['cut0'] + 30) * 1000 and not sim.stop.is_set():
+        ev = [t for t in station_log_events(sim, 'requesting RRLS relay') if t >= S['cut0']]
+        if ev: t_req = ev[0]; break
+        sim.wait_v(1000)
+    sim.check('primary requests the RRLS relay once its direct AV-bay path is cut', t_req is not None, requested_s=t_req, cut0=S['cut0'])
+    sim.wait_v(10000)
+    probes = [('rf', 'underglow_enabled'), ('power', 'underglow_enabled'), ('flight', 'underglow_enabled')]
+    def row(api):
+        c, d = api('/api/action_policy')
+        return next(({k: x.get(k) for k in ('requested', 'actuated', 'network_note', 'enabled')} for x in (d or {}).get('controls') or []
+                     if x.get('cmd') == 'ToggleAvBayUnderglow'), None) if c == 200 else None
+    results = []
+    for path in ('/api/action_policy', '/api/rrls/control', '/api/network_variables'):
+        c, d = r.api(path); rec(kind='rrls_view', path=path, http=c, body=d)
+    for n in range(a.cycles):
+        for origin in ('primary', 'rrls'):
+            if sim.vclock() > (S['cut1'] - 50) * 1000: break
+            start = {f'{x}.{k}': bay_probe(sim, x, k) for x, k in probes}
+            target = None if None in start.values() else (1 - start['rf.underglow_enabled'])
+            c0, ctl0 = r.api('/api/rrls/control')
+            c, body = (sim.command('ToggleAvBayUnderglow') if origin == 'primary' else r.api('/api/command', 'ToggleAvBayUnderglow'))
+            v0 = sim.vclock(); applied = p_conf = r_req = r_conf = None; outcome = None; rows = []
+            while sim.vclock() - v0 < 45000 and not sim.stop.is_set():
+                now = {f'{x}.{k}': bay_probe(sim, x, k) for x, k in probes}
+                pr, rr = row(sim.api), row(r.api)
+                t = sim.vclock() - v0
+                if applied is None and target is not None and all(v == target for v in now.values()): applied = t
+                if p_conf is None and pr and pr.get('requested') == target and pr.get('actuated') == target: p_conf = t
+                if r_req is None and rr and rr.get('requested') == target: r_req = t
+                if r_conf is None and rr and rr.get('requested') == target and rr.get('actuated') == target: r_conf = t
+                if origin == 'rrls' and outcome is None:
+                    c2, ctl = r.api('/api/rrls/control')
+                    last = (ctl or {}).get('last') if c2 == 200 and isinstance(ctl, dict) else None
+                    if last and last != (ctl0 or {}).get('last') and last.get('phase') not in (None, 'pending', 'sent', 'queued'): outcome = last
+                rows.append({'t': t, 'probes': now, 'primary': pr, 'rrls': rr})
+                if applied is not None and p_conf is not None and r_conf is not None and (origin == 'primary' or outcome is not None): break
+                sim.wait_v(500)
+            res = {'cycle': n, 'origin': origin, 'http': c, 'body': str(body)[:300], 'target': target, 'applied_ms': applied,
+                   'primary_confirmed_ms': p_conf, 'rrls_requested_ms': r_req, 'rrls_confirmed_ms': r_conf,
+                   'rrls_stale_ms': (r_conf - applied) if (r_conf is not None and applied is not None) else None, 'proxy_outcome': outcome}
+            rec(kind='toggle', **res, rows=rows[-6:]); results.append(res)
+            sim.log_action('rrls_relay_toggle', **{k: v for k, v in res.items() if k != 'body'})
+            sim.wait_v(5000)
+    sim.result['rrls_relay'] = results
+    sim.check('in relay, the boards apply every underglow toggle (primary and RRLS origin)', bool(results) and all(x['applied_ms'] is not None for x in results),
+              applied_ms=[(x['origin'], x['applied_ms']) for x in results])
+    for origin in ('primary', 'rrls'):
+        xs = [x for x in results if x['origin'] == origin and x['applied_ms'] is not None]
+        sim.check(f'in relay, the RRLS shows a {origin}-origin underglow change requested and confirmed within 3 s of the boards applying it',
+                  bool(xs) and all(x['rrls_confirmed_ms'] is not None and x['rrls_stale_ms'] is not None and x['rrls_stale_ms'] <= 3000 for x in xs),
+                  rrls_stale_ms=[x['rrls_stale_ms'] for x in xs], rrls_requested_ms=[x['rrls_requested_ms'] for x in xs])
+    xs = [x for x in results if x['origin'] == 'rrls' and x['applied_ms'] is not None]
+    sim.check('in relay, an RRLS-proxied command the boards act on is reported accepted (not outcome unknown)',
+              bool(xs) and all((x['proxy_outcome'] or {}).get('primary_accepted') is True and (x['proxy_outcome'] or {}).get('phase') != 'unknown'
+                               and not (x['proxy_outcome'] or {}).get('error') for x in xs),
+              outcomes=[x['proxy_outcome'] for x in xs])
+    wait_until_v(sim, (S['cut1'] + 25) * 1000, 'after the direct path returns')
+    ended = [t for t in station_log_events(sim, 'direct AV-bay path restored') if t >= S['cut1']]
+    sim.check('the relay ends after the direct path returns', bool(ended), restored_s=ended)
+    sim.save_snapshot('end')
+
+
+SCENARIOS['rrls_relay'] = sc_rrls_relay
+
 if __name__ == '__main__':
     # --engine native: the same scenarios on host-compiled firmware (scripts/native_engine.py, docs/native-sitl.md).
     if '--engine' in sys.argv:
