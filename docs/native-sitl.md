@@ -159,7 +159,10 @@ latest Renode acceptance runs keeps the native tier honest.
     (-4..-11 ms) and its packet rate (~6.7k per window vs Renode ~6.1k);
   * `input_faults`: the 2026-11-16 fire patterns (VMAIN 11.1 V at boot, KG1000 clip at code 0xB40000 and the
     recorded clip, KG1000 low rail, P6 S+ dropout, dead chamber) replayed at their sample times
-    (scripts/native_signals.py, diagnostics/native-signals.txt); the station reports and clears each DAQ input fault;
+    (scripts/native_signals.py, diagnostics/native-signals.txt); the station reports and clears each DAQ input fault.
+    The DAQ checks the 0-5 V chamber PT only in the launch burn window (T0 + 1.5 s to T0 + 5 s), so dead_chamber is
+    replayed once at rest (no fault) and once around a real Launch at the fixture's launch timing; Launch in Armed
+    needs `--mode hitl_mode` (test fire also wants the vent closed first), and `--flows` selects patterns;
   * `--native-blank-flash NODES|all`: first boot on erased flash (no bootloader/app/metadata);
   * config_resync (with daq/actuator reboots), launch_reset_idle and gse_flows pass natively.
 
@@ -171,6 +174,7 @@ latest Renode acceptance runs keeps the native tier honest.
   | launch_reset_idle (dev) | 1110 s (fix-dev) | 15 s | 11/11 |
   | gse_flows, test fire, umbilical (dev) | - | 18 s | all pass |
   | input_faults (dev) | - | 13 s | 14/14 |
+  | input_faults, chamber burn window, HITL | - | 105 s | 18/18 |
 
   With `--native-blank-flash all`, config_resync's "went through resyncing" check fails: the station restores so fast
   that the controller's 1 s wall-clock watch polls (10 s of virtual time at 10x) never see the intermediate state. This

@@ -61,7 +61,8 @@ def build_config(a):
     (config / 'fill-targets.json').write_text(json.dumps(targets))
     items = [{'id': n, 'text': n, 'checked': False, 'complete_on': k, 'completed_by': None, 'completed_at_ms': None}
              for n, k in [('self-test', 'valve_self_test'), ('nitrogen', 'nitrogen_test')]]
-    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': True, 'checklists': [
+    # input_faults launches only to open the DAQ's chamber burn window; it runs no fill flows to complete them.
+    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': a.scenario != 'input_faults', 'checklists': [
         {'id': 'checkout', 'title': 'Checkout', 'required_before_launch': True, 'items': items}]}))
     (config / 'calibration.json').write_text(json.dumps({'version': 1, 'ch1': {'m': 100, 'b': 0}, 'iadc': {'m': 1, 'b': 0},
         # input_faults selects the P6 differential so the DAQ runs its P6 leg checks.
@@ -2634,7 +2635,10 @@ def sc_input_faults(sim):
     tests/fixtures/input_faults_fire_20261116.json): VMAIN at 11.1 V at boot, the KG1000 amplifier clipped at code
     0xB40000 and at its low rail, the P6 S+ leg dropout, the dead chamber transducer. Each pattern is replayed at its
     recorded sample times into the DAQ's MCP3564R/ADC1 inputs (--flows selects patterns); the station must report the
-    matching DAQ input fault (/api/network_topology DAQ daq_input) and see it clear after the healthy input returns."""
+    matching DAQ input fault (/api/network_topology DAQ daq_input) and see it clear after the healthy input returns.
+    The installed 0-5 V chamber transducer reads about 0 V when vented, so the DAQ checks it only in the launch burn
+    window (T0 + 1.5 s to T0 + 5 s, T0 from DAQ_LOG_CLOCK): dead_chamber is replayed once at rest (no fault) and once
+    around a real Launch in Armed, at the fixture's own launch timing (accepted at 0.1 s, T0 at 9.3 s)."""
     import native_signals as NS
     a = sim.a; boards = present_boards(sim)
     snap = sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
@@ -2659,27 +2663,69 @@ def sc_input_faults(sim):
     st = daq_input_status(sim)
     sim.check('baseline: DAQ input health reported, no active input fault', st is not None and not any(f.get('active') for f in st.get('faults') or []),
               status=st)
-    for name in [x for x in a.flows.split(',') if x] or INPUT_FAULT_PATTERNS:
-        key, rows = pats[name]
-        t0 = sim.vclock() + 1000; cur_m, cur_a = list(mcp), list(adc1)
+    def replay(rows, t0):
+        cur_m, cur_a = list(mcp), list(adc1)
         for t, step_ in rows:
             for ch, c in (step_.get('mcp') or {}).items(): cur_m[ch] = c
             for ch, c in (step_.get('adc1') or {}).items(): cur_a[ch] = c
             apply(t0 + t, list(cur_m), list(cur_a))
         end = t0 + rows[-1][0] + 300
         apply(end, mcp, adc1)
-        seen = []; first = None
+        return end
+
+    def watch(key, t0, end):
+        seen = []; first = None; st = {}; lows = []
         while sim.vclock() < end + 6000 and not sim.stop.is_set():
             st = daq_input_status(sim) or {}
+            if st.get('chamber_min_mv') is not None: lows.append(st['chamber_min_mv'])
             f = next((x for x in st.get('faults') or [] if x.get('key') == key), {})
             if f.get('active') or f.get('latched'):
                 first = first or sim.vclock() - t0
             seen.append((sim.vclock() - t0, bool(f.get('active')), bool(f.get('latched')), f.get('episodes')))
             sim.wait_v(500)
+        return {**st, 'chamber_min_mv': min(lows) if lows else None}, seen, first
+
+    def launch():
+        """Armed, then Launch; the virtual time it was accepted, or None."""
+        # A press can expire across a state change ("Press it again"): retry.
+        if not any(phase_to(sim, 6, 'advance to Armed') or sim.wait_v(1000) for _ in range(3)): return None
+        for attempt in range(6):
+            sim.api('/api/board_abort/refresh', {}); sim.wait_v(1500)
+            sim.log_action('pre_launch_policy', reason=lock_reason(sim))
+            v0 = sim.vclock(); code, body = sim.command('Launch')
+            if code == 200: return v0
+            if 'etract' in json.dumps(body) or 'etract' in lock_reason(sim)[1]:
+                sim.command('RetractPlumbing'); sim.wait_v(8000)
+        return None
+
+    for name in [x for x in a.flows.split(',') if x] or INPUT_FAULT_PATTERNS:
+        key, rows = pats[name]
+        if name == 'dead_chamber':
+            # At rest (no launch scheduled) a 0-5 V transducer at 0 V is not a fault.
+            t0 = sim.vclock() + 1000; end = replay(rows, t0)
+            st, seen, first = watch(key, t0, end)
+            sim.check('dead_chamber at rest, no launch: no DAQ input fault', first is None and st.get('chamber_min_mv') is not None
+                      and st.get('chamber_min_mv') < 50, last=seen[-3:], chamber_min_mv=st.get('chamber_min_mv'))
+            v_launch = launch()
+            sim.check('dead_chamber: Launch accepted in Armed', v_launch is not None,
+                      flight_state=(sim.st().get('rec') or {}).get('flight_state'))
+            if v_launch is None: continue
+            c, clk = sim.api('/api/launch_clock')
+            sim.log_action('launch_clock', http=c, clock=clk)
+            # Pattern time 0 is 100 ms before the launch was accepted, as recorded.
+            t0 = v_launch - 100; end = replay([(t, st_) for t, st_ in rows if t0 + t >= sim.vclock() + 50], t0)
+        else:
+            t0 = sim.vclock() + 1000; end = replay(rows, t0)
+        st, seen, first = watch(key, t0, end)
         sim.log_action('input_fault_pattern', pattern=name, key=key, first_ms=first, samples=seen[-6:])
         sim.check(f'{name}: station reports the DAQ input fault {key}', first is not None, first_ms=first,
                   last=seen[-3:], vmain_min_mv=st.get('vmain_min_mv'), chamber_min_mv=st.get('chamber_min_mv'),
                   p6_imbalance_max_mv=st.get('p6_imbalance_max_mv'))
+        if name == 'dead_chamber':
+            sim.check('dead_chamber: reported only from T0 + 1.5 s (T0 at 9.3 s)', first is not None and first >= 9300 + 1500, first_ms=first)
+            active = [v for v, act, _, _ in seen if act]
+            sim.check('dead_chamber: active in the burn window, inactive after it', bool(active) and not seen[-1][1],
+                      active_ms=active[:1] + active[-1:])
         cleared = sim.wait_until(lambda s_: not next((x.get('active') for x in (daq_input_status(sim) or {}).get('faults') or [] if x.get('key') == key), False),
                                  20000, f'{name} clears')
         sim.check(f'{name}: the fault clears once the healthy input returns', cleared is not None)
@@ -2927,7 +2973,8 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _term)
     if a.scenario == 'gse_flows' and not a.flows:
         a.flows = DEFAULT_FLOWS[a.station_mode]
-    unknown = [f for f in a.flows.split(',') if f and f not in FLOWS]
+    known = INPUT_FAULT_PATTERNS if a.scenario == 'input_faults' else FLOWS  # input_faults: --flows selects patterns
+    unknown = [f for f in a.flows.split(',') if f and f not in known]
     assert not unknown, ('unknown flows', unknown)
     s = Sim(a); s.run(SCENARIOS[a.scenario])
     if a.ui_contract: ui_contract_check(s)
