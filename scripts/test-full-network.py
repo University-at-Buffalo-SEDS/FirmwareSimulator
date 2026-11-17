@@ -1435,8 +1435,11 @@ def clock_step_checks(sim, label, offset_ms, boards, settle_ms=10000, window_ms=
     sim.check(f'{label}: station network time is the expected UTC (within {CLOCK_FOLLOW_MS} ms) through the window',
               len(gaps) >= 3 and all(abs(g) <= CLOCK_FOLLOW_MS for g in gaps), net_gap_ms=[gaps[0], gaps[-1]] if gaps else None,
               worst=max(gaps, key=abs) if gaps else None, samples=len(gaps))
-    sim.check(f'{label}: every board stamps within {CLOCK_FOLLOW_MS} ms of the station (recording source stamps)',
-              w0 is not None and all(s['packets'] >= 3 and s['max_abs_ms'] <= CLOCK_FOLLOW_MS for s in spread.values()), spread=spread, window_wall=[w0, w_end])
+    # Transport delay only makes a stamp look older, so a board's clock offset is bounded by its most-ahead packet
+    # (max) and shown by the median; a lagging or leading clock moves both. min is delay (queued/retried frames).
+    sim.check(f'{label}: every board stamps within {CLOCK_FOLLOW_MS} ms of the station (recording source stamps: max and median)',
+              w0 is not None and all(s['packets'] >= 3 and abs(s['max_ms']) <= CLOCK_FOLLOW_MS and abs(s['median_ms']) <= CLOCK_FOLLOW_MS
+                                     for s in spread.values()), spread=spread, window_wall=[w0, w_end])
     # 2. boards stay healthy and read back the station's FLIGHT_STATE
     last = rows[-1] if rows else {}
     ok = bool(rows) and all(all(r['boards'][b]['readback_status'] == 'readback_current' and not r['boards'][b]['recovery_required']
@@ -1460,8 +1463,10 @@ def clock_step_checks(sim, label, offset_ms, boards, settle_ms=10000, window_ms=
     # 4. DAQ_LAUNCH_LOG_STATUS keeps being accepted
     if 'DAQ' in boards:
         ages = [(r.get('launch_log') or {}).get('received_age_ms') for r in rows]
+        lead = next((i for i, x in enumerate(ages) if x is not None), len(ages))  # none reported yet just after boot
         sim.check(f'{label}: DAQ_LAUNCH_LOG_STATUS accepted by the station (launch_log age <= {LAUNCH_LOG_MAX_AGE_MS} ms in every sample)',
-                  bool(ages) and all(a is not None and a <= LAUNCH_LOG_MAX_AGE_MS for a in ages), received_age_ms=ages,
+                  lead < len(ages) and lead * 2000 <= LAUNCH_LOG_MAX_AGE_MS and all(x is not None and x <= LAUNCH_LOG_MAX_AGE_MS for x in ages[lead:]),
+                  received_age_ms=ages,
                   daq_clock_offset_ms=last.get('daq_clock_offset_ms'))
     # 5. an actuator fill-drive command is accepted and applied by AB
     if 'AB' in boards:
