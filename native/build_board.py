@@ -274,7 +274,12 @@ def main():
     arm, conf = configure(src, out, a)
     elf, objs, sdk_args = ninja_link(arm)
     db = compile_db(arm)
-    lib, sdk = build_sdk(out, arm, sdk_args, a.jobs)
+    sdk_stamp = out / 'sedsnet-host.stamp'; key = json.dumps([conf, sdk_args, (HERE / 'sedsnet_host_hooks.rs').read_text()], sort_keys=True)
+    if (out / 'libsedsnet_host.a').exists() and sdk_stamp.exists() and sdk_stamp.read_text() == key:
+        lib = out / 'libsedsnet_host.a'
+    else:
+        lib, _ = build_sdk(out, arm, sdk_args, a.jobs)
+        sdk_stamp.write_text(key)
     family = None; sources = []; skipped = []
     for o in objs:
         key = os.path.normpath(os.path.join(arm, o))
@@ -332,7 +337,9 @@ def main():
                 'commit': subprocess.run(['git', '-C', str(src), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip() or None}
     (out / f'{node}.native.json').write_text(json.dumps(manifest, indent=1))
     if not a.keep_arm:
+        # The host SDK archive is kept (libsedsnet_host.a); its cargo target (~240 MB) is not.
         shutil.rmtree(out / 'cargo-arm', ignore_errors=True)
+        shutil.rmtree(out / 'cargo-host', ignore_errors=True)
     log(node, 'built', exe, f'{manifest["seconds"]} s')
 
 

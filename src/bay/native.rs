@@ -322,6 +322,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut pico_rx_free_at: u64 = 0;
     let mut bus_free: BTreeMap<String, u64> = BTreeMap::new();
     let mut node_wait: BTreeMap<String, f64> = BTreeMap::new();
+    let mut gpio_edges: BTreeMap<String, u64> = BTreeMap::new();
     let mut slowest_step: (f64, u64) = (0.0, 0); // virtual time the GB UART RX wire is free again
     let mut steps: u64 = 0;
     let mut max_lag_ms: f64 = 0.0;
@@ -485,8 +486,14 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                         }
                     }
                     MSG_GPIO => {
+                        // Every edge of a pin up to 200, then counts only (chip selects and blinkers are chatty).
                         let ts = u64::from_le_bytes(body[..8].try_into().unwrap());
-                        let _ = writeln!(gpio_out, "{} {} {} {} {}", ts, procs[i].name, body[8], body[9], body[10]);
+                        let key = format!("{} {} {}", procs[i].name, body[8], body[9]);
+                        let n = gpio_edges.entry(key).or_insert(0u64);
+                        *n += 1;
+                        if *n <= 200 {
+                            let _ = writeln!(gpio_out, "{} {} {} {} {}", ts, procs[i].name, body[8], body[9], body[10]);
+                        }
                     }
                     MSG_RESET => {
                         procs[i].pending_reset = Some(body[0]);
@@ -610,7 +617,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     }
     let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
         "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
-        "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step,
+        "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
         "pico": pico_model.as_ref().map(|p| p.stats)});
     atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
     eprintln!("[native-bay] done: {:.1} s virtual in {:.1} s wall, {} steps", t as f64 / 1e9, wall0.elapsed().as_secs_f64(), steps);
