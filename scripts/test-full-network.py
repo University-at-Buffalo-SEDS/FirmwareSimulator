@@ -128,6 +128,8 @@ def build_config(a):
             if k_ in env: rr['env'][k_] = env[k_]
         if 2 in modelled:
             rr['env']['GS_SIMULATED_RFD_MODEM'] = '1'
+        for kv in a.rrls_env:
+            k_, _, v_ = kv.partition('='); rr['env'][k_] = v_
         topo['host_nodes'].append(rr)
         radio_link['endpoints'].append({'node': 'rrls', 'peripheral': 'radio'})
     # scheduled events (samples are virtual seconds)
@@ -172,6 +174,10 @@ def build_config(a):
             g = next(p for p in layout['peripherals'] if p.get('model') == 'neo_m9n'); g['stimulus_path'] = '/diagnostics/gps.fix'
         if name == 'actuator':
             F.add_probes(layout, symbols, [('ab_abort_word', 'g_aborted', 0)], miss)
+        if name in ('rf', 'power', 'flight'):
+            # Board-side network-variable apply: the value each owner drives and its applied-update count.
+            F.add_probes(layout, symbols, [('underglow_enabled', 'g_av_bay_underglow_enabled', 0), ('underglow_updates', 'g_av_bay_underglow_updates', 0)]
+                         + ([('buzzer_enabled', 'g_flight_buzzer_enabled', 0), ('buzzer_updates', 'g_flight_buzzer_updates', 0)] if name == 'flight' else []), miss)
         if name in ('gateway', 'daq'):
             # Flight-state cache: shows when the board itself took an Abort (15), apart from the station's readback.
             F.add_probes(layout, symbols, [(f'fsc_{k}', f'g_flight_state_cache_{k}', 0) for k in ('value', 'updates', 'errors', 'writes')]
@@ -1424,6 +1430,107 @@ def sc_rrls_faithful(sim):
 SCENARIOS['rrls_faithful'] = sc_rrls_faithful
 
 
+def bay_probe(sim, node, name):
+    """Latest live memory-probe value (diagnostics/bay-live-*/memory-probes.txt), or None."""
+    files = sorted(sim.diag.glob('bay-live-*/memory-probes.txt'))
+    if not files: return None
+    lines = files[-1].read_text(errors='replace').splitlines(); val = None
+    for i in range(len(lines) - 1):
+        t = lines[i].split()
+        if len(t) == 4 and t[0] == 'SEDS_BAY_PROBE' and t[1] == node and t[2] == name:
+            try: val = int(lines[i + 1].strip(), 16)
+            except ValueError: pass
+    return val
+
+
+def rrls_log_events(sim, pattern):
+    """Virtual seconds of RRLS log lines matching pattern (station clock starts at 2026-01-01 00:00:00)."""
+    out = []
+    for f in (sim.diag / 'temp').glob('*/rrls-stderr.log'):
+        for line in f.read_text(errors='replace').splitlines():
+            m = re.match(r'2026-01-01 00:(\d\d):(\d\d\.\d+)', line)
+            if m and re.search(pattern, line): out.append(int(m[1]) * 60 + float(m[2]))
+    return sorted(out)
+
+
+def sc_rrls_takeover(sim):
+    """RRLS takeover on the faithful radio (bench 2026-11-11). Both stations power up together; the primary is then
+    cut off (sched cut0..cut1: GS<->RF radio cut, add --radio-path-loss gs:rrls / rrls:gs) so the RRLS takes over.
+    Checks: (1) the RRLS never takes over (or publishes as the GS) before the cut. With
+    --radio-path-loss gs:rrls:0:N the primary is unheard at the RRLS for its first N s of boot: the RRLS must
+    still not take over if N is inside its boot window. (2) It takes over once the primary is unheard. (3) An
+    RRLS-originated BOARD_RECOVERY_REQUEST query to PB is answered in takeover (checked only when the station
+    admits it). (4) An RRLS underglow and buzzer toggle in takeover are applied by the boards (RF/PB/FC underglow,
+    FC buzzer memory probes) and (5) shown Confirmed on the RRLS. (6) An Abort from the RRLS in takeover shows
+    latched for RF, FC and PB on the RRLS (their ordered BOARD_STATE_STATUS pushes delivered).
+    Evidence: rrls_takeover.jsonl."""
+    a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'rrls_takeover.jsonl').open('a')
+    def rec(**kw):
+        out.write(json.dumps(kw, default=str) + '\n'); out.flush()
+    sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
+    r = Rrls(sim); sim.check('RRLS login', r.login())
+    wait_until_v(sim, (S['cut0'] - 2) * 1000, 'before cut')
+    early = [t for t in rrls_log_events(sim, 'RRLS takeover: ') if t < S['cut0']]
+    rec(kind='boot', early_takeovers_s=early)
+    sim.check('RRLS never takes over while the primary is up from boot (both powered up together)', not early, takeovers_s=early)
+    wait_until_v(sim, (S['cut0'] + 12) * 1000, 'takeover expected')
+    took = [t for t in rrls_log_events(sim, 'RRLS takeover: ') if t >= S['cut0']]
+    sim.check('RRLS takes over once the primary is unheard', bool(took), takeovers_s=took)
+    # (3) RRLS-originated query to PB in takeover: the PB row must get a new readback (new nonce).
+    def pb_row():
+        c, d = r.api('/api/board-recovery/status')
+        return next((b for b in (d or {}).get('boards') or [] if b.get('id') == 'PB'), None) if c == 200 else None
+    before = pb_row(); qc, qb = r.api('/api/board-recovery/query', {'board': 'PB'}); v0 = sim.vclock(); after = None
+    while sim.vclock() - v0 < 15000 and not sim.stop.is_set():
+        row = pb_row()
+        if row and row.get('nonce') and row.get('nonce') != (before or {}).get('nonce') and row.get('readback_status') == 'readback_current':
+            after = (sim.vclock() - v0, row); break
+        sim.wait_v(500)
+    rec(kind='query', http=qc, body=str(qb)[:200], before=before, after=after)
+    # GS dev refuses recovery queries on an RRLS ("primary_required"), even in takeover: record it, and prove
+    # ordered BOARD_STATE_STATUS delivery in takeover with the Abort push at the end instead.
+    if qc != 409:
+        sim.check('RRLS-originated PB query is answered in takeover (ordered BOARD_STATE_STATUS delivered)', after is not None,
+                  http=qc, body=str(qb)[:160], after_ms=after[0] if after else None)
+    # (4)/(5) underglow and buzzer from the RRLS in takeover.
+    for cmd, probes in (('ToggleAvBayUnderglow', [('rf', 'underglow_enabled'), ('power', 'underglow_enabled'), ('flight', 'underglow_enabled')]),
+                        ('ToggleFlightBuzzer', [('flight', 'buzzer_enabled')])):
+        start = {f'{n}.{k}': bay_probe(sim, n, k) for n, k in probes}
+        c, b = r.api('/api/command', cmd); v1 = sim.vclock(); applied = confirmed = None; rows = []
+        while sim.vclock() - v1 < 15000 and not sim.stop.is_set():
+            now = {f'{n}.{k}': bay_probe(sim, n, k) for n, k in probes}
+            c2, d = r.api('/api/action_policy')
+            row = next(({k: x.get(k) for k in ('requested', 'actuated', 'network_note')} for x in (d or {}).get('controls') or [] if x.get('cmd') == cmd), None) if c2 == 200 else None
+            rows.append({'v': sim.vclock(), 'probes': now, 'row': row})
+            if applied is None and all(now[k] is not None and start[k] is not None and now[k] != start[k] for k in now): applied = sim.vclock() - v1
+            if confirmed is None and row and row.get('requested') is not None and row.get('actuated') == row.get('requested'): confirmed = sim.vclock() - v1
+            if applied is not None and confirmed is not None: break
+            sim.wait_v(500)
+        rec(kind=cmd, http=c, start=start, rows=rows, applied_ms=applied, confirmed_ms=confirmed)
+        sim.check(f'{cmd} from the RRLS in takeover is applied by its owners ({", ".join(n for n, _ in probes)})', applied is not None,
+                  http=c, start=start, last=rows[-1:] if rows else None)
+        sim.check(f'{cmd} from the RRLS in takeover is shown Confirmed on the RRLS', confirmed is not None, last=rows[-1:] if rows else None)
+    # Abort from the RRLS in takeover: every AV-bay board's Abort push (BOARD_STATE_STATUS, Ordered) must reach the
+    # RRLS and show latched in its recovery view.
+    c, b = r.api('/api/command', 'Abort'); v2 = sim.vclock(); latched = {}
+    while sim.vclock() - v2 < 10000 and not sim.stop.is_set() and len(latched) < 3:
+        c3, d = r.api('/api/board-recovery/status')
+        for row in (d or {}).get('boards') or [] if c3 == 200 else []:
+            if row.get('id') in ('RF', 'FC', 'PB') and row.get('abort_latched') and row['id'] not in latched: latched[row['id']] = sim.vclock() - v2
+        sim.wait_v(250)
+    rec(kind='abort', http=c, body=str(b)[:200], latched_ms=latched)
+    sim.check('Abort from the RRLS in takeover: RF, FC and PB show latched on the RRLS within 10 s (ordered status delivered)',
+              len(latched) == 3, http=c, latched_ms=latched)
+    sim.result['rrls_takeover'] = dict(early_takeovers_s=early, takeovers_s=took, query_http=qc, query_ms=after[0] if after else None, abort_latched_ms=latched)
+    # Hand-back: stay until the primary has been back for 40 s so the after-hand-back phase is observed.
+    wait_until_v(sim, (S['cut1'] + 40) * 1000, 'after hand-back')
+    handed = [t for t in rrls_log_events(sim, 'RRLS takeover ended') if t >= S['cut0']]
+    sim.check('RRLS hands authority back after the primary returns', bool(handed), ended_s=handed)
+
+
+SCENARIOS['rrls_takeover'] = sc_rrls_takeover
+
+
 def sc_pyro_paths(sim):
     """HITL operator parachute commands and Abort over the direct GS-RF path, over the RRLS relay with the direct
     path cut, and after the direct path returns, under the normal background load (telemetry, heartbeats, time sync)
@@ -2181,6 +2288,7 @@ if __name__ == '__main__':
     p.add_argument('--poll', type=float, default=.05)
     p.add_argument('--timeout', type=int, default=4 * 3600)
     p.add_argument('--gs-env', action='append', default=[])
+    p.add_argument('--rrls-env', action='append', default=[], help='KEY=VALUE for the RRLS station only (with --rrls)')
     p.add_argument('--abort-cycles', type=int, default=3, help='faithful_cycles: operator Abort cycles in total')
     p.add_argument('--extra-probes', default='', help='comma list of extra firmware symbols to sample as memory probes')
     p.add_argument('--nodes', default='', help='subset of rf,power,flight,gateway,actuator,valve,daq')
