@@ -1266,6 +1266,82 @@ def sc_vb_stale(sim):
 SCENARIOS['vb_stale'] = sc_vb_stale
 
 
+def vent_probe_samples(sim):
+    """[(virtual_s, word)] of the Valve Board g_sim_vent_state probe (--extra-probes g_sim_vent_state):
+    word = state (0 idle, 1 counting, 2 vented) | triggers << 2 (1 link, 2 continuity) | remaining s << 8.
+    One probe sample per virtual second (topology sample_count = duration s); sample k ends at k + 1 s."""
+    out = []
+    for f in sim.diag.glob('bay-live-*/memory-probes.txt'):
+        lines = f.read_text(errors='replace').split('\n')
+        for i in range(len(lines) - 1):
+            p = lines[i].split()
+            if len(p) == 4 and p[:3] == ['SEDS_BAY_PROBE', 'valve', 'sim_vent_state'] and lines[i + 1].startswith('0x'):
+                out.append((int(p[3]) + 1, int(lines[i + 1], 16)))
+    return sorted(out)
+
+
+def sc_vent_countdown(sim):
+    """Post-Launch link-loss auto-vent on the Valve Board (VB vent_countdown.h). Test fire, umbilical boards.
+    The station reaches Armed and Launches; the umbilical (GB CAN, the only GS path to the VB here) is cut at
+    --sched gbc0 and restored at gbc1 (virtual seconds). If the cut lasts past the 150 s countdown the VB must
+    close Pilot and open Vent and Dump about 150 s after its last GS heartbeat (detected 5 s in), never within
+    Launch + 60 s, then report "auto-vented" once the link is back; a shorter cut cancels it (no vent ever).
+    The launch continuity input is a static pin in the simulator (board.json pins), so only link loss is driven
+    here; continuity is covered by the VB host tests."""
+    a = sim.a; S = a.sched; c0, c1 = S['gbc0'], S['gbc1']; expect_vent = c1 - c0 > 150 + 10
+    boards = present_boards(sim)
+    snap = sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
+    sim.check('startup: umbilical boards healthy', snap is not None, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in boards})
+    sim.ws = WsWatch(sim, sim.origin, sim.token, tag='ws-vent')
+    ok = phase_to(sim, 6, 'advance to Armed')
+    sim.check('test fire reaches Armed', ok, flight_state=(sim.st().get('rec') or {}).get('flight_state'))
+    launched, v_launch = False, None
+    for attempt in range(6):
+        if sim.vclock() > (c0 - 25) * 1000: break
+        sim.api('/api/board_abort/refresh', {}); sim.wait_v(1500)
+        v0 = sim.vclock(); code, body = sim.command('Launch')
+        if code == 200: launched, v_launch = True, v0; break
+        if 'etract' in json.dumps(body) or 'etract' in lock_reason(sim)[1]:
+            sim.command('RetractPlumbing'); sim.wait_v(8000)
+    sim.check('Launch accepted at least 25 s before the umbilical cut', launched, launch_v_ms=v_launch, cut_v_s=c0)
+    wait_until_v(sim, (c0 - 2) * 1000, 'just before the umbilical cut')
+    pre = vent_probe_samples(sim)
+    sim.check('no countdown while the link is up after Launch', bool(pre) and all(w & 3 == 0 for _, w in pre),
+              last=pre[-3:], samples=len(pre))
+    # Past the deadline a cut that never ended would have had (cut + 150 s), and 30 s past the link's return.
+    wait_until_v(sim, max(c1 + 30, c0 + 175) * 1000, 'link back plus 30 s, past the would-be vent')
+    samples = vent_probe_samples(sim)
+    counting = [(v, w) for v, w in samples if w & 3 == 1]
+    vented = [(v, w) for v, w in samples if w & 3 == 2]
+    first_count = counting[0][0] if counting else None
+    sim.result['vent_probe'] = [(v, w & 3, (w >> 2) & 3, w >> 8) for v, w in samples if c0 - 2 <= v]
+    sim.check('countdown starts about 5 s after the cut (link lost trigger, ~145 s left)',
+              bool(counting) and c0 + 3 <= first_count <= c0 + 8 and (counting[0][1] >> 2) & 3 == 1
+              and 140 <= (counting[0][1] >> 8) <= 148, first_counting=counting[:2])
+    events = [e for e in sim.ws.events if e['ty'] in ('Warning', 'Notification', 'Error') and 'auto-vent' in json.dumps(e.get('data'))]
+    sim.result['vent_events'] = events[-20:]
+    if expect_vent:
+        v_vent = vented[0][0] if vented else None
+        sim.check('VB vents about 150 s after the cut', v_vent is not None and c0 + 147 <= v_vent <= c0 + 153,
+                  vent_v_s=v_vent, cut_v_s=c0, last_counting=counting[-2:])
+        sim.check('vent never within Launch + 60 s', v_vent is not None and v_launch is not None and v_vent * 1000 >= v_launch + 60000,
+                  vent_v_s=v_vent, launch_v_ms=v_launch)
+        sim.check('VB stays vented after the link returns', bool(samples) and samples[-1][1] & 3 == 2, last=samples[-3:])
+        rep = [e for e in events if 'auto-vented' in json.dumps(e.get('data'))]
+        sim.check('station receives the VB "auto-vented" report after the link returns', bool(rep), events=events[-5:])
+    else:
+        sim.check('link back within the countdown: no vent', not vented, vented=vented[:3])
+        back = [v for v, w in samples if v > c1 + 2]
+        sim.check('countdown cancelled once heartbeats return', bool(back) and all(w & 3 == 0 for v, w in samples if v > c1 + 3),
+                  after=[(v, w) for v, w in samples if c1 <= v <= c1 + 6])
+    sim.save_snapshot('end')
+    (sim.out / 'ws-counts.json').write_text(json.dumps(sim.ws.counts, indent=1))
+    sim.result['passed'] = all(c['pass'] for c in sim.result['checks'])
+
+
+SCENARIOS['vent_countdown'] = sc_vent_countdown
+
+
 def board_clock_rows(sim):
     """(receive_wall_ms, source_ms, sender) from the station recording, copied while live."""
     import sqlite3, glob, shutil, tempfile
