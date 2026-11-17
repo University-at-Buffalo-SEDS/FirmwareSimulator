@@ -888,7 +888,7 @@ class WsWatch:
                 self.counts[ty] = self.counts.get(ty, 0) + 1
                 if ty in self.KEEP:
                     row = {'v': self.sim.vclock(), 'ty': ty, 'n': self.counts[ty]}
-                    if ty in ('StationModeChanged', 'Notification', 'Warning', 'Error', 'AlertAckState'): row['data'] = json.loads(text).get('data')
+                    if ty in ('StationModeChanged', 'Notification', 'Warning', 'Error', 'AlertAckState', 'FlightState', 'MissionPhase'): row['data'] = json.loads(text).get('data')
                     if ty == 'ActionPolicy':
                         try:
                             d = json.loads(text).get('data') or {}; row['launch'] = next((c for c in d.get('controls', []) if c.get('cmd') == 'Launch'), None); row['n_controls'] = len(d.get('controls', []))
@@ -2791,6 +2791,46 @@ def sc_rrls_relay(sim):
               bool(xs) and all((x['proxy_outcome'] or {}).get('primary_accepted') is True and (x['proxy_outcome'] or {}).get('phase') != 'unknown'
                                and not (x['proxy_outcome'] or {}).get('error') for x in xs),
               outcomes=[x['proxy_outcome'] for x in xs])
+    # Station state on the relaying RRLS: flight state (the websocket FlightState it presents), mission phase and T clock
+    # changes made on the primary.
+    class RrlsWs(WsWatch):
+        KEEP = WsWatch.KEEP + ('FlightState', 'MissionPhase')
+    rws = RrlsWs(sim, r.fwd.origin, r.tok, tag='ws-rrls')
+    def ws_latest(ty):
+        ev = [e for e in rws.events if e.get('ty') == ty]
+        return ev[-1].get('data') if ev else None
+    def fstate(api):
+        if api == r.api:  # (bound methods compare equal, never identical)
+            d = ws_latest('FlightState'); return d.get('label') if isinstance(d, dict) else None
+        c, d = api('/api/board-recovery/status'); return d.get('flight_state_label') if c == 200 and isinstance(d, dict) else None
+    def phase(api):
+        c, d = api('/api/mission_phase'); return (d or {}).get('phase') if c == 200 and isinstance(d, dict) else None
+    def tclock(api):
+        c, d = api('/api/launch_clock'); return (d or {}).get('kind') if c == 200 and isinstance(d, dict) else None
+    mirrors = []
+    def mirror(label, cmd, fn, same=lambda p, r_: p == r_):
+        before = fn(sim.api)
+        c, b = sim.command(cmd); v0 = sim.vclock(); p = r_ = None; t_p = t_r = None
+        while sim.vclock() - v0 < 30000 and not sim.stop.is_set():
+            p, r_ = fn(sim.api), fn(r.api); t = sim.vclock() - v0
+            if t_p is None and p is not None and p != before: t_p = t
+            if t_p is not None and r_ is not None and same(p, r_): t_r = t; break
+            sim.wait_v(250)
+        row = {'label': label, 'cmd': cmd, 'http': c, 'primary': p, 'rrls': r_, 'primary_changed_ms': t_p, 'rrls_mirrored_ms': t_r,
+               'rrls_lag_ms': (t_r - t_p) if (t_r is not None and t_p is not None) else None}
+        mirrors.append(row); rec(kind='mirror', **row); sim.log_action('rrls_mirror', **row)
+    # The RRLS websocket carries the network flight state number; the primary's status shows its local number.
+    if sim.vclock() < (S['cut1'] - 60) * 1000:
+        sim.wait_v(3000)
+        mirror('flight state', 'AdvanceFlightState', fstate)
+        phase_to(sim, 6, 'advance to Armed')
+        mirror('T clock', 'Launch', tclock)
+        mirror('T clock reset', 'ResetTClock', tclock)
+        mirror('flight state (rewind)', 'RewindFlightState', fstate)
+    sim.result['rrls_mirror'] = mirrors
+    for m in mirrors:
+        sim.check(f"in relay, the RRLS mirrors the primary's {m['label']} change within 3 s ({m['cmd']})",
+                  m['rrls_lag_ms'] is not None and m['rrls_lag_ms'] <= 3000, **{k: m[k] for k in ('primary', 'rrls', 'primary_changed_ms', 'rrls_mirrored_ms', 'rrls_lag_ms', 'http')})
     wait_until_v(sim, (S['cut1'] + 25) * 1000, 'after the direct path returns')
     ended = [t for t in station_log_events(sim, 'direct AV-bay path restored') if t >= S['cut1']]
     sim.check('the relay ends after the direct path returns', bool(ended), restored_s=ended)
