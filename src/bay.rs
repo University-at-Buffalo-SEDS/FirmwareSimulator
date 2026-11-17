@@ -1414,6 +1414,10 @@ struct PreparedBay {
     pico_tcp_bridges: Vec<(String, PathBuf, std::net::TcpListener)>,
     pico_discovery_bridges: Vec<(String, PathBuf, u16)>,
 }
+#[path = "bay/native.rs"]
+pub mod native;
+#[path = "bay/native_pico.rs"]
+mod native_pico;
 #[path = "bay/owned.rs"]
 pub mod owned;
 

@@ -164,6 +164,14 @@ enum Command {
         #[arg(long)]
         topology: PathBuf,
     },
+    /// Run the same bay topology with host-compiled firmware (native SITL) on one virtual clock.
+    NativeBay {
+        #[arg(long)]
+        topology: PathBuf,
+        /// native/build_board.py outputs, pacing, probes and stimulus (written by the native engine).
+        #[arg(long)]
+        native: PathBuf,
+    },
     /// Recheck retained bay registers and host logs without executing firmware.
     BayCheck {
         #[arg(long)]
@@ -251,6 +259,9 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", firmware_sim::report::bay(&report));
             }
+        }
+        Command::NativeBay { topology, native } => {
+            firmware_sim::bay::native::run_native(&topology, &native)?;
         }
         Command::BayCheck { topology, capture } => {
             let report = firmware_sim::bay::check_capture(&topology, &capture)?;
