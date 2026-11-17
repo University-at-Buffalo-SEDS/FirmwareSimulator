@@ -77,7 +77,7 @@ def extract_gs(image: str, dest: Path):
 
 
 GS_MANIFEST_DIR = b'/src/gs-head/backend'   # the station's compile-time CARGO_MANIFEST_DIR (Docker build tree)
-GS_NATIVE_DIR = b'/tmp/seds-gs/backend'     # same length; a private /tmp per run (mount namespace) holds it
+GS_NATIVE_DIR = b'/tmp/seds-gs/backend'     # a private /tmp per run (mount namespace) holds it
 
 
 def native_gs_binary(gsdir: Path):
@@ -86,8 +86,12 @@ def native_gs_binary(gsdir: Path):
     out = gsdir / 'groundstation_backend.native'
     if not out.exists():
         data = (gsdir / 'groundstation_backend').read_bytes()
-        assert len(GS_MANIFEST_DIR) == len(GS_NATIVE_DIR)
-        tmp = out.with_suffix('.tmp'); tmp.write_bytes(data.replace(GS_MANIFEST_DIR, GS_NATIVE_DIR)); tmp.chmod(0o755); tmp.rename(out)
+        # A host build records its own source tree (gsdir/MANIFEST_DIR); pad the private path with '/' to its length.
+        src = (gsdir / 'MANIFEST_DIR').read_bytes().strip() if (gsdir / 'MANIFEST_DIR').exists() else GS_MANIFEST_DIR
+        assert len(src) >= len(GS_NATIVE_DIR) and src in data, src
+        dst = b'/tmp/seds-gs' + b'/' * (len(src) - len(GS_NATIVE_DIR) + 1) + b'backend'
+        assert len(dst) == len(src)
+        tmp = out.with_suffix('.tmp'); tmp.write_bytes(data.replace(src, dst)); tmp.chmod(0o755); tmp.rename(out)
     return out
 
 

@@ -267,6 +267,8 @@ def main():
     ap.add_argument('--define', action='append', default=[])
     ap.add_argument('--jobs', type=int, default=4)
     ap.add_argument('--keep-arm', action='store_true', help='keep the ARM configure tree and SDK cargo target')
+    ap.add_argument('--factory', action='store_true',
+                    help='also build the ARM factory image (bootloader+app+metadata) once, as the native flash first-boot image')
     a = ap.parse_args()
     src = a.src.resolve(); node = a.node or REPO_NODE[src.name]
     out = (a.out / node).resolve(); out.mkdir(parents=True, exist_ok=True)
@@ -330,6 +332,16 @@ def main():
     syms = run(['nm', '-n', '--defined-only', str(exe)])
     (out / f'{node}.symbols').write_text(syms)
     factory = next(iter(sorted(src.glob('build/*/*.factory.bin'))), None)
+    if factory is None and (out / 'factory.bin').exists():
+        factory = out / 'factory.bin'
+    if factory is None and a.factory:
+        log(node, 'building the ARM factory image (first-boot flash)')
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('CARGO_', 'RUSTFLAGS', 'SEDSNET_TEST_'))}
+        env['CARGO_BUILD_JOBS'] = str(a.jobs)
+        run([CMAKE, '--build', str(arm), '--target', 'factory-image', '--parallel', str(a.jobs)], env=env)
+        built = next(iter(sorted(arm.glob('*.factory.bin'))))
+        shutil.copyfile(built, out / 'factory.bin'); factory = out / 'factory.bin'
+        run([CMAKE, '--build', str(arm), '--target', 'clean'], env=env)
     layout = json.loads((src / 'sim/board.json').read_text())
     manifest = {'node': node, 'repo': src.name, 'src': str(src), 'family': family, 'exe': str(exe), 'factory_bin': str(factory) if factory else None,
                 'memory': layout.get('memory'), 'configure': conf, 'sedsnet_args': sdk_args, 'sources': len(sources),
