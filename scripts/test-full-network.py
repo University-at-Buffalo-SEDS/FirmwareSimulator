@@ -67,6 +67,9 @@ def build_config(a):
         'extra_channels': {'kg50': {'linear': {'m': 100, 'b': 0}, 'zero_raw': None, 'points': [], 'fit': None}}}))
     for n in ('checklists', 'calibration', 'gse'):
         p = diag / 'state' / f'{n}.json'; p.write_text((config / f'{n}.json').read_text()); p.chmod(0o660)
+    if a.scenario == 'config_resync':
+        # The station's saved fill drive is auxiliary (revision 1); the boards start on erased flash.
+        p = diag / 'state' / 'drive.json'; p.write_text(json.dumps({'version': 1, 'mode': 2, 'revision': 1, 'source_ms': 1})); p.chmod(0o660)
     topo = F.topology(a.duration_ms, a.wall_freshness_scale)
     topo['name'] = 'fullnet-' + a.station_mode
     if a.nodes:
@@ -100,6 +103,9 @@ def build_config(a):
         # A station host clock that is off at boot (a Pi without RTC/NTP): the firmware_sim station takes its host
         # time source from GS_SIM_NETWORK_EPOCH_MS + virtual time, and its wall clock from FAKETIME; move both.
         env['GS_SIM_NETWORK_EPOCH_MS'] = str(SIM_EPOCH_MS + a.gs_clock_offset_ms)
+    if a.scenario == 'config_resync':
+        env['GS_ACTUATOR_PLUMBING_CONFIG'] = '/diagnostics/state/drive.json'
+        env['GS_BOARD_CONFIG_SYNC_PATH'] = '/diagnostics/state/board-config-sync.json'
     for kv in a.gs_env:
         k, v = kv.split('=', 1); env[k] = v
     # A station whose modem the medium models runs its startup modem check against that model
@@ -2455,6 +2461,65 @@ def sc_gse_flows(sim):
 
 
 SCENARIOS['gse_flows'] = sc_gse_flows
+
+
+def sc_config_resync(sim):
+    """Board config resync (fill side: --nodes gateway,actuator,valve,daq). Every board boots on erased flash,
+    as after a reflash with wiped storage: the DAQ on its built-in calibration and the AB on no saved fill drive.
+    The station holds a saved auxiliary drive and its calibration file. Without operator action, in Startup/Idle
+    the station must restore both and count them synced only from the boards' own readback
+    (/api/board-config/status: DAQ BOARD_HEALTH config identity, AB drive status identity). With
+    --board-reboot daq:<s> and actuator:<s> the boards reboot later (flash kept) and must come back synced."""
+    global BOARDS
+    BOARDS = present_boards(sim)
+    snap = sim.wait_ready(BOARDS, timeout_ms=sim.a.ready_timeout_ms)
+    sim.check('startup: present boards healthy', snap is not None,
+              rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in BOARDS})
+    recover_all_needing(sim, 'startup')
+    state = {'at': 0.0}
+    seen = []
+
+    def item(body, board, name):
+        for b in (body or {}).get('boards') or []:
+            if b.get('board') == board:
+                return next((i for i in b.get('items') or [] if i.get('item') == name), {})
+        return {}
+
+    def watch(_s):
+        if time.time() - state['at'] >= 1.0:
+            state['at'] = time.time()
+            code, body = sim.api('/api/board-config/status')
+            state['status'] = body if code == 200 else {'http': code, 'body': body}
+            row = {k: item(state['status'], b, n).get('state') for k, b, n in
+                   (('daq', 'DAQ', 'daq_calibration'), ('ab', 'AB', 'ab_fill_drive'), ('kg50', 'DAQ', 'daq_kg50_input'))}
+            if not seen or seen[-1]['states'] != row:
+                msgs = {k: item(state['status'], b, n).get('message') for k, b, n in
+                        (('daq', 'DAQ', 'daq_calibration'), ('ab', 'AB', 'ab_fill_drive'))}
+                seen.append({'v': sim.vclock(), 'states': row, 'messages': msgs}); sim.log_action('config_sync', states=row, messages=msgs)
+        return bool(seen) and seen[-1]['states'].get('daq') == 'synced' and seen[-1]['states'].get('ab') == 'synced'
+    s = sim.wait_until(watch, 180000, 'DAQ calibration and AB fill drive restored and verified')
+    sim.save_snapshot('after-restore')
+    code, drive = sim.api('/api/actuator/plumbing/status')
+    sim.check('wiped boards restored from the station and verified by readback', s is not None,
+              status=state.get('status'), transitions=seen)
+    sim.check("AB reports the station's saved auxiliary drive", code == 200 and (drive.get('board') or {}).get('mode') == 'auxiliary'
+              and (drive.get('desired') or {}).get('mode') == 'auxiliary', http=code, drive=drive)
+    sim.check('the restore went through resyncing (the station re-applied it)',
+              any(r['states'].get('ab') in ('resyncing', 'out_of_sync') for r in seen)
+              and any(r['states'].get('daq') in ('resyncing', 'out_of_sync', 'unknown') for r in seen), transitions=seen)
+    sim.check('no conflict raised for wiped (default) boards',
+              not any('conflict' in r['states'].values() for r in seen), transitions=seen)
+    reboots = sorted(int(x.split(':')[1]) for x in sim.a.board_reboot)
+    if reboots:
+        sim.wait_until(lambda s: s['v'] >= (reboots[-1] + 5) * 1000, (reboots[-1] + 60) * 1000, 'after the board reboots', quiet=True)
+        seen.clear()
+        s = sim.wait_until(watch, 120000, 'synced after the board reboots')
+        sim.check('after board reboots (flash kept): synced from readback, no conflict', s is not None
+                  and not any('conflict' in r['states'].values() for r in seen), status=state.get('status'), transitions=seen)
+    sim.save_snapshot('end')
+
+
+SCENARIOS['config_resync'] = sc_config_resync
 
 
 def ui_contract_check(sim):
