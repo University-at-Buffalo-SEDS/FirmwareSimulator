@@ -91,6 +91,24 @@ identical 6808-frame CAN trace). With the station it is reproducible up to the s
   is the image's `groundstation_backend` (its built-in source-tree default `/src/gs-head/backend` is moved to the
   run's private `/tmp/seds-gs/backend` by an equal-length string substitution) under the image's libfaketime.
 
+### FC pad sit with weather drift
+
+`scripts/native_baro_drift.py` runs the FC alone (no station) on a long pad sit: `SIM_BARO_PA` and
+`SIM_BARO_RAMP_PA_PER_H` set its barometer's pressure and a steady drift from boot (the Renode flight-profile trim
+set, P = raw / 128 Pa), the IMU rests at 1 g, and the coordinator probes the FC's `meas.baro.alt`, pressure and
+`baro_ref` (FlightComputer26 `baro_reference.h`) once per virtual second. A fixed reference (the boot zero) is
+computed from the same pressures. `--compare` runs a second build the same way.
+
+```sh
+python3 native/build_board.py ../FlightComputer26 --out build/native/fc
+python3 scripts/native_baro_drift.py --build build/native/fc/flight --hours 1 --ramp-hpa-h -3 --out evidence/pad-sit
+```
+
+FlightComputer26 baro-drift (e615de3), -3 hPa/h: over 3190 virtual seconds the FC's altitude stayed within 0.22 m
+(the 30 s tracking lag) while the reference moved -263 Pa; a fixed reference would have read +22 m. The FC alone
+slows as its unacknowledged CAN traffic builds up (about 8x real time at first, near 1x after 50 min). Launch and
+flight need the station, so the freeze at Launch is covered by the FC's host tests, not here.
+
 ## The station and the speed limit
 
 The GroundStation backend is a tokio application on the wall clock (heartbeats, retries, refresh intervals,

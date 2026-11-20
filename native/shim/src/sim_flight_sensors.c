@@ -3,7 +3,12 @@
  * calibration registers, conversion timers from the configured output data rates, data-ready pulses (barometer
  * level/latch per INT_CTRL, gyro/accel until the sample is read), the BMP390/BMI088-ACC dummy byte on reads, and a
  * resting 1 g on accelerometer Z. Configured by "flightsensors <bus> <cs-baro> <cs-gyro> <cs-accel> <irq-baro>
- * <irq-gyro> <irq-accel>" (pins: port*16+pin, from the board layout's connections). */
+ * <irq-gyro> <irq-accel>" (pins: port*16+pin, from the board layout's connections).
+ *
+ * Pad weather (optional): SIM_BARO_PA sets the barometer's pressure in Pa and SIM_BARO_RAMP_PA_PER_H a steady
+ * drift from boot (weather on a long pad sit); SIM_BARO_TEMP_C its temperature (default 25). They select the
+ * Renode flight-profile trim set, under which the firmware's own compensation gives P = raw / 128 Pa and
+ * T = (raw - 6.4e6) / 65536 C. */
 #include "sim.h"
 #include "main.h"
 #include <stdio.h>
@@ -20,6 +25,7 @@ static struct {
     uint8_t regs[3][256];
     int dev, selected, position, reading, sample_read; uint8_t address;
     int baro_ready;
+    int weather; double baro_pa, ramp_pa_per_h, temp_c;
 } f;
 
 static void set_line(int sensor, int level)
@@ -58,6 +64,12 @@ static uint8_t read_reg(int d, uint8_t r)
     if (r == 0) return d == BARO ? 0x60 : d == GYRO ? 0x0f : 0x1e;
     if (d == BARO && r == 0x03) return 0x60;
     if (d == BARO && r == 0x11) { uint8_t st = f.baro_ready ? 8 : 0; f.baro_ready = 0; sim_cancel(baro_pulse_isr, &f); baro_irq(0); return st; }
+    if (d == BARO && r >= 0x04 && r <= 0x09 && f.weather) {
+        double pa = f.baro_pa + f.ramp_pa_per_h * ((double)sim_now_ns() / 3.6e12);
+        uint32_t p = (uint32_t)(pa * 128.0 + 0.5), t = (uint32_t)(6400000.0 + f.temp_c * 65536.0 + 0.5);
+        uint8_t v[6] = {(uint8_t)p, (uint8_t)(p >> 8), (uint8_t)(p >> 16), (uint8_t)t, (uint8_t)(t >> 8), (uint8_t)(t >> 16)};
+        return v[r - 4];
+    }
     if (d == BARO && r >= 0x04 && r <= 0x09) { static const uint8_t v[6] = {0x00, 0x80, 0x65, 0x00, 0x6a, 0x31}; return v[r - 4]; }
     if (d == ACCEL && r >= 0x12 && r <= 0x17) { int16_t z = (int16_t)(9.80665 / accel_lsb() + 0.5); uint8_t v[6] = {0, 0, 0, 0, (uint8_t)z, (uint8_t)(z >> 8)}; return v[r - 0x12]; }
     if (d == GYRO && r >= 0x02 && r <= 0x07) return 0;
@@ -112,6 +124,11 @@ __attribute__((constructor(200))) static void fs_load(void)
     f.regs[BARO][0x19] = 0x02;
     f.regs[BARO][0x31] = 0xa8; f.regs[BARO][0x32] = 0x61; f.regs[BARO][0x34] = 0x40; f.regs[BARO][0x37] = 0x40;
     f.regs[BARO][0x39] = 0x40; f.regs[BARO][0x3c] = 0xd4; f.regs[BARO][0x3d] = 0x30;
+    const char *pa = getenv("SIM_BARO_PA"), *ramp = getenv("SIM_BARO_RAMP_PA_PER_H"), *temp = getenv("SIM_BARO_TEMP_C");
+    if (pa) {
+        f.weather = 1; f.baro_pa = atof(pa); f.ramp_pa_per_h = ramp ? atof(ramp) : 0.0; f.temp_c = temp ? atof(temp) : 25.0;
+        f.regs[BARO][0x36] = 0x00; f.regs[BARO][0x37] = 0x60; f.regs[BARO][0x3c] = 0x00; f.regs[BARO][0x3d] = 0x00;
+    }
     for (int s = 0; s < 3; s++) sim_pin_set_input((unsigned)f.irq[s], 0);
 }
 #else
