@@ -51,7 +51,7 @@ def build_config(a):
            'dry_self_test_confirmed': False, 'grouped_panel': True, 'turbocharge_max_added_mass_kg': 0.5, 'turbocharge_pressure_deadband_psi': 12}
     targets = {'version': 1, 'fill_source': 'kg50', 'nitrogen': {'target_mass_kg': 0.5, 'target_pressure_psi': 500},
                'nitrous': {'target_mass_kg': 8, 'target_pressure_psi': 750}}
-    if a.scenario in ('gse_flows', 'igt_flow'):
+    if a.scenario in ('gse_flows', 'igt_flow', 'igt_image_guard'):
         # The operational flight sim's bench plant (F.plant_pressure, 130 psi regulator): a nitrogen test,
         # cold flow and Turbocharge that the valve-driven plant can actually reach.
         gse.update(nitrogen_target_psi=50, pressure_ceiling_psi=150, cold_flow_target_psi=40, turbocharge_max_added_mass_kg=0.3)
@@ -63,7 +63,7 @@ def build_config(a):
              for n, k in [('self-test', 'valve_self_test'), ('nitrogen', 'nitrogen_test')]]
     # input_faults launches only to open the DAQ's chamber burn window; it runs no fill flows to complete them.
     # igt_flow launches after the stand's flows without an operator to sign the checklist off.
-    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': a.scenario not in ('input_faults', 'igt_flow'), 'checklists': [
+    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': a.scenario not in ('input_faults', 'igt_flow', 'igt_image_guard'), 'checklists': [
         {'id': 'checkout', 'title': 'Checkout', 'required_before_launch': True, 'items': items}]}))
     (config / 'calibration.json').write_text(json.dumps({'version': 1, 'ch1': {'m': 100, 'b': 0}, 'iadc': {'m': 1, 'b': 0},
         # input_faults selects the P6 differential so the DAQ runs its P6 leg checks.
@@ -75,11 +75,14 @@ def build_config(a):
         # The FC's SD card with the integrated-ground-test CSVs (/IGT/*.CSV), served from its first boot
         # (native_engine.py seeds config/<node>-sdcard.img).
         assert a.igt_csv, 'igt_flow needs --igt-csv DIR (GroundStation26 tools/igt_csv.py model --out DIR)'
+        assert a.mode != 'test_fire_mode', 'igt_flow runs in integrated_ground_test or hitl (with the HITL replay)'
         import fat_image
         src = a.igt_csv / 'IGT' if (a.igt_csv / 'IGT').is_dir() else a.igt_csv
         files = {f'IGT/{p.name.upper()}': p.read_bytes() for p in sorted(src.glob('*.[cC][sS][vV]'))}
         assert files, ('no CSVs in', src)
-        fat_image.build(config / 'flight-sdcard.img', files)
+        # --igt-sd-late: the FC boots with an empty card; the scenario writes this image in later and
+        # presses Retry SD (native_engine.py seeds only config/<node>-sdcard.img).
+        fat_image.build(config / ('flight-sdcard-late.img' if a.igt_sd_late else 'flight-sdcard.img'), files)
     if a.scenario == 'config_resync':
         # The station's saved fill drive is auxiliary (revision 1); the boards start on erased flash.
         p = diag / 'state' / 'drive.json'; p.write_text(json.dumps({'version': 1, 'mode': 2, 'revision': 1, 'source_ms': 1})); p.chmod(0o660)
@@ -2560,6 +2563,41 @@ def sc_gse_flows(sim):
 SCENARIOS['gse_flows'] = sc_gse_flows
 
 
+def api_put(sim, path, body, timeout=10):
+    """PUT with the session token (F.request only does GET/POST)."""
+    import urllib.request, urllib.error
+    req = urllib.request.Request(sim.origin + path, json.dumps(body).encode(), method='PUT',
+                                 headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (sim.token or '')})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read()
+            return r.status, json.loads(data) if data[:1] in (b'{', b'[') else data.decode(errors='replace')
+    except urllib.error.HTTPError as e:
+        return e.code, {'public_error': e.read(4097).decode('utf-8', errors='replace')}
+
+
+def igt_set(sim, **settings):
+    code, body = api_put(sim, '/api/igt/settings', settings)
+    sim.log_action('igt_settings', settings=settings, http=code, body=body)
+    return code, body
+
+
+def igt_recorded_gps(sim):
+    """Replayed GPS fixes (SIM_SAMPLE kind 3) the station recorded: (lat, lon) list."""
+    import sqlite3
+    fixes = []
+    for db in sorted((sim.out / 'gs-data').glob('groundstation_recording_*.db')):
+        try:
+            con = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+            for (v,) in con.execute("SELECT values_json FROM telemetry WHERE data_type='SIM_SAMPLE'"):
+                v = json.loads(v)
+                if int(v[0]) == 3: fixes.append((v[2], v[3]))
+            con.close()
+        except sqlite3.Error as e:
+            sim.log_action('igt_recording_read_failed', db=str(db), error=repr(e))
+    return fixes
+
+
 def igt_status(sim):
     code, st = sim.api('/api/igt', timeout=5)
     return st if code == 200 and isinstance(st, dict) else {}
@@ -2585,7 +2623,7 @@ def igt_messages(sim, label):
 
 
 def pyro_edges(sim):
-    """FC pyro GPIO rising edges in the native engine's GPIO log: CO2 (drogue) PB5, REEF (main / line cutter) PB6."""
+    """FC pyro GPIO rising edges in the native engine's GPIO log: CO2 (drogue) PB5, REEF (main) PB6."""
     path = sim.diag / 'native-gpio.log'
     edges = {'drogue': 0, 'main': 0}
     if not path.exists(): return None
@@ -2608,7 +2646,7 @@ def sc_igt_flow(sim):
     """Integrated ground test (GroundStation26 docs/integrated-ground-test.md) on all seven boards: the stand's GSE
     flows as for a test fire with the AV bay present, Enter ground test (prepare/confirm), the FC validates its SD-card
     CSVs (--igt-csv, served by the native SD shim), Postinit, Launch through the FC and VB, then the FC replays the
-    flight into its real estimator and state machine: drogue and main (line cutter) dry-run by default (no pyro GPIO
+    flight into its real estimator and state machine: drogue and main dry-run by default (no pyro GPIO
     edge), landed, and GPS back to real. Checks the station's IGT status, labels and SIMULATED samples."""
     global BOARDS
     BOARDS = present_boards(sim)
@@ -2617,9 +2655,20 @@ def sc_igt_flow(sim):
     snap = sim.wait_ready(BOARDS, timeout_ms=sim.a.ready_timeout_ms)
     sim.check('startup: all seven boards healthy, AV bay included', snap is not None and all(b in BOARDS for b in AV_BAY),
               boards=BOARDS, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in BOARDS})
+    hitl = sim.a.station_mode == 'hitl'
+    if hitl:
+        # HITL with the ground-test replay: HITL's fill side, the FC's CSV replay as the flight data source.
+        code, body = igt_set(sim, hitl_replay=True)
+        sim.check('igt: HITL replay setting accepted (admin)', code == 200, http=code, body=body)
+        sim.wait_until(lambda s: igt_status(sim).get('igt_active') is True, 10000, 'igt active in HITL', quiet=True)
     st = igt_status(sim)
-    sim.check('igt: station in integrated ground test mode, FC built with support', st.get('station_mode_igt') is True and st.get('supported') is True,
-              status=st)
+    sim.check('igt: ground test active, FC running the ground-test image', st.get('igt_active') is True and st.get('supported') is True
+              and st.get('fc_image') == 'ground_test' and not st.get('launch_latched'), status=st)
+    if hitl:
+        sim.check('igt: HITL shows the ground-test image as a notification only (no warning, no latch)',
+                  (st.get('image_notice') or {}).get('level') in (None, 'info') and not st.get('launch_latched'), status=st)
+    if sim.a.igt_sd_late:
+        igt_late_card(sim)
     # The plain command path refuses the ticketed actions.
     code, body = sim.command('IgtEnter')
     sim.check('igt: IgtEnter refused on the plain command path', code != 200, http=code, body=body)
@@ -2630,13 +2679,18 @@ def sc_igt_flow(sim):
     # Enter before arming: the FC validates the CSVs on its SD card.
     # The FC refuses entry until it hears the station's heartbeat steadily after boot (Lost_GroundStation):
     # an operator presses Enter again, as here.
-    for attempt in range(6):
+    if sim.a.igt_sd_late:
+        # Already entered through the late card: Retry SD re-ran the validation to Ready.
         code, resp = igt_ticket(sim, 'enter')
-        left = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') not in (None, 'off'), 8000, 'FC left off', quiet=True)
-        if code != 200 or left is not None: break
-        sim.log_action('igt_enter_retry', attempt=attempt, status=igt_status(sim)); igt_messages(sim, 'enter refused')
-        sim.wait_v(5000)
-    sim.check('igt: Enter ground test accepted (prepare/confirm)', code == 200, http=code, resp=resp, attempts=attempt + 1)
+        sim.check('igt: a second Enter while Ready is refused', code != 200, http=code, resp=resp)
+    else:
+        for attempt in range(6):
+            code, resp = igt_ticket(sim, 'enter')
+            left = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') not in (None, 'off'), 8000, 'FC left off', quiet=True)
+            if code != 200 or left is not None: break
+            sim.log_action('igt_enter_retry', attempt=attempt, status=igt_status(sim)); igt_messages(sim, 'enter refused')
+            sim.wait_v(5000)
+        sim.check('igt: Enter ground test accepted (prepare/confirm)', code == 200, http=code, resp=resp, attempts=attempt + 1)
     ok = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') in ('ready', 'fault'), 180000, 'FC IGT ready', quiet=True)
     st = igt_status(sim); igt_messages(sim, 'after enter')
     sim.check('igt: FC validated the CSVs (ready, dry-run)', ok is not None and st.get('fc_mode') == 'ready' and st.get('live_pyro') is False,
@@ -2657,10 +2711,17 @@ def sc_igt_flow(sim):
     # Postinit (the FC arms its attitude reference on the stand), then Launch: FC + VB, no GPS fix needed.
     code, body = sim.command('Postinit')
     sim.wait_v(8000)
+    if hitl:
+        # HITL reaches Armed through its manual phase control; the station's Armed write arms the FC.
+        sim.check('igt: HITL phase advanced to Armed', phase_to(sim, 6, 'HITL to Armed'))
     launched = None
     for attempt in range(6):
         sim.api('/api/board_abort/refresh', {}); sim.wait_v(1500)
         sim.log_action('pre_launch_policy', reason=lock_reason(sim), igt=igt_status(sim))
+        # Flight fill steps (HITL, or mock wet dress): Launch waits for the normally-open vent to be closed.
+        lc, no = sim.launch_control() or {}, policy_control(sim, 'NormallyOpen') or {}
+        if not lc.get('enabled') and no.get('enabled') and not no.get('actuated'):
+            sim.command('NormallyOpen'); sim.wait_v(3000)
         v0 = sim.vclock(); code, body = sim.command('Launch')
         if code == 200: launched = v0; break
         if 'etract' in json.dumps(body) or 'etract' in lock_reason(sim)[1]:
@@ -2680,11 +2741,21 @@ def sc_igt_flow(sim):
     if live:
         sim.check('igt: LIVE PYRO fired the real drogue and main outputs', edges and edges['drogue'] >= 1 and edges['main'] >= 1, edges=edges)
     else:
-        sim.check('igt: drogue and main (line cutter) events recorded as dry-run', st.get('drogue_dry_run') is True and st.get('main_dry_run') is True, status=st)
+        sim.check('igt: drogue and main events recorded as dry-run', st.get('drogue_dry_run') is True and st.get('main_dry_run') is True, status=st)
         sim.check('igt: dry-run drove no pyro GPIO', edges is not None and edges == {'drogue': 0, 'main': 0}, edges=edges)
     ph = fc_phase(sim)
     sim.log_action('igt_end', status=st, phase=ph, edges=edges, mode=want)
     sim.check('igt: station marks the flight data SIMULATED', 'simulated' in json.dumps(ph).lower() or st.get('fc_mode') == 'done', phase=ph)
+    fixes = igt_recorded_gps(sim)
+    if fixes:
+        import math
+        lat0, lon0 = fixes[0]
+        spread = max(math.hypot((la - lat0) * 111320, (lo - lon0) * 111320 * math.cos(math.radians(lat0))) for la, lo in fixes)
+        sim.check('igt: replayed GPS track moves in latitude and longitude (a few hundred metres)',
+                  len({round(f[0], 6) for f in fixes}) > 10 and len({round(f[1], 6) for f in fixes}) > 10 and 100 < spread < 2000,
+                  fixes=len(fixes), spread_m=round(spread), first=fixes[0], last=fixes[-1])
+    else:
+        sim.check('igt: replayed GPS fixes recorded', False)
     # Leave the mode: Exit is accepted once the replay ended.
     code, body = sim.command('IgtExit')
     s = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') == 'off', 15000, 'FC IGT off', quiet=True)
@@ -2693,6 +2764,61 @@ def sc_igt_flow(sim):
 
 
 SCENARIOS['igt_flow'] = sc_igt_flow
+
+
+def igt_late_card(sim):
+    """--igt-sd-late: the FC booted with an empty card. The station must report it, Enter must fault at once
+    (never wait in Validating), and Retry SD after the card is in must mount it and re-run the validation."""
+    s = sim.wait_until(lambda s: igt_status(sim).get('sd_ready') is False, 30000, 'FC reports SD not ready', quiet=True)
+    sim.check('sd: FC reports its SD card not mounted', s is not None, status=igt_status(sim))
+    code, al = sim.api('/api/alerts?minutes=60')
+    alerts = json.dumps(al)
+    sim.check('sd: station raises the FC SD card alert', 'SD card' in alerts and 'FC' in alerts, http=code)
+    for attempt in range(6):
+        igt_ticket(sim, 'enter')
+        left = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') not in (None, 'off'), 8000, 'FC left off', quiet=True)
+        if left is not None: break
+        sim.wait_v(5000)
+    st = igt_status(sim)
+    sim.check('sd: Enter without a card faults at once (reason 1), no wait in Validating',
+              st.get('fc_mode') == 'fault' and st.get('reason') == 1, status=st)
+    # The card goes in: write the image into the SD shim's backing file, then Retry SD.
+    img = (sim.out / 'config/flight-sdcard-late.img').read_bytes()
+    card = next((sim.diag / 'temp/native').resolve().glob('flight-state/sdcard.img'))
+    with card.open('r+b') as f:
+        f.write(img.rstrip(b'\0') + b'\0' * (-len(img.rstrip(b'\0')) % 512))
+    sim.log_action('sd_card_inserted', path=str(card), bytes=len(img))
+    code, body = sim.command('FcSdRetry')
+    sim.check('sd: Retry SD accepted', code == 200, http=code, body=body)
+    ok = sim.wait_until(lambda s: (lambda st: st.get('sd_ready') is True and st.get('fc_mode') == 'ready')(igt_status(sim)),
+                        60000, 'card mounted and CSVs validated', quiet=True)
+    sim.check('sd: Retry SD mounted the card and re-ran the CSV validation (ready)', ok is not None, status=igt_status(sim))
+
+
+def sc_igt_image_guard(sim):
+    """A ground-test FC image on the network in a flight mode (normal / test fire): the station warns and latches
+    Launch closed, with the reason in the Launch control; the latch holds (only a flight-image report clears it)."""
+    global BOARDS
+    BOARDS = present_boards(sim)
+    snap = sim.wait_ready([b for b in BOARDS if not (sim.a.station_mode == 'test_fire' and b in AV_BAY)], timeout_ms=sim.a.ready_timeout_ms)
+    sim.check('startup: boards healthy', snap is not None)
+    s = sim.wait_until(lambda s: igt_status(sim).get('fc_image') == 'ground_test', 30000, 'ground-test image seen', quiet=True)
+    st = igt_status(sim)
+    sim.check('guard: station identifies the FC ground-test image', s is not None, status=st)
+    sim.check('guard: warning shown and Launch latched', (st.get('image_notice') or {}).get('level') == 'warning' and st.get('launch_latched') is True
+              and 'ground-test image' in str(st.get('launch_latch_reason')), status=st)
+    c = sim.launch_control() or {}
+    sim.check('guard: the Launch control is disabled with the latch reason', c.get('enabled') is False and 'ground-test' in str(c.get('disabled_reason')),
+              control=c)
+    code, body = sim.command('Launch')
+    sim.check('guard: Launch refused with the latch reason', code != 200 and 'ground-test' in json.dumps(body), http=code, body=body)
+    sim.wait_v(15000)
+    st = igt_status(sim)
+    sim.check('guard: the latch holds while the ground-test image is present', st.get('launch_latched') is True, status=st)
+    sim.save_snapshot('end')
+
+
+SCENARIOS['igt_image_guard'] = sc_igt_image_guard
 
 
 def sc_config_resync(sim):
@@ -3100,6 +3226,8 @@ if __name__ == '__main__':
     p.add_argument('--igt-csv', type=Path, help='igt_flow: folder of integrated-ground-test CSVs for the FC SD card '
                    '(IMU0.CSV, BARO0.CSV, GPS0.CSV ...; GroundStation26 tools/igt_csv.py model --out DIR)')
     p.add_argument('--igt-live-pyro', action='store_true', help='igt_flow: arm LIVE PYRO (default dry-run: no pyro GPIO may rise)')
+    p.add_argument('--igt-sd-late', action='store_true', help='igt_flow: boot the FC with an empty SD card, then insert the '
+                   'CSV card and press Retry SD (checks the SD alert, the immediate Enter fault and the re-validation)')
     p.add_argument('--ui-contract', type=Path, help='Seds-Ground-Station-Frontend checkout: after the run, decode every captured live '
                    'station mode review with the UI (cargo test live_station_mode)')
     a = p.parse_args()
@@ -3124,6 +3252,8 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _term)
     if a.scenario in ('gse_flows', 'igt_flow') and not a.flows:
         a.flows = DEFAULT_FLOWS[a.station_mode]
+        if a.scenario == 'igt_flow' and a.station_mode == 'hitl':
+            a.flows = 'isolation,self_test,nitrogen,fill'
     known = INPUT_FAULT_PATTERNS if a.scenario == 'input_faults' else FLOWS  # input_faults: --flows selects patterns
     unknown = [f for f in a.flows.split(',') if f and f not in known]
     assert not unknown, ('unknown flows', unknown)

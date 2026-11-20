@@ -143,7 +143,10 @@ all of its threads are parked (see Status, Phase 3). `--station-clock faketime` 
 2. Enter ground test (prepare/confirm). The FC validates its SD-card CSVs.
 3. Postinit, then Launch through the FC and VB.
 4. The FC replays the flight into its real estimator and state machine.
-5. Drogue and main (line cutter) events, landed, and GPS back to real.
+5. Drogue and main events, landed, and GPS back to real; the replayed GPS track moves a few hundred metres in
+   latitude and longitude.
+
+
 
 The pyros are dry-run by default and must drive no GPIO edge in `native-gpio.log`. With
 `--igt-live-pyro`, PB5/PB6 must rise.
@@ -158,6 +161,13 @@ The pyros are dry-run by default and must drive no GPIO edge in `native-gpio.log
 * **Pace:** run with `--native-pace 2`. It passes 32/32 in about 2 minutes of wall time. At the default pace of 10,
   the controller's GSE plant writes its PT samples too sparsely in virtual time: the station pauses on "Tank
   pressure is missing, invalid or stale". Plain test_fire `gse_flows` fails the same way at that pace.
+* **HITL variant:** `--mode hitl` turns on the station's HITL replay setting (`hitl_replay`). It runs HITL's fill
+  flows and phase path, and the FC's CSV replay is the flight data source.
+* **Late SD card:** `--igt-sd-late` boots the FC with an empty card. The scenario checks the station's SD alert and
+  that Enter faults at once. It then writes the CSV card image into the SD shim's backing file and presses Retry SD:
+  the FC mounts the card and re-runs the validation.
+* **Image guard:** `--scenario igt_image_guard --mode normal` (or `test_fire`) runs with the ground-test FC image.
+  It checks that the station warns and latches Launch closed, with the reason on the Launch control.
 * **GPS:** the native engine does not model the RF GPS, so the FC sees no real fix. The replay supplies GPS
   until landing. After landing, "GPS: real" means no fix.
 
