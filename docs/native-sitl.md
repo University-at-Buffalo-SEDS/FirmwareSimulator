@@ -134,6 +134,33 @@ Measured (clock_steps, current dev boards and station f34453b):
 `--station-lockstep threads` puts the station's compute in the lockstep too: virtual time is granted only while
 all of its threads are parked (see Status, Phase 3). `--station-clock faketime` keeps the previous fixed-rate libfaketime mode.
 
+## Integrated ground test (igt_flow)
+
+`--scenario igt_flow --mode integrated_ground_test` runs the integrated ground test (GroundStation26
+`docs/integrated-ground-test.md`) on all seven boards:
+
+1. GSE flows as for a test fire, with the AV bay present.
+2. Enter ground test (prepare/confirm). The FC validates its SD-card CSVs.
+3. Postinit, then Launch through the FC and VB.
+4. The FC replays the flight into its real estimator and state machine.
+5. Drogue and main (line cutter) events, landed, and GPS back to real.
+
+The pyros are dry-run by default and must drive no GPIO edge in `native-gpio.log`. With
+`--igt-live-pyro`, PB5/PB6 must rise.
+
+* **FC image:** it needs the ground-test option. Build it once with
+  `native/build_board.py <cohort>/FlightComputer26 --out <builds> --define INTEGRATED_GROUND_TEST=ON --factory`,
+  then pass `--native-builds <builds>`.
+* **CSVs:** generate them with GroundStation26 `tools/igt_csv.py model --out DIR`, then pass `--igt-csv DIR`.
+  `build_config` writes them into a FAT16 image, `config/flight-sdcard.img`, using `scripts/fat_image.py`.
+* **SD seeding:** `native_engine.py` copies any `config/<node>-sdcard.img` to `<state>/sdcard.img` before
+  the boards start, so the SD shim serves it from first boot. Other scenarios use the same hook.
+* **Pace:** run with `--native-pace 2`. It passes 32/32 in about 2 minutes of wall time. At the default pace of 10,
+  the controller's GSE plant writes its PT samples too sparsely in virtual time: the station pauses on "Tank
+  pressure is missing, invalid or stale". Plain test_fire `gse_flows` fails the same way at that pace.
+* **GPS:** the native engine does not model the RF GPS, so the FC sees no real fix. The replay supplies GPS
+  until landing. After landing, "GPS: real" means no fix.
+
 ## What stays Renode-only
 
 Native runs the boards' logic, protocols, state machines, persistence and timing at the millisecond scale. It does not

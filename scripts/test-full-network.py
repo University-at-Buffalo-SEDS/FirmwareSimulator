@@ -2,7 +2,7 @@
 """Full seven-board linked simulation (see docs/hardware-faithful-radio.md for --radio rfd-faithful
 --faithful-time and the faithful, mode_switch, rrls_faithful, gps_time, clock_steps, vb_stale, stale_auto_abort and gse_flows scenarios) (RF, PB, FC on the AV bay radio; GB, AB, VB, DAQ on the
 umbilical) with the one-binary GS (+firmware_sim) started in a runtime station mode
-(GS_STATION_MODE=hitl|test_fire|normal; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
+(GS_STATION_MODE=hitl|test_fire|normal|integrated_ground_test; legacy --mode hitl_mode/test_fire_mode map onto it), a generic
 recorder (virtual-time stamped API snapshots) and scripted scenarios.
 
 All stimuli are explicit simulator inputs (pressure/loadcell raw files, scheduled CAN-link,
@@ -51,7 +51,7 @@ def build_config(a):
            'dry_self_test_confirmed': False, 'grouped_panel': True, 'turbocharge_max_added_mass_kg': 0.5, 'turbocharge_pressure_deadband_psi': 12}
     targets = {'version': 1, 'fill_source': 'kg50', 'nitrogen': {'target_mass_kg': 0.5, 'target_pressure_psi': 500},
                'nitrous': {'target_mass_kg': 8, 'target_pressure_psi': 750}}
-    if a.scenario == 'gse_flows':
+    if a.scenario in ('gse_flows', 'igt_flow'):
         # The operational flight sim's bench plant (F.plant_pressure, 130 psi regulator): a nitrogen test,
         # cold flow and Turbocharge that the valve-driven plant can actually reach.
         gse.update(nitrogen_target_psi=50, pressure_ceiling_psi=150, cold_flow_target_psi=40, turbocharge_max_added_mass_kg=0.3)
@@ -62,7 +62,8 @@ def build_config(a):
     items = [{'id': n, 'text': n, 'checked': False, 'complete_on': k, 'completed_by': None, 'completed_at_ms': None}
              for n, k in [('self-test', 'valve_self_test'), ('nitrogen', 'nitrogen_test')]]
     # input_faults launches only to open the DAQ's chamber burn window; it runs no fill flows to complete them.
-    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': a.scenario != 'input_faults', 'checklists': [
+    # igt_flow launches after the stand's flows without an operator to sign the checklist off.
+    (config / 'checklists.json').write_text(json.dumps({'revision': 0, 'enforce_before_launch': a.scenario not in ('input_faults', 'igt_flow'), 'checklists': [
         {'id': 'checkout', 'title': 'Checkout', 'required_before_launch': True, 'items': items}]}))
     (config / 'calibration.json').write_text(json.dumps({'version': 1, 'ch1': {'m': 100, 'b': 0}, 'iadc': {'m': 1, 'b': 0},
         # input_faults selects the P6 differential so the DAQ runs its P6 leg checks.
@@ -70,6 +71,15 @@ def build_config(a):
         'extra_channels': {'kg50': {'linear': {'m': 100, 'b': 0}, 'zero_raw': None, 'points': [], 'fit': None}}}))
     for n in ('checklists', 'calibration', 'gse'):
         p = diag / 'state' / f'{n}.json'; p.write_text((config / f'{n}.json').read_text()); p.chmod(0o660)
+    if a.scenario == 'igt_flow':
+        # The FC's SD card with the integrated-ground-test CSVs (/IGT/*.CSV), served from its first boot
+        # (native_engine.py seeds config/<node>-sdcard.img).
+        assert a.igt_csv, 'igt_flow needs --igt-csv DIR (GroundStation26 tools/igt_csv.py model --out DIR)'
+        import fat_image
+        src = a.igt_csv / 'IGT' if (a.igt_csv / 'IGT').is_dir() else a.igt_csv
+        files = {f'IGT/{p.name.upper()}': p.read_bytes() for p in sorted(src.glob('*.[cC][sS][vV]'))}
+        assert files, ('no CSVs in', src)
+        fat_image.build(config / 'flight-sdcard.img', files)
     if a.scenario == 'config_resync':
         # The station's saved fill drive is auxiliary (revision 1); the boards start on erased flash.
         p = diag / 'state' / 'drive.json'; p.write_text(json.dumps({'version': 1, 'mode': 2, 'revision': 1, 'source_ms': 1})); p.chmod(0o660)
@@ -313,7 +323,8 @@ class Sim:
         if not re.search(r'HTTP listening on (?:0\.0\.0\.0|127\.0\.0\.1):3000', text): return False
         feats = re.search(r'features testing=(\w+) hitl_mode=(\w+) test_fire_mode=(\w+)(?: mode=([\w ]+?) firmware_sim=(\w+))?', text)
         self.result['gs_features'] = feats.group(0) if feats else None
-        want = {'hitl': 'HITL', 'test_fire': 'Test fire', 'normal': 'Normal'}[self.a.station_mode]
+        want = {'hitl': 'HITL', 'test_fire': 'Test fire', 'normal': 'Normal',
+                'integrated_ground_test': 'Integrated ground test'}[self.a.station_mode]
         assert feats and feats.group(4) == want and feats.group(5) == 'true', ('station mode at start', feats and feats.group(0), want)
         info = json.loads(subprocess.check_output(['docker', 'inspect', self.cname], text=True))[0]
         addr = info['NetworkSettings']['Networks'][self.net]['IPAddress']
@@ -2509,7 +2520,9 @@ FLOWS = {'isolation': flow_isolation, 'self_test': flow_self_test, 'nitrogen': f
 # Default --flows per station mode: the full operator path with the real nitrogen test.
 DEFAULT_FLOWS = {'normal': 'isolation,self_test,nitrogen,cold_flow,fill,turbocharge,manual_switch',
                  'test_fire': 'isolation,self_test,nitrogen,cold_flow,fill,turbocharge,manual_switch',
-                 'hitl': 'isolation,self_test,nitrogen,cold_flow,fill,manual_switch'}
+                 'hitl': 'isolation,self_test,nitrogen,cold_flow,fill,manual_switch',
+                 # The stand's GSE path before the integrated ground test's Launch (igt_flow).
+                 'integrated_ground_test': 'isolation,self_test,nitrogen,fill'}
 
 
 def gse_flow_order(names):
@@ -2545,6 +2558,141 @@ def sc_gse_flows(sim):
 
 
 SCENARIOS['gse_flows'] = sc_gse_flows
+
+
+def igt_status(sim):
+    code, st = sim.api('/api/igt', timeout=5)
+    return st if code == 200 and isinstance(st, dict) else {}
+
+
+def igt_ticket(sim, action, confirmation=None):
+    """The UI's two-step IGT flow: POST /api/igt/prepare, then /api/igt/confirm with the ticket (and phrase)."""
+    code, ticket = sim.api('/api/igt/prepare', {'action': action})
+    sim.log_action('igt_prepare', action=action, http=code, ticket=ticket)
+    if code != 200 or not isinstance(ticket, dict) or 'ticket' not in ticket: return code, ticket
+    phrase = confirmation if confirmation is not None else ticket.get('required_confirmation')
+    code, resp = sim.api('/api/igt/confirm', {'ticket': ticket['ticket'], 'confirmation': phrase})
+    sim.log_action('igt_confirm', action=action, http=code, resp=resp)
+    return code, resp
+
+
+def igt_messages(sim, label):
+    """The FC's own IGT messages (entered, refused, CSV file:line problems, replay start/end) as the station holds them."""
+    code, msgs = sim.api('/api/messages', timeout=5)
+    rows = [m for m in (msgs if isinstance(msgs, list) else []) if 'IGT' in json.dumps(m)]
+    sim.log_action('igt_messages', label=label, http=code, messages=rows[-12:])
+    return rows
+
+
+def pyro_edges(sim):
+    """FC pyro GPIO rising edges in the native engine's GPIO log: CO2 (drogue) PB5, REEF (main / line cutter) PB6."""
+    path = sim.diag / 'native-gpio.log'
+    edges = {'drogue': 0, 'main': 0}
+    if not path.exists(): return None
+    for line in path.read_text(errors='replace').splitlines():
+        f = line.split()
+        if len(f) == 5 and f[1] == 'flight' and f[2] == '1' and f[4] == '1':
+            if f[3] == '5': edges['drogue'] += 1
+            elif f[3] == '6': edges['main'] += 1
+    return edges
+
+
+def fc_phase(sim):
+    for path in ('/api/flightstate', '/flightstate'):
+        code, body = sim.api(path, timeout=5)
+        if code == 200 and isinstance(body, dict): return body
+    return {}
+
+
+def sc_igt_flow(sim):
+    """Integrated ground test (GroundStation26 docs/integrated-ground-test.md) on all seven boards: the stand's GSE
+    flows as for a test fire with the AV bay present, Enter ground test (prepare/confirm), the FC validates its SD-card
+    CSVs (--igt-csv, served by the native SD shim), Postinit, Launch through the FC and VB, then the FC replays the
+    flight into its real estimator and state machine: drogue and main (line cutter) dry-run by default (no pyro GPIO
+    edge), landed, and GPS back to real. Checks the station's IGT status, labels and SIMULATED samples."""
+    global BOARDS
+    BOARDS = present_boards(sim)
+    live = sim.a.igt_live_pyro
+    sim.gse_plant = {'nitrogen': False, 'nitrous': False}
+    snap = sim.wait_ready(BOARDS, timeout_ms=sim.a.ready_timeout_ms)
+    sim.check('startup: all seven boards healthy, AV bay included', snap is not None and all(b in BOARDS for b in AV_BAY),
+              boards=BOARDS, rows={b: (sim.rows().get(b) or {}).get('readback_status') for b in BOARDS})
+    st = igt_status(sim)
+    sim.check('igt: station in integrated ground test mode, FC built with support', st.get('station_mode_igt') is True and st.get('supported') is True,
+              status=st)
+    # The plain command path refuses the ticketed actions.
+    code, body = sim.command('IgtEnter')
+    sim.check('igt: IgtEnter refused on the plain command path', code != 200, http=code, body=body)
+    g = sim.wait_until(lambda s: (s.get('gse') or {}).get('phase') in ('idle', 'cancelled', 'passed') and (s.get('gse') or {}).get('topology_stable') is not False
+                       and isinstance((s.get('gse') or {}).get('valves'), list) and None not in s['gse']['valves'], 120000, 'GSE at rest with valve readbacks')
+    sim.check('startup: GSE at rest with AB/VB valve readbacks', g is not None)
+
+    # Enter before arming: the FC validates the CSVs on its SD card.
+    # The FC refuses entry until it hears the station's heartbeat steadily after boot (Lost_GroundStation):
+    # an operator presses Enter again, as here.
+    for attempt in range(6):
+        code, resp = igt_ticket(sim, 'enter')
+        left = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') not in (None, 'off'), 8000, 'FC left off', quiet=True)
+        if code != 200 or left is not None: break
+        sim.log_action('igt_enter_retry', attempt=attempt, status=igt_status(sim)); igt_messages(sim, 'enter refused')
+        sim.wait_v(5000)
+    sim.check('igt: Enter ground test accepted (prepare/confirm)', code == 200, http=code, resp=resp, attempts=attempt + 1)
+    ok = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') in ('ready', 'fault'), 180000, 'FC IGT ready', quiet=True)
+    st = igt_status(sim); igt_messages(sim, 'after enter')
+    sim.check('igt: FC validated the CSVs (ready, dry-run)', ok is not None and st.get('fc_mode') == 'ready' and st.get('live_pyro') is False,
+              status=st)
+    if st.get('fc_mode') != 'ready': return
+    code, resp = igt_ticket(sim, 'live_pyro', confirmation='live pyro')
+    sim.check('igt: LIVE PYRO refused without the exact typed phrase', code != 200 or not (resp or {}).get('accepted', True), http=code, resp=resp)
+    if live:
+        code, resp = igt_ticket(sim, 'live_pyro', confirmation='LIVE PYRO')
+        s = sim.wait_until(lambda s: igt_status(sim).get('live_pyro') is True, 15000, 'LIVE PYRO armed', quiet=True)
+        sim.check('igt: LIVE PYRO armed', code == 200 and s is not None, http=code, resp=resp)
+
+    names = gse_flow_order(f for f in sim.a.flows.split(',') if f)
+    sim.log_action('gse_flows_order', flows=names)
+    for name in names:
+        step(sim, name, lambda: FLOWS[name](sim))
+
+    # Postinit (the FC arms its attitude reference on the stand), then Launch: FC + VB, no GPS fix needed.
+    code, body = sim.command('Postinit')
+    sim.wait_v(8000)
+    launched = None
+    for attempt in range(6):
+        sim.api('/api/board_abort/refresh', {}); sim.wait_v(1500)
+        sim.log_action('pre_launch_policy', reason=lock_reason(sim), igt=igt_status(sim))
+        v0 = sim.vclock(); code, body = sim.command('Launch')
+        if code == 200: launched = v0; break
+        if 'etract' in json.dumps(body) or 'etract' in lock_reason(sim)[1]:
+            sim.command('RetractPlumbing'); sim.wait_v(8000)
+    sim.check('launch: accepted in integrated ground test', launched is not None, http=code, body=body)
+    if launched is None: return
+    s = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') in ('sim', 'fault'), 20000, 'FC replay started', quiet=True)
+    st = igt_status(sim)
+    sim.check('igt: FC replay started at Launch; GPS simulated', s is not None and st.get('fc_mode') == 'sim' and st.get('gps_simulated') is True, status=st)
+
+    # The replayed flight: deployments (dry-run unless --igt-live-pyro), landed, GPS back to real.
+    want = 'live' if live else 'dry'
+    s = sim.wait_until(lambda s: (lambda st: st.get('fc_mode') in ('done', 'fault', 'off'))(igt_status(sim)), 400000, 'FC replay ended', quiet=True)
+    st = igt_status(sim); edges = pyro_edges(sim); igt_messages(sim, 'after replay')
+    sim.check('igt: replay ended at landing (done, no fault)', s is not None and st.get('fc_mode') == 'done' and st.get('reason') in (0, 10, None), status=st)
+    sim.check('igt: GPS switched back to real after landing', st.get('gps_simulated') is False, status=st)
+    if live:
+        sim.check('igt: LIVE PYRO fired the real drogue and main outputs', edges and edges['drogue'] >= 1 and edges['main'] >= 1, edges=edges)
+    else:
+        sim.check('igt: drogue and main (line cutter) events recorded as dry-run', st.get('drogue_dry_run') is True and st.get('main_dry_run') is True, status=st)
+        sim.check('igt: dry-run drove no pyro GPIO', edges is not None and edges == {'drogue': 0, 'main': 0}, edges=edges)
+    ph = fc_phase(sim)
+    sim.log_action('igt_end', status=st, phase=ph, edges=edges, mode=want)
+    sim.check('igt: station marks the flight data SIMULATED', 'simulated' in json.dumps(ph).lower() or st.get('fc_mode') == 'done', phase=ph)
+    # Leave the mode: Exit is accepted once the replay ended.
+    code, body = sim.command('IgtExit')
+    s = sim.wait_until(lambda s: igt_status(sim).get('fc_mode') == 'off', 15000, 'FC IGT off', quiet=True)
+    sim.check('igt: IgtExit returns the FC to off', code == 200 and s is not None, http=code, body=body, status=igt_status(sim))
+    sim.save_snapshot('end')
+
+
+SCENARIOS['igt_flow'] = sc_igt_flow
 
 
 def sc_config_resync(sim):
@@ -2893,7 +3041,7 @@ if __name__ == '__main__':
             os.execv(sys.executable, [sys.executable, str(W / 'native_engine.py'), '--controller', str(Path(__file__).resolve()), *sys.argv[1:]])
         assert engine == 'renode', f'--engine {engine}: native or renode'
     p = argparse.ArgumentParser()
-    p.add_argument('--mode', choices=['hitl', 'test_fire', 'normal', 'hitl_mode', 'test_fire_mode'], required=True,
+    p.add_argument('--mode', choices=['hitl', 'test_fire', 'normal', 'integrated_ground_test', 'hitl_mode', 'test_fire_mode'], required=True,
                    help='GS_STATION_MODE for the one-binary backend (legacy *_mode names accepted)')
     p.add_argument('--rrls', action='store_true', help='add an RRLS hosted station on the rocket radio medium')
     p.add_argument('--gps-fix-ms', type=int, default=0, help='timesync_comms: RF GPS fix phase length (virtual ms)')
@@ -2949,6 +3097,9 @@ if __name__ == '__main__':
     p.add_argument('--sched', type=json.loads, default={}, help='{"can0":s,"can1":s,"gsrb":s,"abrb":s} virtual seconds')
     p.add_argument('--flows', default='', help='gse_flows: comma list of ' + ','.join(FLOWS) + ' (default: the full operator path for --mode)')
     p.add_argument('--gse-config', type=json.loads, default={}, help='JSON merged into the station gse.json')
+    p.add_argument('--igt-csv', type=Path, help='igt_flow: folder of integrated-ground-test CSVs for the FC SD card '
+                   '(IMU0.CSV, BARO0.CSV, GPS0.CSV ...; GroundStation26 tools/igt_csv.py model --out DIR)')
+    p.add_argument('--igt-live-pyro', action='store_true', help='igt_flow: arm LIVE PYRO (default dry-run: no pyro GPIO may rise)')
     p.add_argument('--ui-contract', type=Path, help='Seds-Ground-Station-Frontend checkout: after the run, decode every captured live '
                    'station mode review with the UI (cargo test live_station_mode)')
     a = p.parse_args()
@@ -2971,7 +3122,7 @@ if __name__ == '__main__':
     import signal
     def _term(*_): raise KeyboardInterrupt('SIGTERM')
     signal.signal(signal.SIGTERM, _term)
-    if a.scenario == 'gse_flows' and not a.flows:
+    if a.scenario in ('gse_flows', 'igt_flow') and not a.flows:
         a.flows = DEFAULT_FLOWS[a.station_mode]
     known = INPUT_FAULT_PATTERNS if a.scenario == 'input_faults' else FLOWS  # input_faults: --flows selects patterns
     unknown = [f for f in a.flows.split(',') if f and f not in known]

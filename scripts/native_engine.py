@@ -342,6 +342,12 @@ def install(FN, opts):
             nodes[nname] = {'exe': man['exe'], 'flash_init': None if blank else (cohort_factory or man.get('factory_bin')),
                             'flash_size': (board_layout.get('memory') or {}).get('flash_size', 524288), 'devices': str(dev),
                             'drift_ppm': drift.get(nname, 0), 'env': {}}
+            # A scenario may hand a board a prepared SD card (config/<node>-sdcard.img, e.g. the FC's
+            # integrated-ground-test CSVs): the SD shim serves <state>/sdcard.img from first boot.
+            seed = config / f'{nname}-sdcard.img'
+            if seed.exists():
+                (scratch / f'{nname}-state').mkdir(exist_ok=True)
+                shutil.copyfile(seed, scratch / f'{nname}-state' / 'sdcard.img')
         gates = []
         for spec in env_opts.get('SEDS_UART_GATE', '').split(';'):
             parts = spec.split(':')
