@@ -1790,12 +1790,15 @@ def sc_rrls_takeover(sim):
     admits it). (4) An RRLS underglow and buzzer toggle in takeover are applied by the boards (RF/PB/FC underglow,
     FC buzzer memory probes) and (5) shown Confirmed on the RRLS. (6) An Abort from the RRLS in takeover shows
     latched for RF, FC and PB on the RRLS (their ordered BOARD_STATE_STATUS pushes delivered).
+    With --radio-reject silent the primary's own radio test mode (silent primary) cuts it off from cut0 to cut1 instead
+    of the medium (keep only the boot-window --radio-path-loss); the RRLS must also show the primary's banner.
     Evidence: rrls_takeover.jsonl."""
     a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'rrls_takeover.jsonl').open('a')
     def rec(**kw):
         out.write(json.dumps(kw, default=str) + '\n'); out.flush()
     sim.wait_ready(boards, timeout_ms=a.ready_timeout_ms)
     r = Rrls(sim); sim.check('RRLS login', r.login())
+    reject = start_radio_reject(sim) if a.radio_reject else None
     wait_until_v(sim, (S['cut0'] - 2) * 1000, 'before cut')
     early = [t for t in rrls_log_events(sim, 'RRLS takeover: ') if t < S['cut0']]
     rec(kind='boot', early_takeovers_s=early)
@@ -1803,6 +1806,12 @@ def sc_rrls_takeover(sim):
     wait_until_v(sim, (S['cut0'] + 12) * 1000, 'takeover expected')
     took = [t for t in rrls_log_events(sim, 'RRLS takeover: ') if t >= S['cut0']]
     sim.check('RRLS takes over once the primary is unheard', bool(took), takeovers_s=took)
+    if reject:
+        radio_reject_checks(sim)
+        c, d = r.api('/api/radio/reject-test')
+        shown = (d or {}).get('primary') if c == 200 and isinstance(d, dict) else None
+        sim.check('the RRLS shows the primary\'s radio test banner in takeover', bool(shown) and 'RADIO TEST' in str(shown.get('banner')),
+                  http=c, primary=shown)
     # (3) RRLS-originated query to PB in takeover: the PB row must get a new readback (new nonce).
     def pb_row():
         c, d = r.api('/api/board-recovery/status')
@@ -1856,6 +1865,12 @@ def sc_rrls_takeover(sim):
     wait_until_v(sim, (S['cut1'] + 40) * 1000, 'after hand-back')
     handed = [t for t in rrls_log_events(sim, 'RRLS takeover ended') if t >= S['cut0']]
     sim.check('RRLS hands authority back after the primary returns', bool(handed), ended_s=handed)
+    sim.result['rrls_takeover'].update(handed_s=handed, takeover_after_cut_s=(took[0] - S['cut0']) if took else None,
+                                       handback_after_cut_s=(handed[0] - S['cut1']) if handed else None)
+    if reject:
+        info = sim.result.get('radio_reject') or {}
+        sim.check('the radio test was still on (silent) until stopped at the end of the cut', bool(info.get('active_at_stop')),
+                  active_at_stop=info.get('active_at_stop'), history=(info.get('history') or [])[:2])
 
 
 SCENARIOS['rrls_takeover'] = sc_rrls_takeover
@@ -3019,6 +3034,43 @@ def station_log_events(sim, pattern, host='groundstation'):
     return sorted(out)
 
 
+def radio_reject_status(sim):
+    c, d = sim.api('/api/radio/reject-test')
+    return d if c == 200 and isinstance(d, dict) else {}
+
+
+def start_radio_reject(sim):
+    """--radio-reject: the station's radio test mode (GS radio_reject_test) cuts the direct AV-bay link in the primary's
+    radio driver from sched cut0 to cut1, instead of the sim's radio medium. relay: force relay (GS<->RRLS kept);
+    silent: the primary goes radio-silent (RRLS takeover). Returns the thread; sim.result['radio_reject'] has the
+    start/stop responses and the station's own record."""
+    a = sim.a; S = a.sched; variant = {'relay': 'force_relay', 'silent': 'silent_primary'}[a.radio_reject]
+    info = sim.result.setdefault('radio_reject', {'variant': variant})
+    def run():
+        wait_until_v(sim, S['cut0'] * 1000, 'radio test start')
+        duration = min(3600, max(30, S['cut1'] - S['cut0'] + 120))
+        c, d = sim.api('/api/radio/reject-test/start', {'variant': variant, 'duration_s': duration, 'confirm': True})
+        info.update(start_v=sim.vclock(), start_http=c, start_active=(d or {}).get('active') if isinstance(d, dict) else None,
+                    start_error=None if c == 200 else str(d)[:300])
+        sim.log_action('radio_reject_start', variant=variant, http=c, body=str(d)[:300])
+        wait_until_v(sim, S['cut1'] * 1000, 'radio test stop')
+        before = radio_reject_status(sim)
+        c, d = sim.api('/api/radio/reject-test/stop', {})
+        info.update(stop_v=sim.vclock(), stop_http=c, active_at_stop=before.get('active'),
+                    history=(d or {}).get('history') if isinstance(d, dict) else None)
+        sim.log_action('radio_reject_stop', http=c, active_before=before.get('active'), history=(info.get('history') or [])[:2])
+    t = threading.Thread(target=run, daemon=True, name='radio-reject'); t.start()
+    return t
+
+
+def radio_reject_checks(sim):
+    """Started on the primary at cut0 and still on (not ended by itself) when stopped at cut1."""
+    info = sim.result.get('radio_reject') or {}
+    sim.check('radio test mode started on the primary at the cut', info.get('start_http') == 200 and bool(info.get('start_active')),
+              http=info.get('start_http'), error=info.get('start_error'))
+    return info
+
+
 def sc_rrls_relay(sim):
     """RRLS relay mode (field reports 2026-11-17): the primary loses its direct AV-bay path (sched cut0..cut1: GS<->RF
     radio cut only; the RRLS still hears both) and asks the RRLS to relay. In relay, --cycles times: (A) the primary
@@ -3026,7 +3078,10 @@ def sc_rrls_relay(sim):
     requests the relay; the boards apply every toggle (RF/PB/FC underglow probes); the RRLS shows the underglow
     requested and confirmed within 3 s of the boards applying it, for toggles from either station (field: 15-20 s
     stale both ways); an RRLS-proxied command the boards act on is reported accepted, not "outcome unknown ... Primary
-    response was not confirmed" (field); the relay ends after the direct path returns. Evidence: rrls_relay.jsonl."""
+    response was not confirmed" (field); the relay ends after the direct path returns. With --radio-reject relay the
+    primary's own radio test mode (force relay) cuts the link instead of the medium; the T clock/Armed steps cannot run
+    in relay then (the test is ground-only), so it checks that stepping toward Armed ends the test by itself, or with
+    sched reject_abort that an operator Abort goes through the relay. Evidence: rrls_relay.jsonl."""
     a = sim.a; S = a.sched; boards = present_boards(sim); out = (sim.out / 'rrls_relay.jsonl').open('a')
     def rec(**kw):
         out.write(json.dumps({'v': sim.vclock(), **kw}, default=str) + '\n'); out.flush()
@@ -3053,7 +3108,9 @@ def sc_rrls_relay(sim):
     rec(kind='pairing', code=code, paired_ms=paired, primary=p1, rrls=p2)
     sim.check('stations paired over the radio before the cut', paired is not None, paired_ms=paired,
               rrls={k: (p2 or {}).get(k) for k in ('paired', 'restart_required', 'primary_link')})
+    reject = start_radio_reject(sim) if a.radio_reject else None
     wait_until_v(sim, (S['cut0'] + 2) * 1000, 'direct path cut')
+    if reject: radio_reject_checks(sim)
     t_req = None
     while sim.vclock() < (S['cut0'] + 30) * 1000 and not sim.stop.is_set():
         ev = [t for t in station_log_events(sim, 'requesting RRLS relay') if t >= S['cut0']]
@@ -3140,20 +3197,66 @@ def sc_rrls_relay(sim):
                'rrls_lag_ms': (t_r - t_p) if (t_r is not None and t_p is not None) else None}
         mirrors.append(row); rec(kind='mirror', **row); sim.log_action('rrls_mirror', **row)
     # The RRLS websocket carries the network flight state number; the primary's status shows its local number.
+    reject_end_s = None
     if sim.vclock() < (S['cut1'] - 60) * 1000:
         sim.wait_v(3000)
         mirror('flight state', 'AdvanceFlightState', fstate)
-        phase_to(sim, 6, 'advance to Armed')
-        mirror('T clock', 'Launch', tclock)
-        mirror('T clock reset', 'ResetTClock', tclock)
-        mirror('flight state (rewind)', 'RewindFlightState', fstate)
+        if not a.radio_reject:
+            phase_to(sim, 6, 'advance to Armed')
+            mirror('T clock', 'Launch', tclock)
+            mirror('T clock reset', 'ResetTClock', tclock)
+            mirror('flight state (rewind)', 'RewindFlightState', fstate)
+        else:
+            # The radio test is allowed only in Startup/Idle/PreFill, so Launch and the T clock (which need Armed) cannot
+            # run in relay. Instead: still on after the change above; the relay is held as long as the medium cut's
+            # (to 30 s before cut1); then stepping toward Armed ends the test by itself (the relay end is timed from it).
+            st = radio_reject_status(sim)
+            sim.check('in relay, the radio test is still on after the flight state change (Startup/Idle/PreFill)', bool(st.get('active')),
+                      active=st.get('active'), history=(st.get('history') or [])[:2])
+            wait_until_v(sim, (S['cut1'] - 30) * 1000, 'radio test gate check')
+            st = radio_reject_status(sim)
+            sim.check('the radio test held the relay until the gate check', bool(st.get('active')) and bool((st.get('active') or {}).get('relay_engaged')),
+                      active=st.get('active'))
+            if S.get('reject_abort'):
+                # sched reject_abort: an operator Abort in force relay goes through the relay; the test ends once RF, FC
+                # and PB read Aborted (abort_relayed), or the station lifts it and sends direct (abort_escape).
+                c, b = sim.command('Abort'); v0 = sim.vclock(); latched = {}
+                while sim.vclock() - v0 < 10000 and not sim.stop.is_set():
+                    st = radio_reject_status(sim)
+                    # Each board's pushed Abort latch (BOARD_STATE_STATUS), as the primary logs it.
+                    for b_ in ('RF', 'FC', 'PB'):
+                        ev = [t for t in station_log_events(sim, f'{b_} pushed its Abort latch') if t * 1000 >= v0 - 1000]
+                        if ev and b_ not in latched: latched[b_] = round(ev[0] * 1000 - v0)
+                    if not st.get('active') and len(latched) == 3: break
+                    sim.wait_v(250)
+                last = (st.get('history') or [{}])[0]
+                reject_end_s = (station_log_events(sim, 'Radio test OFF') or [None])[-1]
+                sim.result['radio_reject_abort'] = dict(http=c, last=last, latched_ms=latched, ended_s=reject_end_s)
+                sim.check('an Abort in force relay reaches RF, FC and PB through the relay (radio test ends: abort_relayed)',
+                          not st.get('active') and last.get('reason') == 'abort_relayed', http=c, last=last, latched_ms=latched)
+                sim.check('RF, FC and PB push their Abort latch to the primary through the relay within 10 s', len(latched) == 3, latched_ms=latched)
+            else:
+                phase_to(sim, 6, 'advance to Armed')
+                v0 = sim.vclock()
+                while sim.vclock() - v0 < 5000 and not sim.stop.is_set():
+                    st = radio_reject_status(sim)
+                    if not st.get('active'): break
+                    sim.wait_v(250)
+                last = (st.get('history') or [{}])[0]
+                reject_end_s = (station_log_events(sim, 'Radio test OFF') or [None])[-1]
+                sim.check('the radio test ends by itself when the flight state leaves Startup/Idle/PreFill',
+                          not st.get('active') and last.get('reason') == 'flight_state', last=last, ended_s=reject_end_s)
     sim.result['rrls_mirror'] = mirrors
     for m in mirrors:
         sim.check(f"in relay, the RRLS mirrors the primary's {m['label']} change within 3 s ({m['cmd']})",
                   m['rrls_lag_ms'] is not None and m['rrls_lag_ms'] <= 3000, **{k: m[k] for k in ('primary', 'rrls', 'primary_changed_ms', 'rrls_mirrored_ms', 'rrls_lag_ms', 'http')})
     wait_until_v(sim, (S['cut1'] + 25) * 1000, 'after the direct path returns')
-    ended = [t for t in station_log_events(sim, 'direct AV-bay path restored') if t >= S['cut1']]
-    sim.check('the relay ends after the direct path returns', bool(ended), restored_s=ended)
+    back_s = reject_end_s if reject_end_s is not None else S['cut1']
+    ended = [t for t in station_log_events(sim, 'direct AV-bay path restored') if t >= back_s]
+    sim.check('the relay ends after the direct path returns', bool(ended), restored_s=ended, direct_back_s=back_s)
+    if a.radio_reject:
+        sim.result['rrls_relay_reject'] = dict(requested_s=t_req, direct_back_s=back_s, restored_s=ended[:1],
+                                               restore_after_s=(ended[0] - back_s) if ended else None)
     sim.save_snapshot('end')
 
 
@@ -3209,6 +3312,9 @@ if __name__ == '__main__':
     p.add_argument('--board-reboot', action='append', default=[])
     p.add_argument('--can-cut', action='append', default=[])
     p.add_argument('--radio-cut', action='append', default=[], help='s0:s1 virtual seconds: GS<->RF direct radio path broken')
+    p.add_argument('--radio-reject', choices=['relay', 'silent'], default=None,
+                   help='rrls_relay/rrls_takeover: cut the direct link with the station\'s radio test mode (GS radio_reject_test) '
+                        'from sched cut0 to cut1 instead of the sim\'s radio medium (relay: force relay, silent: silent primary)')
     p.add_argument('--wall-freshness-scale', type=int, default=30)
     p.add_argument('--rust-log', default='info')
     p.add_argument('--cpus', type=int, default=6)
@@ -3243,7 +3349,7 @@ if __name__ == '__main__':
     if a.sched.get('abrb'): a.board_reboot.append(f"AB:{a.sched['abrb']}")
     if a.sched.get('vbrb'): a.board_reboot.append(f"VB:{a.sched['vbrb']}")
     if a.sched.get('vbc0'): a.can_cut.append(f"VB:{a.sched['vbc0']}:{a.sched['vbc1']}")
-    if a.sched.get('cut0'): a.radio_cut.append(f"{a.sched['cut0']}:{a.sched['cut1']}")
+    if a.sched.get('cut0') and not a.radio_reject: a.radio_cut.append(f"{a.sched['cut0']}:{a.sched['cut1']}")
     if a.sched.get('dq0'): a.can_cut.append(f"DAQ:{a.sched['dq0']}:{a.sched['dq1']}")
     if a.sched.get('gbc0'): a.can_cut.append(f"GB:{a.sched['gbc0']}:{a.sched['gbc1']}")
     if a.sched.get('hostrb'): a.gs_reboot.append(str(a.sched['hostrb'])); a.board_reboot.append(f"rrls:{a.sched['hostrb']}")

@@ -282,6 +282,32 @@ latest Renode acceptance runs keeps the native tier honest.
   natively on both f34453b and a2bd517: RRLS capability after the restart in 8.5 s / 10.5 s, no capability gap and no
   Offline over 600 s, RRLS underglow confirmed 4-5 ms after the GS. The Renode runs of that scenario on older
   stations (b15b54c, 5216d24, 2664546) failed the capability/Offline checks; native does not reproduce those.
+* Radio test mode (`--radio-reject relay|silent`). The station's own switch (GroundStation radio_reject_test) cuts
+  the primary's direct AV-bay link in its radio driver from sched cut0 to cut1, instead of the medium cut: the
+  controller signs in as an administrator and posts `/api/radio/reject-test/start` at cut0 and `/stop` at cut1, and no
+  `radio_link_events` are added for the cut. `relay` (force relay) keeps the primary's RRLS link; `silent` (silent
+  primary) drops everything on its radio, so leave only the boot-window `--radio-path-loss gs:rrls:0:14:1000000` on
+  rrls_takeover. The radio test is ground-only, so in rrls_relay the Armed/Launch/T-clock mirror steps cannot run in
+  relay: instead the relay is held to cut1 - 30 s and stepping toward Armed must end the test by itself, or with sched
+  `reject_abort` an operator Abort must go through the relay (the test ends `abort_relayed`). Results, station on
+  the radio-reject-test branch, pace 2 (relay) / 10 (takeover), native-sitl-20261117 boards:
+
+  | scenario | medium cut | radio test |
+  |---|---|---|
+  | rrls_relay (cut 120-560) | 13/13; relay asked 2.9 s after the cut; toggles applied 0.5-1.1 s, RRLS rows at or before the primary's; relay ends 5.2 s after cut1 | 14/14; relay asked 2.9 s after the start; toggles applied 0.6-1.2 s, RRLS rows at most 0.5 s after the boards; held to 530 s; Armed step ends the test (flight_state); relay ends 5.0 s after |
+  | rrls_relay + reject_abort | - | 14/14; Abort through the relay: RF/FC/PB pushed their latch 567-708 ms after it, test ended abort_relayed; relay ends 5.1 s after |
+  | rrls_takeover (cut 200-320) | 9/9; takeover 5.5 s after the cut (6 s after the last HEALTH); RRLS Abort latched 642-646 ms; hand-back 5.1 s after cut1 | 12/12; takeover 8.0 s after the start (silent from start + 1.5 s, then 6 s); RRLS shows the primary's banner in takeover; RRLS Abort latched 530-532 ms; hand-back 5.7 s after the stop |
+
+  Re-run on the RR v2 / SEDSnet 7 stack (station radio-reject-test rebased on f691ab6, dev boards 728f4a0 RF et al.,
+  engine a07e074): rrls_relay 13/13 cut vs 14/14 radio test (relay asked 2.9 s after either; ends 5.2 s / 5.0 s
+  after), reject_abort 14/14 (latches 432-534 ms, abort_relayed), rrls_takeover 9/9 vs 12/12 (takeover 5.4 s after
+  the cut vs 7.2 s after the start, hand-back 5.1 s vs 5.5 s).
+
+  An earlier relay run that still ran the Armed/Launch/T-clock steps after the Armed step had ended the test failed
+  two checks that are not the radio test's: one primary-origin underglow row confirmed on the RRLS 4.2 s after the
+  boards (the known 3.9-4.7 s primary-row case above), and the Rewind mirror took 21 s on the now-listening RRLS. The
+  same steps right after a medium cut ends (`cut1` 150) show it too (Launch T clock 10.7 s on the RRLS), so a
+  listening RRLS's station-state mirror just after a relay ends is slow with either kind of cut.
 * Thread-level station lockstep (`--station-lockstep threads`, opt-in). simclock keeps a table of every station
   thread: running, parked without a deadline, or parked until a virtual deadline (sleep, timed futex,
   epoll/poll/ppoll; fsync/fdatasync count as parked, so the host disk does not set the pace). In this mode:
