@@ -4,12 +4,23 @@
 #include "main.h"
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #ifdef HAL_SD_MODULE_ENABLED
 static int sd_fd = -1;
 static uint64_t sd_bytes;
+/* Card out of its slot: SIM_SD_ABSENT at boot, or the plant's "sdcard" device message ("absent=0|1") at run time.
+ * Removing the card closes the image, so a card the launcher rewrote meanwhile (another IGT dataset) is read fresh. */
+static int sd_absent = -1;
+void sim_sd_set(const char *csv)
+{
+    if (!strncmp(csv, "absent=", 7)) {
+        sd_absent = atoi(csv + 7) ? 1 : 0;
+        if (sd_absent && sd_fd >= 0) { close(sd_fd); sd_fd = -1; }
+    }
+}
 __attribute__((weak)) void HAL_SD_TxCpltCallback(SD_HandleTypeDef *h) { (void)h; }
 __attribute__((weak)) void HAL_SD_RxCpltCallback(SD_HandleTypeDef *h) { (void)h; }
 __attribute__((weak)) void HAL_SD_ErrorCallback(SD_HandleTypeDef *h) { (void)h; }
@@ -20,7 +31,8 @@ __attribute__((weak)) void HAL_SD_MspDeInit(SD_HandleTypeDef *h) { (void)h; }
 HAL_StatusTypeDef HAL_SD_Init(SD_HandleTypeDef *h)
 {
     if (h->State == HAL_SD_STATE_RESET) { h->Lock = HAL_UNLOCKED; HAL_SD_MspInit(h); }
-    if (sim_env_long("SIM_SD_ABSENT", 0)) { h->ErrorCode = HAL_SD_ERROR_TIMEOUT; h->State = HAL_SD_STATE_ERROR; return HAL_ERROR; }
+    if (sd_absent < 0) sd_absent = sim_env_long("SIM_SD_ABSENT", 0) ? 1 : 0;
+    if (sd_absent) { h->ErrorCode = HAL_SD_ERROR_TIMEOUT; h->State = HAL_SD_STATE_ERROR; return HAL_ERROR; }
     if (sd_fd < 0) {
         char path[1024]; snprintf(path, sizeof path, "%s/sdcard.img", sim_state_dir());
         sd_fd = open(path, O_RDWR | O_CREAT, 0644);
@@ -50,6 +62,7 @@ static void sd_done(void *arg, uintptr_t write)
 static void sd_err(void *arg, uintptr_t a2) { (void)a2; SD_HandleTypeDef *h = arg; h->State = HAL_SD_STATE_READY; h->ErrorCode = HAL_SD_ERROR_DATA_TIMEOUT; HAL_SD_ErrorCallback(h); }
 static HAL_StatusTypeDef sd_io(SD_HandleTypeDef *h, uint8_t *data, uint32_t block, uint32_t n, int write)
 {
+    if (sd_absent == 1 || sd_fd < 0) { h->ErrorCode |= HAL_SD_ERROR_TIMEOUT; return HAL_ERROR; }
     if (h->State != HAL_SD_STATE_READY) { h->ErrorCode |= HAL_SD_ERROR_BUSY; return HAL_ERROR; }
     if ((uint64_t)(block + n) * 512u > sd_bytes) { h->ErrorCode |= HAL_SD_ERROR_ADDR_OUT_OF_RANGE; return HAL_ERROR; }
     h->State = HAL_SD_STATE_BUSY; h->ErrorCode = HAL_SD_ERROR_NONE;

@@ -79,6 +79,84 @@ def die_with_parent(sig=signal.SIGTERM):
         pass
 
 
+SD_BYTES = 1024 << 20  # the shim's SIM_SD_MB default
+
+
+def write_sd(image: Path, igt_dir: Path | None, dataset: str) -> dict:
+    """A FAT32 card for the FC; with `dataset`, its IGT/ files at the card root (the IGT replay's layout)."""
+    sys.path.insert(0, str(HERE))
+    from fat32_image import build
+    files = {}
+    if dataset and igt_dir:
+        src = igt_dir / dataset / "IGT"
+        for f in sorted(src.glob("*.CSV")):
+            files[f"IGT/{f.name.upper()}"] = f.read_bytes()
+    image.parent.mkdir(parents=True, exist_ok=True)
+    build(image, SD_BYTES, files)
+    return {"dataset": dataset or None, "files": sorted(files), "bytes": sum(map(len, files.values()))}
+
+
+def watch_sd(out: Path, image: Path, igt_dir: Path | None, stop) -> None:
+    """Swap the card's contents when the operator picks another IGT dataset while the card is out (fc_sd_missing),
+    as a person would swap cards; a change while the card is in waits for the next removal."""
+    import time as _t
+    status_path = out / "sdcard.json"
+    loaded = json.loads(status_path.read_text()).get("dataset") if status_path.exists() else None
+    while not stop.is_set():
+        try:
+            control = json.loads((out / "control.json").read_text())
+        except (OSError, ValueError):
+            control = {}
+        want = ((control.get("igt") or {}).get("dataset")) or None
+        out_of_slot = bool((control.get("faults") or {}).get("fc_sd_missing"))
+        if want != loaded:
+            if out_of_slot:
+                info = write_sd(image, igt_dir, want or "")
+                loaded = want
+                status_path.write_text(json.dumps({**info, "pending": None}))
+            else:
+                status_path.write_text(json.dumps({"dataset": loaded, "pending": want,
+                                                   "note": "remove the card (FC SD card missing) to load the selected dataset"}))
+        _t.sleep(0.5)
+
+
+def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
+    """Plant defaults from GroundStation26 tools/flight_profile (vehicle.json, the motor summary), so updates there
+    (the apogee planner, the fire archive) flow into the sim. Returns (plant overrides, provenance)."""
+    vehicle = json.loads((directory / "vehicle.json").read_text())
+    v, m, rec, env = vehicle.get("vehicle", {}), vehicle.get("motor", {}), vehicle.get("recovery", {}), vehicle.get("environment", {})
+    out = {"vehicle": {}, "motor": {}}
+    veh = out["vehicle"]
+    for key, src in (("dry_mass_kg", v.get("dry_mass_kg")), ("diameter_m", v.get("diameter_m")),
+                     ("drogue_vt", rec.get("drogue_descent_mps")), ("main_vt", rec.get("main_descent_mps")),
+                     ("launch_lat", env.get("site_lat_deg")), ("launch_lon", env.get("site_lon_deg")), ("pad_msl_m", env.get("site_msl_m"))):
+        if isinstance(src, (int, float)):
+            veh[key] = float(src)
+    info = {"vehicle_json": str(directory / "vehicle.json")}
+    curve = m.get("thrust_curve_csv")
+    summary_path = (directory / curve).with_suffix(".json") if curve else None
+    if summary_path and summary_path.exists():
+        summary = json.loads(summary_path.read_text()).get("summary", {})
+        impulse = summary.get("total_impulse_ns")
+        breakdown = summary.get("propellant_mass_breakdown") or {}
+        ox = breakdown.get("oxidizer_n2o_kg")
+        fuel = breakdown.get("fuel_kg")
+        of = (ox / fuel) if isinstance(ox, (int, float)) and isinstance(fuel, (int, float)) and fuel > 0 else 5.0
+        if isinstance(impulse, (int, float)) and isinstance(ox, (int, float)) and ox > 0:
+            # thrust = Isp g0 (1 + 1/OF) mdot_ox, so the measured impulse per kg of oxidiser fixes the delivered Isp
+            out["motor"]["isp_s"] = impulse / (ox * 9.80665 * (1.0 + 1.0 / of))
+            out["motor"]["of_ratio"] = of
+        if isinstance(fuel, (int, float)):
+            veh["fuel_kg"] = float(fuel)
+            veh["tare_kg"] = veh.get("dry_mass_kg", 31.6) + float(fuel)
+        info.update(motor_summary=str(summary_path), total_impulse_ns=impulse, oxidizer_kg=ox, fuel_kg=fuel,
+                    isp_s=round(out["motor"].get("isp_s", 0.0), 1))
+    if isinstance(m.get("total_impulse_ns"), (int, float)) and info.get("total_impulse_ns"):
+        # vehicle.json rescales the measured curve to another impulse (the 10 kft sets)
+        out["motor"]["impulse_scale"] = m["total_impulse_ns"] / info["total_impulse_ns"]
+    return out, info
+
+
 def std_pressure(h_msl: float) -> float:
     return 101325.0 * (1 - 2.25577e-5 * h_msl) ** 5.25588
 
@@ -89,6 +167,9 @@ def main() -> int:
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--plant", type=Path, help="plant configuration overrides (native_plant.rs PlantConfig)")
     p.add_argument("--nodes", default=",".join(NODES))
+    p.add_argument("--flight-profile-dir", type=Path,
+                   help="GroundStation26 tools/flight_profile: vehicle.json and the motor data seed the plant")
+    p.add_argument("--igt-dir", type=Path, help="IGT datasets (GroundStation26 test-data/igt): <set>/IGT/*.CSV")
     p.add_argument("--mode", default="normal", help="station mode: test_fire keeps the rocket on the stand, hitl fires no igniter")
     p.add_argument("--pace", type=float, default=1.0, help="virtual s per wall s; the station needs 1")
     p.add_argument("--seed", type=int, default=1)
@@ -110,7 +191,13 @@ def main() -> int:
     for stale in ("endpoints.json", "status.json"):
         (out / stale).unlink(missing_ok=True)
     plant = json.loads(a.plant.read_text()) if a.plant else {}
-    plant.setdefault("test_stand", a.mode == "test_fire")
+    profile_info = None
+    if a.flight_profile_dir and (a.flight_profile_dir / "vehicle.json").exists():
+        seeded, profile_info = plant_from_flight_profile(a.flight_profile_dir)
+        for section, values in seeded.items():
+            for k, val in values.items():
+                plant.setdefault(section, {}).setdefault(k, val)
+    plant.setdefault("test_stand", a.mode in ("test_fire", "integrated_ground_test"))
     plant.setdefault("require_igniter", a.mode not in ("hitl", "testing"))
     plant.setdefault("seed", a.seed)
     # the DAQ's SystemCoreClock (its DAC trigger timers' clock) for the plant's DAC playback
@@ -128,14 +215,33 @@ def main() -> int:
     pad_msl = (plant.get("vehicle") or {}).get("pad_msl_m", 890.016)
     shm = Path("/dev/shm") if Path("/dev/shm").is_dir() else None
     scratch = Path(tempfile.mkdtemp(prefix="seds-gs-bay-", dir=shm))
+    # the FC's SD card (FAT32), with the selected IGT dataset if any
+    control_doc = {}
+    try:
+        control_doc = json.loads((out / "control.json").read_text())
+    except (OSError, ValueError):
+        pass
+    sd_image = scratch / "flight-state" / "sdcard.img"
+    if "flight" in nodes:
+        info = write_sd(sd_image, a.igt_dir, ((control_doc.get("igt") or {}).get("dataset")) or "")
+        (out / "sdcard.json").write_text(json.dumps({**info, "pending": None}))
     native_nodes = {}
     firmware = {}
     for n in nodes:
         b = manifest["boards"][n]
+        if n == "flight" and a.mode == "integrated_ground_test":
+            # the FC ground-test image (CSV replay from the SD card, dry-run pyro gate)
+            if "flight_igt" not in manifest["boards"]:
+                raise SystemExit("the FC ground-test variant is not built (python3 tools/firmware_sim.py build)")
+            b = manifest["boards"]["flight_igt"]
         board_dir = Path(b["exe"]).parent
         layout = json.loads((board_dir / "board.json").read_text())
         dev = config / f"{n}.devices"
-        dev.write_text(devices_text(layout))
+        text = devices_text(layout)
+        for per in layout.get("peripherals", []):
+            if per.get("model") == "neo_m9n":  # the native NEO-M9N model (sim_gps.c)
+                text += f"gps {per.get('bus', 'spi1')}\n"
+        dev.write_text(text)
         env = {}
         if n == "flight":
             # the barometer's weather trim set (P = raw / 128 Pa) so the plant's flight model can drive it
@@ -144,6 +250,7 @@ def main() -> int:
                            "devices": str(dev), "env": env, "drift_ppm": 0}
         firmware[n] = {k: b.get(k) for k in ("repo", "ref", "short", "describe", "subject", "committed")}
     firmware["_engine"] = {k: (manifest.get("firmware_simulator") or {}).get(k) for k in ("describe", "short", "source", "dirty")}
+    firmware["_flight_profile"] = profile_info
     firmware["_sedsnet"] = {k: (manifest.get("sedsnet") or {}).get(k) for k in ("ref", "short", "describe")}
     topo = topology(nodes)
     (config / "topology.json").write_text(json.dumps(topo, indent=1))
@@ -155,6 +262,10 @@ def main() -> int:
     coordinator = a.coordinator or Path(manifest["coordinator"])
     cmd = [str(coordinator), "native-bay", "--topology", str(config / "topology.json"), "--native", str(config / "native.json")]
     env = {**os.environ, "FIRMWARE_SIM_NODE_NICE": os.environ.get("FIRMWARE_SIM_NODE_NICE", "10")}
+    import threading
+    stop = threading.Event()
+    if "flight" in nodes:
+        threading.Thread(target=watch_sd, args=(out, sd_image, a.igt_dir, stop), daemon=True).start()
     with (diag / "bay.log").open("a") as log:
         child = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
                                  preexec_fn=lambda: die_with_parent(signal.SIGTERM))
@@ -167,6 +278,7 @@ def main() -> int:
         try:
             code = child.wait()
         finally:
+            stop.set()
             if child.poll() is None:
                 child.kill()
             shutil.rmtree(scratch, ignore_errors=True)

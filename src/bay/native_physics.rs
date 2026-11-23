@@ -12,9 +12,9 @@
 //! * Flows: liquid through an orifice, mdot = CdA sqrt(2 rho dP) (single-phase approximation of the two-phase fill
 //!   line; no flashing correction), gas/vapour choked or subsonic through an orifice. Effective areas are assumed so
 //!   an 8 kg fill takes a few minutes with venting, the vent bleeds slowly and the dump empties the tank in ~15 s.
-//! * Motor (11-16 static fire, tools/flight_profile/motors/testfire_20261116.json: 7.05 kN s from 5.6 kg N2O, liquid
+//! * Motor (11-16 static fire, tools/flight_profile/motors/testfire_20261116.json: 9.19 kN s from 5.6 kg N2O, liquid
 //!   phase ~2.7 s at ~2 kN then a vapour tail): oxidiser through the injector from tank conditions (liquid, then
-//!   choked vapour), thrust = delivered Isp (107 s) x g0 x (1 + 1/OF) x mdot_ox, OF 5; chamber pressure from a
+//!   choked vapour), thrust = delivered Isp (~140 s, from the motor summary) x g0 x (1 + 1/OF) x mdot_ox, OF 5; chamber pressure from a
 //!   fixed C_F A_t chosen so 2 kN reads ~350 psi.
 //! * Load cells (GroundStation26 docs/loadcell-investigation-2026-11.md): KG1000 545.8 kg/V at the ADC pin, zero
 //!   0.2126 V (1.83 mV/V, 9.6 V excitation, 100.9x); KG50 12 915 kg/V, zero 0.2112 V; noise 0.03-0.2 kg per sample,
@@ -144,11 +144,14 @@ pub struct Fluids {
     /// Oxidiser into the motor this step (kg/s), for the motor model.
     pub ox_flow: f64,
     pub ox_liquid: bool,
+    /// Chamber pressure per oxidiser flow (Pa per kg/s) of the motor fed by the pilot: the liquid injector flow and
+    /// the chamber pressure are solved together (an explicit step oscillates). 0: no motor model (back pressure only).
+    pub chamber_k: f64,
 }
 impl Fluids {
     pub fn new(p: FluidParams, ambient_k: f64) -> Self {
         let n2_kg = p.n2_bottle_psi * PSI_PA * p.n2_bottle_volume_m3 / (R_N2 * ambient_k);
-        Self { bottle_n2o_kg: p.n2o_bottle_kg, bottle_n2_kg: n2_kg, bottle_n2_t: ambient_k, p, n2o_kg: 0.0, n2_kg: 0.0, t_k: ambient_k, ox_flow: 0.0, ox_liquid: false }
+        Self { bottle_n2o_kg: p.n2o_bottle_kg, bottle_n2_kg: n2_kg, bottle_n2_t: ambient_k, p, n2o_kg: 0.0, n2_kg: 0.0, t_k: ambient_k, ox_flow: 0.0, ox_liquid: false, chamber_k: 0.0 }
     }
     /// Liquid volume (m^3) at the current temperature, equilibrium split.
     pub fn liquid_volume(&self) -> f64 {
@@ -265,7 +268,14 @@ impl Fluids {
         self.ox_liquid = false;
         if paths.pilot && p_tank > chamber_pa {
             if self.liquid_kg() > 0.01 {
-                let dm = (liquid_flow(self.p.injector_cda_m2, rl, p_tank - chamber_pa) * dt).min(self.liquid_kg());
+                // Pc = k mdot, mdot = CdA sqrt(2 rho (P - Pc)): Pc^2 = a^2 (P - Pc), a = k CdA sqrt(2 rho)
+                let pc = if self.chamber_k > 0.0 {
+                    let a2 = (self.chamber_k * self.p.injector_cda_m2).powi(2) * 2.0 * rl;
+                    (-a2 + (a2 * a2 + 4.0 * a2 * p_tank).sqrt()) / 2.0
+                } else {
+                    chamber_pa
+                };
+                let dm = (liquid_flow(self.p.injector_cda_m2, rl, p_tank - pc) * dt).min(self.liquid_kg());
                 self.n2o_kg -= dm;
                 self.ox_flow = dm / dt;
                 self.ox_liquid = true;
@@ -301,10 +311,16 @@ pub struct MotorParams {
 }
 impl Default for MotorParams {
     fn default() -> Self {
-        Self { isp_s: 107.0, of_ratio: 5.0, impulse_scale: 1.0, cf_at_m2: 2000.0 / (350.0 * PSI_PA) }
+        // 11-16 fire re-extracted with the KG50 unloading: 9.19 kN s from 5.6 kg N2O + 1.1 kg fuel (Isp ~140 s); the
+        // launcher overrides these from tools/flight_profile/motors/*.json at start
+        Self { isp_s: 139.9, of_ratio: 5.09, impulse_scale: 1.0, cf_at_m2: 2000.0 / (350.0 * PSI_PA) }
     }
 }
 impl MotorParams {
+    /// Chamber pressure per oxidiser flow (Pa per kg/s).
+    pub fn chamber_k(&self) -> f64 {
+        self.thrust(1.0) / self.cf_at_m2
+    }
     pub fn thrust(&self, ox_flow: f64) -> f64 {
         self.isp_s * G0 * (1.0 + 1.0 / self.of_ratio) * ox_flow * self.impulse_scale
     }
@@ -452,6 +468,7 @@ mod tests {
         let mut f = Fluids::new(FluidParams::default(), amb);
         f.n2o_kg = 5.6;
         let m = MotorParams::default();
+        f.chamber_k = m.chamber_k();
         let (mut impulse, mut t, mut chamber, mut liquid_end) = (0.0, 0.0, 0.0, None);
         while t < 15.0 {
             f.step(0.005, Paths { pilot: true, ..Default::default() }, amb, chamber);
@@ -463,7 +480,7 @@ mod tests {
             }
             t += 0.005;
         }
-        assert!((impulse - 7050.0).abs() < 1200.0, "impulse {impulse}");
+        assert!((impulse - 9192.0).abs() < 1500.0, "impulse {impulse}");
         let le = liquid_end.unwrap();
         assert!(le > 1.5 && le < 4.5, "liquid phase {le}");
     }

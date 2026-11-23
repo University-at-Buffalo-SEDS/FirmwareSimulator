@@ -89,17 +89,46 @@ impl Supply {
 }
 
 /// Ambient and weather (control "conditions").
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Conditions {
     pub ambient_c: f64,
+    /// Surface wind (10 m) and its direction; aloft it follows `wind_levels` when given, else a power law.
     pub wind_mps: f64,
     pub wind_from_deg: f64,
     pub gust_mps: f64,
+    /// tools/flight_profile/vehicle.json environment: wind = surface x (h / 10 m)^exponent, capped at x cap.
+    pub wind_shear_exponent: f64,
+    pub wind_profile_cap: f64,
+    /// Winds aloft (the apogee planner's weather snapshot): (altitude m AGL, speed m/s, from deg), ascending.
+    pub wind_levels: Vec<(f64, f64, f64)>,
+}
+impl Conditions {
+    /// Wind speed and direction (from) at `h` m above the pad.
+    pub fn wind_at(&self, h: f64) -> (f64, f64) {
+        if !self.wind_levels.is_empty() {
+            let l = &self.wind_levels;
+            if h <= l[0].0 {
+                return (l[0].1, l[0].2);
+            }
+            for w in l.windows(2) {
+                if h <= w[1].0 {
+                    let f = (h - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
+                    let mut d = w[1].2 - w[0].2;
+                    if d > 180.0 { d -= 360.0 } else if d < -180.0 { d += 360.0 }
+                    return (w[0].1 + f * (w[1].1 - w[0].1), (w[0].2 + f * d).rem_euclid(360.0));
+                }
+            }
+            let last = l[l.len() - 1];
+            return (last.1, last.2);
+        }
+        let k = ((h.max(10.0) / 10.0).powf(self.wind_shear_exponent)).min(self.wind_profile_cap);
+        (self.wind_mps * k, self.wind_from_deg)
+    }
 }
 impl Default for Conditions {
     fn default() -> Self {
         // tools/flight_profile nominal: 4 m/s from 300 deg, 1 m/s gusts
-        Self { ambient_c: 20.0, wind_mps: 4.0, wind_from_deg: 300.0, gust_mps: 1.0 }
+        Self { ambient_c: 20.0, wind_mps: 4.0, wind_from_deg: 300.0, gust_mps: 1.0, wind_shear_exponent: 0.14, wind_profile_cap: 1.4, wind_levels: Vec::new() }
     }
 }
 
@@ -212,8 +241,9 @@ impl Flight {
         }
         // horizontal: the vehicle drifts with the wind once off the pad (weathercocking not modelled)
         let gust = c.gust_mps * (0.7 * (0.37 * t).sin() + 0.3 * (1.3 * t).sin());
-        let w = (c.wind_mps + gust).max(0.0);
-        let to = (c.wind_from_deg + 180.0).to_radians();
+        let (speed, from) = c.wind_at(self.h.max(0.0));
+        let w = (speed + gust).max(0.0);
+        let to = (from + 180.0).to_radians();
         self.east += w * to.sin() * dt;
         self.north += w * to.cos() * dt;
         self.apogee = self.apogee.max(self.h);
@@ -366,6 +396,8 @@ pub struct PlantConfig {
     pub tank_pt: (String, String),
     pub daq: String,
     pub flight_node: String,
+    /// The board with the NEO-M9N (fed the flight model's position once per second).
+    pub gps_node: String,
     /// The board that leaves with the rocket on the fill CAN bus, and its umbilical continuity input pin.
     pub umbilical: (String, String),
     pub continuity_pin: Option<(String, u32)>,
@@ -403,6 +435,7 @@ impl Default for PlantConfig {
             tank_pt: ("valve".into(), "adc3".into()),
             daq: "daq".into(),
             flight_node: "flight".into(),
+            gps_node: "rf".into(),
             umbilical: ("valve".into(), "fdcan2".into()),
             // ValveBoard26 Continuity PB15 (sim/board.json pin 31, high = loop closed)
             continuity_pin: Some(("valve".into(), 31)),
@@ -439,6 +472,10 @@ pub struct Faults {
     pub dead_tank_pt: bool,
     pub dead_chamber_pt: bool,
     pub radio_drop: bool,
+    /// The FC's SD card out of its slot.
+    pub fc_sd_missing: bool,
+    /// The GPS reports no fix (antenna blocked).
+    pub gps_no_fix: bool,
 }
 
 pub struct Plant {
@@ -469,6 +506,7 @@ pub struct Plant {
     pub patch: [Option<(String, f64)>; 2],
     pub p10_swapped: bool,
     dac_starts: [Option<f64>; 2],
+    last_gps_t: f64,
     pub dac_out: [Option<f64>; 2],
     pub events: Vec<(f64, String)>,
 }
@@ -503,6 +541,7 @@ impl Plant {
             patch: [None, None],
             p10_swapped: false,
             dac_starts: [None, None],
+            last_gps_t: -1.0,
             dac_out: [None, None],
             events: Vec::new(),
         }
@@ -584,6 +623,7 @@ impl Plant {
         let ambient_k = self.conditions.ambient_c + 273.15;
         let mut paths = self.supply.paths(v);
         paths.pilot = v.pilot || self.burning;
+        self.fluids.chamber_k = if self.burning { cfg.motor.chamber_k() } else { 0.0 };
         self.fluids.step(dt, paths, ambient_k, self.chamber_pa);
         self.thrust = if self.burning { cfg.motor.thrust(self.fluids.ox_flow) } else { 0.0 };
         self.chamber_pa = cfg.motor.chamber_pa(self.thrust);
@@ -601,7 +641,7 @@ impl Plant {
         if dt > 0.0 && !cfg.test_stand {
             let n = (dt / 0.001).ceil().max(1.0) as usize;
             let mass = self.vehicle_mass();
-            let cond = self.conditions;
+            let cond = self.conditions.clone();
             for i in 0..n {
                 self.flight.step(t - dt + dt * (i as f64 + 1.0) / n as f64, dt / n as f64, self.thrust, mass, drogue, main, &cfg.vehicle, &cond);
             }
@@ -639,13 +679,19 @@ impl Plant {
         let w_hanging = if on_pad { self.vehicle_mass() } else { 0.0 };
         let thrust_kg = if on_pad { self.thrust / G } else { 0.0 };
         let kg50_force = (w_hanging - thrust_kg).max(0.0) + self.masses.0;
-        let mut kg1000_force = (thrust_kg - w_hanging).max(0.0) + self.masses.1;
-        if (thrust_kg - w_hanging) > 0.5 && self.gap_closed_at.is_none() && self.burning {
-            self.gap_closed_at = Some(t);
+        // once lifted the rocket rises through the gap (about 80 ms) before it bears on the KG1000, with a contact spike;
+        // at tail-off it drops back onto the KG50 (the vapour tail shows only there)
+        let lifting = (thrust_kg - w_hanging) > 0.5 && self.burning;
+        if lifting && self.gap_closed_at.is_none() {
+            self.gap_closed_at = Some(t + 0.08);
         }
-        if let Some(at) = self.gap_closed_at {
-            let s = t - at; // impact transient as the gap closes: a damped 25 Hz ring
-            kg1000_force += 0.3 * thrust_kg * (-s / 0.08).exp() * (2.0 * std::f64::consts::PI * 25.0 * s).sin();
+        if !lifting {
+            self.gap_closed_at = None;
+        }
+        let mut kg1000_force = self.masses.1;
+        if let Some(at) = self.gap_closed_at.filter(|at| t >= *at) {
+            let s = t - at; // contact: a damped 25 Hz ring
+            kg1000_force += (thrust_kg - w_hanging).max(0.0) + 0.3 * thrust_kg * (-s / 0.08).exp() * (2.0 * std::f64::consts::PI * 25.0 * s).sin();
         }
         let ambient_c = self.conditions.ambient_c;
         let kg50_v = self.kg50.sample(t, dt, kg50_force - cfg.vehicle.tare_kg, ambient_c);
@@ -667,6 +713,20 @@ impl Plant {
         let pa = std_pressure(cfg.vehicle.pad_msl_m + self.flight.h);
         let f_body = if cfg.test_stand { G } else { self.flight.f };
         self.send(&mut out, &cfg.flight_node, "flightsens", format!("{:.1},0,0,{:.3}", pa, f_body));
+        // RF NEO-M9N: the vehicle's position from the launch site and the drift, once per second
+        if (t - self.last_gps_t) >= 1.0 || self.last_gps_t < 0.0 {
+            self.last_gps_t = t;
+            let v = &cfg.vehicle;
+            let lat = v.launch_lat + self.flight.north / 111_320.0;
+            let lon = v.launch_lon + self.flight.east / (111_320.0 * v.launch_lat.to_radians().cos());
+            let course = self.flight.east.atan2(self.flight.north).to_degrees().rem_euclid(360.0);
+            let fix = !self.faults.gps_no_fix as u8;
+            self.send(&mut out, &cfg.gps_node, "gps", format!("{lat:.7},{lon:.7},{:.1},{:.2},{course:.1},{fix},12", v.pad_msl_m + self.flight.h, self.conditions.wind_mps.min(30.0) * (self.flight.phase != Phase::Pad && self.flight.phase != Phase::Landed) as u8 as f64));
+        }
+        let sd = format!("absent={}", self.faults.fc_sd_missing as u8);
+        if self.sent.get("flight/sdcard").is_some() || self.faults.fc_sd_missing {
+            self.send(&mut out, &cfg.flight_node, "sdcard", sd);
+        }
         if self.faults.radio_drop != self.radio_cut_sent {
             self.radio_cut_sent = self.faults.radio_drop;
             out.push(Output::RadioCut(self.faults.radio_drop));
@@ -709,6 +769,14 @@ impl Plant {
         if let Some(x) = f(&cond, "wind_from_deg") {
             self.conditions.wind_from_deg = x.rem_euclid(360.0);
         }
+        if let Some(levels) = cond.get("wind_levels").and_then(Value::as_array) {
+            let mut l: Vec<(f64, f64, f64)> = levels
+                .iter()
+                .filter_map(|e| Some((e.get("alt_m")?.as_f64()?, e.get("speed_mps")?.as_f64()?.clamp(0.0, 80.0), e.get("from_deg")?.as_f64()?.rem_euclid(360.0))))
+                .collect();
+            l.sort_by(|a, b| a.0.total_cmp(&b.0));
+            self.conditions.wind_levels = l;
+        }
         if let Some(x) = f(&cond, "gust_mps") {
             self.conditions.gust_mps = x.clamp(0.0, 20.0);
         }
@@ -720,6 +788,8 @@ impl Plant {
         self.faults.dead_tank_pt = fb("dead_tank_pt");
         self.faults.dead_chamber_pt = fb("dead_chamber_pt");
         self.faults.radio_drop = fb("radio_drop");
+        self.faults.fc_sd_missing = fb("fc_sd_missing");
+        self.faults.gps_no_fix = fb("gps_no_fix");
         self.kg1000.faults.supply_dip = fb("kg1000_supply_dip");
         self.kg1000.faults.open_lead = fb("kg1000_open_lead");
         self.kg50.faults.open_lead = fb("kg50_open_lead");
@@ -783,7 +853,7 @@ impl Plant {
                        "launch_site": [self.cfg.vehicle.launch_lat, self.cfg.vehicle.launch_lon, self.cfg.vehicle.pad_msl_m]},
             "faults": {"stuck_valves": self.faults.stuck.iter().map(|(k, v)| (k.clone(), if *v { "open" } else { "closed" })).collect::<BTreeMap<_, _>>(),
                        "dead_tank_pt": self.faults.dead_tank_pt, "dead_chamber_pt": self.faults.dead_chamber_pt,
-                       "radio_drop": self.faults.radio_drop, "kg1000_supply_dip": self.kg1000.faults.supply_dip,
+                       "radio_drop": self.faults.radio_drop, "fc_sd_missing": self.faults.fc_sd_missing, "kg1000_supply_dip": self.kg1000.faults.supply_dip,
                        "kg1000_open_lead": self.kg1000.faults.open_lead, "kg50_open_lead": self.kg50.faults.open_lead,
                        "kg50_bypass": self.kg50.faults.bypass, "kg1000_bypass": self.kg1000.faults.bypass},
             "events": self.events.iter().map(|(t, e)| json!({"t_s": round3(*t), "event": e})).collect::<Vec<_>>(),

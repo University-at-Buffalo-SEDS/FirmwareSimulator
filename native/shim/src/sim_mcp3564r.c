@@ -134,9 +134,11 @@ static uint8_t transmit(uint8_t v)
 
 int sim_flight_sensors_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n);
 void sim_flight_sensors_cs(unsigned global_index, int value);
+int sim_gps_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n);
 void sim_spi_xfer(const char *bus, const uint8_t *tx, uint8_t *rx, uint16_t n)
 {
     if (sim_flight_sensors_xfer(bus, tx, rx, n)) return;
+    if (sim_gps_xfer(bus, tx, rx, n)) return;
     if (!m.present || strcmp(bus, m.bus)) { if (rx) memset(rx, 0xFF, n); return; }
     for (uint16_t i = 0; i < n; i++) { uint8_t r = transmit(tx ? tx[i] : 0); if (rx) rx[i] = r; }
 }
