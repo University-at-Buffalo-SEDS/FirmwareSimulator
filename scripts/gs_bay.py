@@ -157,6 +157,37 @@ def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
     return out, info
 
 
+def host_can_run(exe: Path) -> str | None:
+    """Why this host cannot run the 32-bit board executables (None: it can). On an aarch64 host they are armhf and
+    need the kernel's 32-bit compat, which arm64 Linux offers only with 4 KB pages."""
+    import errno, platform
+    if platform.machine().lower() not in ("aarch64", "arm64"):
+        return None
+    os_id = ""
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("ID="):
+                os_id = line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    page = os.sysconf("SC_PAGE_SIZE")
+    fix = ("Raspberry Pi OS: set kernel=kernel8.img in /boot/firmware/config.txt (4 KB pages, 32-bit compat) and reboot"
+           if os_id in ("raspbian", "debian") else
+           "use a kernel built with 4 KB pages and CONFIG_COMPAT (Ubuntu raspi kernels are)")
+    if page != 4096:
+        return f"this kernel uses {page // 1024} KB pages, so it cannot run 32-bit (armhf) programs; {fix}"
+    try:
+        probe = subprocess.run([str(exe)], env={"PATH": "/usr/bin:/bin"}, capture_output=True, timeout=3)
+        del probe
+    except OSError as e:
+        if e.errno == errno.ENOEXEC:
+            return f"this kernel cannot run 32-bit (armhf) programs (no CONFIG_COMPAT); {fix}"
+        return f"cannot start the board executables: {e}"
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
 def std_pressure(h_msl: float) -> float:
     return 101325.0 * (1 - 2.25577e-5 * h_msl) ** 5.25588
 
@@ -184,6 +215,10 @@ def main() -> int:
         raise SystemExit(f"not built: {', '.join(missing)} (python3 tools/firmware_sim.py build)")
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    blocked = host_can_run(Path(manifest["boards"][nodes[0]]["exe"]))
+    if blocked:
+        (out / "refused.txt").write_text(blocked + "\n")
+        raise SystemExit(f"firmware simulation refused: {blocked}")
     config = out / "config"
     diag = out / "diagnostics"
     for d in (config, diag, diag / "temp"):

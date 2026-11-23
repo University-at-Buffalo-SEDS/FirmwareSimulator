@@ -23,7 +23,16 @@ HERE = Path(__file__).resolve().parent
 SHIM = HERE / 'shim'
 SEDS = HERE.parents[3] if (HERE.parents[3] / 'SEDSLaunchCore').exists() else Path('/home/rylan/Documents/Gitkraken/SEDS')
 CMAKE = shutil.which('cmake') or '/home/rylan/st/stm32cubeclt_1.22.0/CMake/bin/cmake'
-HOST_TARGET = 'i686-unknown-linux-gnu'
+# Host ABI: 32-bit like the MCU. "i686" on x86_64 build/run hosts; "armhf" (ARMv7 hard-float, statically linked so a
+# 64-bit Raspberry Pi with 32-bit compat needs no armhf libraries) for aarch64 stations. FIRMWARE_SIM_HOST selects it.
+HOSTS = {
+    'i686': {'cc': 'gcc', 'cflags': ['-m32'], 'target': 'i686-unknown-linux-gnu', 'nm': 'nm', 'ldflags': ['-m32', '-no-pie']},
+    'armhf': {'cc': 'arm-linux-gnueabihf-gcc', 'cflags': ['-marm', '-mfloat-abi=hard'], 'target': 'armv7-unknown-linux-gnueabihf',
+              'nm': 'arm-linux-gnueabihf-nm', 'ldflags': ['-static', '-no-pie'],
+              'cargo_env': {'CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER': 'arm-linux-gnueabihf-gcc'}},
+}
+HOST = HOSTS[os.environ.get('FIRMWARE_SIM_HOST', 'i686')]
+HOST_TARGET = HOST['target']
 REPO_NODE = {'gateway-board26': 'gateway', 'ActuatorBoard26': 'actuator', 'ValveBoard26': 'valve', 'DAQ-Board': 'daq',
              'FlightComputer26': 'flight', 'RFBoard26': 'rf', 'PowerBoard26': 'power'}
 # Hardware-only translation units, replaced by the shim (matched against the path).
@@ -238,13 +247,14 @@ incremental = false
     env['CARGO_BUILD_JOBS'] = str(jobs)
     env['CARGO_INCREMENTAL'] = '0'
     log('sedsnet host staticlib', ' '.join(features), {k: env[k] for k in env if k in ('DEVICE_IDENTIFIER',) or k.startswith(('MAX_', 'QUEUE', 'STARTING', 'PAYLOAD'))})
+    env.update(HOST.get('cargo_env', {}))
     run(['cargo', 'build', '--release', '--target', HOST_TARGET, '--manifest-path', str(wrap / 'Cargo.toml')], env=env)
     lib = out / 'cargo-host' / HOST_TARGET / 'release' / 'libsedsnet_host.a'
     final = out / 'libsedsnet_host.a'; shutil.copyfile(lib, final)
     return final, sdk
 
 
-SHIM_FLAGS = ['-m32', '-g', '-O1', '-fno-strict-aliasing', '-fwrapv', '-fno-common', '-pthread', '-w',
+SHIM_FLAGS = [*HOST['cflags'], '-g', '-O1', '-fno-strict-aliasing', '-fwrapv', '-fno-common', '-pthread', '-w',
               '-fno-omit-frame-pointer', '-fno-pie', '-DSEDS_NATIVE_SITL=1', '-D__SEDS_NATIVE_SITL__=1']
 
 
@@ -263,7 +273,7 @@ def up_to_date(obj: Path, key: str):
 def compile_one(job):
     src, flags, obj = job
     obj.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ['gcc', *flags, '-MMD', '-MF', str(obj.with_suffix('.d')), '-c', src, '-o', str(obj)]
+    cmd = [HOST['cc'], *flags, '-MMD', '-MF', str(obj.with_suffix('.d')), '-c', src, '-o', str(obj)]
     key = hashlib.sha256(json.dumps(cmd).encode()).hexdigest()
     if up_to_date(obj, key):
         return src, 0, '', cmd
@@ -345,14 +355,14 @@ def main():
     for k, v in BOARD_DEFSYMS.get(src.name, {}).items():
         extra_link.append(f'-Wl,--defsym,{k}=0x{v:08x}')
     exe = out / f'{node}.native'
-    link = ['gcc', '-m32', '-no-pie', '-Wl,-Ttext-segment=0x70000000', '-g', '-o', str(exe), *[str(j[2]) for j in jobs], str(lib), '-Wl,--allow-multiple-definition',
+    link = [HOST['cc'], *HOST['ldflags'], '-Wl,-Ttext-segment=0x70000000', '-g', '-o', str(exe), *[str(j[2]) for j in jobs], str(lib), '-Wl,--allow-multiple-definition',
             '-lpthread', '-lm', '-ldl', '-Wl,-z,noexecstack', *extra_link]
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode:
         undef = sorted(set(re.findall(r"undefined reference to `([^']+)'", r.stderr)))
         (out / 'undefined.txt').write_text('\n'.join(undef) + '\n')
         raise SystemExit(f'link failed: {len(undef)} undefined symbols (see {out / "undefined.txt"})\n' + r.stderr[-3000:])
-    syms = run(['nm', '-n', '--defined-only', str(exe)])
+    syms = run([HOST['nm'], '-n', '--defined-only', str(exe)])
     (out / f'{node}.symbols').write_text(syms)
     factory = next(iter(sorted(src.glob('build/*/*.factory.bin'))), None)
     if factory is None and (out / 'factory.bin').exists():
