@@ -1422,6 +1422,11 @@ mod native_pico;
 pub mod native_plant;
 #[path = "bay/native_physics.rs"]
 pub mod native_physics;
+#[path = "bay/hybrid_motor.rs"]
+pub mod hybrid_motor;
+#[cfg(test)]
+#[path = "bay/hybrid_motor_vendor_tests.rs"]
+mod hybrid_motor_vendor_tests;
 #[path = "bay/native_radio.rs"]
 mod native_radio;
 #[path = "bay/owned.rs"]
