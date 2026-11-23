@@ -256,6 +256,97 @@ pub fn daq_codes(kg1000_v: Option<f64>, kg50_v: f64, chamber_psi: f64) -> Vec<i6
     v
 }
 
+/// The DAQ's DAC1 as wired on the board (DAQ-Board daq_dac.c): channel c plays a table from SRAM through GPDMA1
+/// channel 10+c on a TIM7/TIM15 trigger, or holds a software value; the P10 buffer doubles it to the connector.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct DacParams {
+    pub node: String,
+    pub dac_base: u32,
+    pub dma_channel_base: [u32; 2],
+    pub timer_base: [u32; 2],
+    /// Timer kernel clock (Hz); `clock_addr` (SystemCoreClock in the DAQ, resolved by the launcher) wins when set.
+    pub timer_clock_hz: f64,
+    pub clock_addr: Option<u32>,
+    pub vref_v: f64,
+    pub buffer_gain: f64,
+    /// Connector rail of the P10 buffer (the swapped-inputs fault latches to it or to 0 V).
+    pub buffer_rail_v: f64,
+}
+impl Default for DacParams {
+    fn default() -> Self {
+        Self {
+            node: "daq".into(),
+            dac_base: 0x4602_1800,
+            dma_channel_base: [0x4002_0550, 0x4002_05D0],
+            timer_base: [0x4000_1400, 0x4001_4000],
+            timer_clock_hz: 160e6,
+            clock_addr: None,
+            vref_v: 3.3,
+            buffer_gain: 2.0,
+            buffer_rail_v: 6.4,
+        }
+    }
+}
+
+/// DAC output voltage at the P10 connector for channel `c` (0/1) at time `t`, read from the DAQ's own registers and
+/// table (so any waveform the firmware plays, from any table, comes through). None while the channel is off.
+pub fn dac_connector_v(o: &dyn Observe, p: &DacParams, c: usize, t: f64, starts: &mut [Option<f64>; 2], swapped: bool) -> Option<f64> {
+    let cr = o.word(&p.node, p.dac_base)?;
+    let shift = 16 * c as u32;
+    if cr & (1 << shift) == 0 {
+        starts[c] = None;
+        return None;
+    }
+    let dma_on = cr & (1 << (12 + shift)) != 0;
+    let tim = p.timer_base[c];
+    let tim_on = o.word(&p.node, tim).unwrap_or(0) & 1 != 0;
+    let code = if dma_on && tim_on {
+        let ch = p.dma_channel_base[c];
+        let bytes = o.word(&p.node, ch + 0x48).unwrap_or(0) & 0xFFFF;
+        let table = o.word(&p.node, ch + 0x4C).unwrap_or(0);
+        let n = (bytes / 4).max(1);
+        let psc = o.word(&p.node, tim + 0x28).unwrap_or(0) as f64;
+        let arr = o.word(&p.node, tim + 0x2C).unwrap_or(0) as f64;
+        let clock = p.clock_addr.and_then(|a| o.word(&p.node, a)).map(f64::from).filter(|c| *c > 1e6).unwrap_or(p.timer_clock_hz);
+        let rate = clock / ((psc + 1.0) * (arr + 1.0));
+        let t0 = *starts[c].get_or_insert(t);
+        let idx = (((t - t0) * rate).floor() as u64 % u64::from(n)) as u32;
+        o.word(&p.node, table + 4 * idx)? & 0xFFF
+    } else {
+        starts[c] = None;
+        o.word(&p.node, p.dac_base + if c == 0 { 0x08 } else { 0x14 })? & 0xFFF
+    };
+    let pin = f64::from(code) / 4095.0 * p.vref_v;
+    Some(if swapped {
+        // P10 op-amp inputs swapped (the unreworked board): positive feedback, the output latches to a rail
+        if pin > p.vref_v / 2.0 { p.buffer_rail_v } else { 0.0 }
+    } else {
+        (pin * p.buffer_gain).min(p.buffer_rail_v)
+    })
+}
+
+/// A DAQ input the DAC output is patched to, and the ADC-pin voltages it puts on the MCP3564R channels
+/// (GroundStation26 backend/src/daq_dac/model.rs paths). `attenuation` is the inline attenuator on load-cell inputs.
+pub fn patch_pins(target: &str, connector_v: f64, attenuation: f64) -> Option<Vec<(usize, f64)>> {
+    let v = connector_v;
+    Some(match target {
+        "mcp_ch2" => vec![(2, v)],
+        "mcp_ch3" => vec![(3, v)],
+        "mcp_ch4" => vec![(4, v)],
+        "mcp_ch5" => vec![(5, v)],
+        "hvain1" => vec![(6, v / 11.0)],
+        "hvain2" => vec![(7, v / 11.0)],
+        // P6 pin 3 driven, pin 4 at ground: CH2 single-ended and CH9 the x16 differential
+        "p6_diff" => vec![(2, v), (3, 0.0), (9, 16.0 * v)],
+        "loadcell_kg1000" => vec![(0, 0.218 + 100.9 * v * attenuation)],
+        "loadcell_kg50" => vec![(1, 0.600 + 100.9 * v * attenuation)],
+        _ => return None,
+    })
+}
+/// The DAC validation targets the plant can patch (SAR inputs and the internal readback are not modelled).
+pub const PATCH_TARGETS: [&str; 9] = ["mcp_ch2", "mcp_ch3", "mcp_ch4", "mcp_ch5", "hvain1", "hvain2", "p6_diff", "loadcell_kg1000", "loadcell_kg50"];
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct PlantConfig {
@@ -280,6 +371,8 @@ pub struct PlantConfig {
     pub continuity_pin: Option<(String, u32)>,
     /// The motor lights only after the igniter fired (HITL fires none: the supervisor turns this off there).
     pub require_igniter: bool,
+    /// DAQ DAC (signal generator) as the plant reads it back (STM32U585 register map).
+    pub dac: DacParams,
     /// Test fire: the rocket stays on the stand (load cells see the thrust, no flight).
     pub test_stand: bool,
     pub qd_connected: bool,
@@ -314,6 +407,7 @@ impl Default for PlantConfig {
             // ValveBoard26 Continuity PB15 (sim/board.json pin 31, high = loop closed)
             continuity_pin: Some(("valve".into(), 31)),
             require_igniter: true,
+            dac: DacParams::default(),
             test_stand: false,
             qd_connected: true,
             nitrogen_bottle_open: true,
@@ -371,6 +465,11 @@ pub struct Plant {
     sent: BTreeMap<String, String>,
     umbilical_attached: bool,
     radio_cut_sent: bool,
+    /// DAC channel -> (patched target, attenuation); P10 swapped-inputs fault.
+    pub patch: [Option<(String, f64)>; 2],
+    pub p10_swapped: bool,
+    dac_starts: [Option<f64>; 2],
+    pub dac_out: [Option<f64>; 2],
     pub events: Vec<(f64, String)>,
 }
 
@@ -401,6 +500,10 @@ impl Plant {
             sent: BTreeMap::new(),
             umbilical_attached: true,
             radio_cut_sent: false,
+            patch: [None, None],
+            p10_swapped: false,
+            dac_starts: [None, None],
+            dac_out: [None, None],
             events: Vec::new(),
         }
     }
@@ -549,7 +652,16 @@ impl Plant {
         let kg1000_v = self.kg1000.sample(t, dt, kg1000_force, ambient_c);
         let kg1000 = if self.kg1000.faults.supply_dip { None } else { Some(kg1000_v) };
         let chamber = if self.faults.dead_chamber_pt { 0.0 } else { self.chamber_pa / phys::PSI_PA };
-        let codes = daq_codes(kg1000, kg50_v, chamber);
+        let mut codes = daq_codes(kg1000, kg50_v, chamber);
+        for c in 0..2 {
+            self.dac_out[c] = dac_connector_v(o, &cfg.dac, c, t, &mut self.dac_starts, self.p10_swapped);
+            if let Some((target, att)) = self.patch[c].clone() {
+                // an off channel leaves the patched input at 0 V (the cable replaces the sensor)
+                for (ch, pin_v) in patch_pins(&target, self.dac_out[c].unwrap_or(0.0), att).unwrap_or_default() {
+                    codes[ch] = mcp_code(pin_v);
+                }
+            }
+        }
         self.send(&mut out, &cfg.daq, "mcp3564r", codes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","));
         // FC barometer and accelerometer
         let pa = std_pressure(cfg.vehicle.pad_msl_m + self.flight.h);
@@ -615,6 +727,14 @@ impl Plant {
         self.kg1000.faults.bypass = ff("kg1000_bypass").unwrap_or(0.0);
         self.kg50.p.drift_kg_per_c = ff("kg50_drift_kg_per_c").unwrap_or(self.cfg.kg50.drift_kg_per_c);
         self.kg1000.p.drift_kg_per_c = ff("kg1000_drift_kg_per_c").unwrap_or(self.cfg.kg1000.drift_kg_per_c);
+        let patch = section("patch");
+        for (c, key) in ["dac1", "dac2"].iter().enumerate() {
+            self.patch[c] = patch.get(*key).and_then(Value::as_str).filter(|t| PATCH_TARGETS.contains(t)).map(|t| {
+                let att = patch.get(format!("{key}_attenuation")).and_then(Value::as_f64).unwrap_or(1.0);
+                (t.to_string(), att)
+            });
+        }
+        self.p10_swapped = fb("p10_inputs_swapped");
         self.faults.stuck.clear();
         if let Some(map) = faults.get("stuck_valves").and_then(Value::as_object) {
             for (k, v) in map {
@@ -646,6 +766,10 @@ impl Plant {
             "loads": {"kg50_kg": self.masses.0, "kg1000_kg": self.masses.1},
             "motor": {"burning": self.burning, "burned_out": self.burned_out, "thrust_n": round1(self.thrust),
                       "chamber_psi": round1(self.chamber_pa / phys::PSI_PA)},
+            "dac": {"connector_v": self.dac_out.map(|v| v.map(round3)),
+                    "patch": {"dac1": self.patch[0].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1})),
+                              "dac2": self.patch[1].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1}))},
+                    "p10_inputs_swapped": self.p10_swapped, "targets": PATCH_TARGETS},
             "umbilical_attached": self.umbilical_attached,
             "igniter_fired": self.igniter_fired,
             "test_stand": self.cfg.test_stand,
@@ -733,6 +857,52 @@ mod tests {
         plant.apply_control(&json!({"faults": {"dead_tank_pt": true}}));
         let out = plant.step(40_010_000_000, &io);
         assert!(out.contains(&Output::Adc { node: "valve".into(), device: "adc3".into(), text: "fault=1".into() }));
+    }
+
+    #[test]
+    fn dac_patch_routes_the_daqs_own_dac_output_to_the_patched_input() {
+        let mut plant = Plant::new(PlantConfig::default());
+        let mut io = io();
+        let d = DacParams::default();
+        // DC: DAC CH1 enabled, software value 2048 (1.65 V pin, 3.3 V at the connector)
+        io.1.insert(("daq".into(), d.dac_base), 1);
+        io.1.insert(("daq".into(), d.dac_base + 0x08), 2048);
+        let code_of = |out: &[Output], ch: usize| -> Option<i64> {
+            out.iter().rev().find_map(|o| match o {
+                Output::Adc { device, text, .. } if device == "mcp3564r" => text.split(',').nth(ch).and_then(|x| x.parse().ok()),
+                _ => None,
+            })
+        };
+        let out = run(&mut plant, &io, 0, 100);
+        assert_ne!(code_of(&out, 6), Some(mcp_code(3.3 / 11.0)), "not patched: the chamber PT model");
+        plant.apply_control(&json!({"patch": {"dac1": "hvain1"}}));
+        let out = run(&mut plant, &io, 110, 200);
+        let v = 2048.0 / 4095.0 * 3.3 * 2.0;
+        assert_eq!(code_of(&out, 6), Some(mcp_code(v / 11.0)));
+        // a played table: 4 samples at 1 kHz from the DAQ's SRAM through DMA, the trigger timer running
+        io.1.insert(("daq".into(), d.dac_base), 1 | (1 << 12));
+        io.1.insert(("daq".into(), d.timer_base[0]), 1);
+        io.1.insert(("daq".into(), d.timer_base[0] + 0x28), 159);
+        io.1.insert(("daq".into(), d.timer_base[0] + 0x2C), 999);
+        io.1.insert(("daq".into(), d.dma_channel_base[0] + 0x48), 16);
+        io.1.insert(("daq".into(), d.dma_channel_base[0] + 0x4C), 0x2000_1000);
+        for (i, code) in [0u32, 1000, 2000, 3000].iter().enumerate() {
+            io.1.insert(("daq".into(), 0x2000_1000 + 4 * i as u32), *code);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for ms in (210..=400).step_by(10) {
+            plant.step(ms * 1_000_000, &io);
+            seen.insert((plant.dac_out[0].unwrap() * 1000.0) as i64);
+        }
+        assert!(seen.len() >= 2, "the table plays: {seen:?}");
+        // swapped P10 inputs latch to a rail; channel off reads 0 V on the patched input
+        plant.apply_control(&json!({"patch": {"dac1": "loadcell_kg50", "dac1_attenuation": 0.01}, "faults": {"p10_inputs_swapped": true}}));
+        plant.step(500_000_000, &io);
+        assert!(matches!(plant.dac_out[0], Some(v) if v == 0.0 || v == 6.4));
+        io.1.insert(("daq".into(), d.dac_base), 0);
+        let out = plant.step(510_000_000, &io);
+        assert_eq!(code_of(&out, 1), Some(mcp_code(0.600)));
+        assert!(patch_pins("sar1", 1.0, 1.0).is_none());
     }
 
     #[test]

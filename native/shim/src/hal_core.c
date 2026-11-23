@@ -421,9 +421,16 @@ __attribute__((weak)) void HAL_DAC_MspDeInit(DAC_HandleTypeDef *h) { (void)h; }
 HAL_StatusTypeDef HAL_DAC_Init(DAC_HandleTypeDef *h) { if (h->State == HAL_DAC_STATE_RESET) { h->Lock = HAL_UNLOCKED; HAL_DAC_MspInit(h); } h->State = HAL_DAC_STATE_READY; return HAL_OK; }
 HAL_StatusTypeDef HAL_DAC_DeInit(DAC_HandleTypeDef *h) { h->State = HAL_DAC_STATE_RESET; return HAL_OK; }
 HAL_StatusTypeDef HAL_DAC_ConfigChannel(DAC_HandleTypeDef *h, const DAC_ChannelConfTypeDef *c, uint32_t ch) { (void)h; (void)c; (void)ch; return HAL_OK; }
-HAL_StatusTypeDef HAL_DAC_Start(DAC_HandleTypeDef *h, uint32_t ch) { (void)h; (void)ch; return HAL_OK; }
-HAL_StatusTypeDef HAL_DAC_Stop(DAC_HandleTypeDef *h, uint32_t ch) { (void)h; (void)ch; return HAL_OK; }
-HAL_StatusTypeDef HAL_DAC_SetValue(DAC_HandleTypeDef *h, uint32_t ch, uint32_t align, uint32_t v) { (void)h; (void)align; dac_values[ch ? 1 : 0] = v; return HAL_OK; }
+/* The DAC registers mirror what the hardware would hold (the station-managed bay's plant reads the DAQ's DAC from
+ * them): CR ENx follows Start/Stop, DHR12Rx holds the last software value. */
+HAL_StatusTypeDef HAL_DAC_Start(DAC_HandleTypeDef *h, uint32_t ch) { if (h && h->Instance) h->Instance->CR |= DAC_CR_EN1 << (ch & 16u); return HAL_OK; }
+HAL_StatusTypeDef HAL_DAC_Stop(DAC_HandleTypeDef *h, uint32_t ch) { if (h && h->Instance) h->Instance->CR &= ~(DAC_CR_EN1 << (ch & 16u)); return HAL_OK; }
+HAL_StatusTypeDef HAL_DAC_SetValue(DAC_HandleTypeDef *h, uint32_t ch, uint32_t align, uint32_t v)
+{
+    (void)align; dac_values[ch ? 1 : 0] = v;
+    if (h && h->Instance) { if (ch) h->Instance->DHR12R2 = v & 0xFFFu; else h->Instance->DHR12R1 = v & 0xFFFu; }
+    return HAL_OK;
+}
 uint32_t HAL_DAC_GetValue(const DAC_HandleTypeDef *h, uint32_t ch) { (void)h; return dac_values[ch ? 1 : 0]; }
 #if defined(STM32U5) || defined(DAC_AUTONOMOUS_MODE_ENABLE)
 HAL_StatusTypeDef HAL_DACEx_SetConfigAutonomousMode(DAC_HandleTypeDef *h, const DAC_AutonomousModeConfTypeDef *c) { (void)h; (void)c; return HAL_OK; }

@@ -113,6 +113,18 @@ def main() -> int:
     plant.setdefault("test_stand", a.mode == "test_fire")
     plant.setdefault("require_igniter", a.mode not in ("hitl", "testing"))
     plant.setdefault("seed", a.seed)
+    # the DAQ's SystemCoreClock (its DAC trigger timers' clock) for the plant's DAC playback
+    daq = manifest.get("boards", {}).get("daq")
+    if daq:
+        sym = Path(daq["exe"]).with_suffix(".symbols")
+        try:
+            for line in sym.read_text().splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[-1] == "SystemCoreClock":
+                    plant.setdefault("dac", {}).setdefault("clock_addr", int(parts[0], 16))
+                    break
+        except OSError:
+            pass
     pad_msl = (plant.get("vehicle") or {}).get("pad_msl_m", 890.016)
     shm = Path("/dev/shm") if Path("/dev/shm").is_dir() else None
     scratch = Path(tempfile.mkdtemp(prefix="seds-gs-bay-", dir=shm))
