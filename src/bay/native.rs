@@ -6,6 +6,7 @@
 //! paces virtual time against the wall clock so a host station (GroundStation under a matching time-dilation
 //! factor) shares the time base.
 use super::*;
+use std::collections::VecDeque;
 use std::io::IoSlice;
 
 use std::time::Instant;
@@ -448,6 +449,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     }
 
     // Radio links: one shared air medium per link; host stations reach it through a PTY (their serial port).
+    let mut host_out: BTreeMap<(String, usize), VecDeque<u8>> = BTreeMap::new();
     let mut radios: Vec<(super::native_radio::Medium, Vec<Option<fs::File>>, Vec<(String, String)>)> = Vec::new();
     let mut slave_fds: Vec<(String, i32)> = Vec::new();
     for link in topology.links.iter().filter(|l| matches!(l.kind, LinkKind::Radio)) {
@@ -725,22 +727,35 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         for (medium, masters, eps) in radios.iter_mut() {
             for (i, master) in masters.iter_mut().enumerate() {
                 if let Some(f) = master.as_mut() {
+                    // drain the PTY (the station never stalls on the bay); the medium sends the bytes on at the UART
+                    // baud. Past HOST_STAGE_CAP of unsent bytes (a station writing far faster than its UART for
+                    // seconds) the PTY is left to fill, as a full kernel serial buffer would.
                     let mut buf = [0u8; 8192];
-                    if let Ok(n) = f.read(&mut buf) {
-                        if n > 0 {
-                            if let Ok(path) = env::var("FIRMWARE_SIM_NATIVE_RADIO_DUMP") {
-                                let _ = OpenOptions::new().create(true).append(true).open(path).and_then(|mut d| d.write_all(&buf[..n]));
+                    while medium.host_staged(i) < HOST_STAGE_CAP {
+                        match f.read(&mut buf) {
+                            Ok(n) if n > 0 => {
+                                if let Ok(path) = env::var("FIRMWARE_SIM_NATIVE_RADIO_DUMP") {
+                                    let _ = OpenOptions::new().create(true).append(true).open(path).and_then(|mut d| d.write_all(&buf[..n]));
+                                }
+                                medium.host_write(i, t, &buf[..n]);
                             }
-                            medium.uart_in(i, t, &buf[..n]);
+                            _ => break,
                         }
                     }
                 }
             }
             medium.step(t);
             for i in 0..eps.len() {
+                // bytes toward a station that it has not read yet wait here (a station busy for a moment must not
+                // lose them to a full PTY)
+                if let (Some(f), Some(p)) = (masters[i].as_mut(), host_out.get_mut(&(medium.link.clone(), i))) {
+                    flush_host_out(f, p);
+                }
                 while let Some((start, bytes)) = medium.uart_out(i, t, horizon) {
                     if let Some(f) = masters[i].as_mut() {
-                        let _ = f.write_all(&bytes);
+                        let p = host_out.entry((medium.link.clone(), i)).or_default();
+                        p.extend(&bytes);
+                        flush_host_out(f, p);
                     } else {
                         let (node, periph) = &eps[i];
                         if *gate_cut.get(&format!("{node}:{periph}")).unwrap_or(&false) { continue; }
@@ -1241,3 +1256,23 @@ mod pace_tests {
     }
 }
 
+/// Unsent host-station bytes the bay keeps per radio PTY (see the radio step).
+const HOST_STAGE_CAP: usize = 65_536;
+
+/// Writes what a station's PTY accepts now; the rest stays queued (bounded: the oldest bytes go past 1 MiB, a
+/// station that stopped reading altogether).
+fn flush_host_out(f: &mut fs::File, pending: &mut VecDeque<u8>) {
+    while !pending.is_empty() {
+        let (a, _) = pending.as_slices();
+        match f.write(a) {
+            Ok(n) if n > 0 => {
+                pending.drain(..n);
+            }
+            _ => break,
+        }
+    }
+    if pending.len() > 1 << 20 {
+        let excess = pending.len() - (1 << 20);
+        pending.drain(..excess);
+    }
+}

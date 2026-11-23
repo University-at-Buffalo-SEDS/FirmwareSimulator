@@ -57,6 +57,11 @@ pub struct Modem {
     rx: VecDeque<u8>,
     pub rx_free_at: u64,
     pub stats: [u64; 5], // bytes in, tx overflow drops, packets sent, packets received, rx overflow drops
+    /// A host station's bytes read from its PTY but not yet on its UART: the PTY is drained at once (a station's
+    /// writes never stall on the bay) and the bytes enter the modem at the UART baud, as the station's kernel
+    /// serial buffer would send them. `host_free_at`: when the UART finishes the last byte fed so far.
+    host_staged: VecDeque<u8>,
+    host_free_at: u64,
 }
 
 pub struct Medium {
@@ -158,7 +163,7 @@ impl Medium {
             modems: names
                 .iter()
                 .enumerate()
-                .map(|(i, n)| Modem { name: n.clone(), cmd: modem_spec(i), tx: VecDeque::new(), tx_last_byte: 0, rx: VecDeque::new(), rx_free_at: 0, stats: [0; 5] })
+                .map(|(i, n)| Modem { name: n.clone(), cmd: modem_spec(i), tx: VecDeque::new(), tx_last_byte: 0, rx: VecDeque::new(), rx_free_at: 0, stats: [0; 5], host_staged: VecDeque::new(), host_free_at: 0 })
                 .collect(),
             p,
             air_free_at: 0,
@@ -195,8 +200,36 @@ impl Medium {
         let byte_ns = 10_000_000_000 / self.p.uart_baud as u64;
         m.tx_last_byte = t + bytes.len() as u64 * byte_ns;
     }
+    /// Bytes a host station wrote to its PTY at virtual time `t`, staged for its UART (see `Modem::host_staged`).
+    pub fn host_write(&mut self, i: usize, t: u64, bytes: &[u8]) {
+        let m = &mut self.modems[i];
+        if m.host_staged.is_empty() {
+            m.host_free_at = m.host_free_at.max(t);
+        }
+        m.host_staged.extend(bytes);
+    }
+    /// Bytes a host station wrote that its UART has not sent yet.
+    pub fn host_staged(&self, i: usize) -> usize {
+        self.modems[i].host_staged.len()
+    }
+    /// Staged host bytes whose UART time has come by `t` go into the modem, back to back at the baud.
+    fn host_feed(&mut self, t: u64) {
+        let byte_ns = 10_000_000_000 / self.p.uart_baud as u64;
+        for i in 0..self.modems.len() {
+            let m = &self.modems[i];
+            if m.host_staged.is_empty() || m.host_free_at + byte_ns > t {
+                continue;
+            }
+            let start = m.host_free_at;
+            let n = (((t - start) / byte_ns) as usize).min(m.host_staged.len());
+            let chunk: Vec<u8> = self.modems[i].host_staged.drain(..n).collect();
+            self.modems[i].host_free_at = start + n as u64 * byte_ns;
+            self.uart_in(i, start, &chunk);
+        }
+    }
     /// Advance the air to `t`: send closed packets, deliver arrivals into RX FIFOs.
     pub fn step(&mut self, t: u64) {
+        self.host_feed(t);
         self.modem_tick(t);
         let idle_default = self.p.packet_idle_us * 1000;
         loop {
@@ -284,7 +317,11 @@ impl Medium {
     pub fn next_event(&self) -> u64 {
         let idle_ns = self.p.packet_idle_us * 1000;
         let mut t = self.in_flight.first().map(|x| x.0).unwrap_or(u64::MAX);
+        let byte_ns = 10_000_000_000 / self.p.uart_baud as u64;
         for m in &self.modems {
+            if !m.host_staged.is_empty() {
+                t = t.min(m.host_free_at + byte_ns);
+            }
             if !m.tx.is_empty() {
                 t = t.min(m.tx_last_byte + idle_ns);
             }
@@ -293,5 +330,58 @@ impl Medium {
             }
         }
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn medium() -> Medium {
+        let p = RadioProfile { air_bits_per_second: 64000, uart_baud: 115200, tx_fifo_bytes: 8192, rx_fifo_bytes: 8192,
+            max_burst_bytes: 256, packet_idle_us: 2000, overhead_bits: 160, turn_us: 2000 };
+        Medium::new("rocket_radio", p, &["groundstation".to_string(), "rf".to_string()], 1)
+    }
+
+    /// A station's burst larger than the modem FIFO is taken off its PTY at once and reaches the modem at the UART
+    /// baud, so nothing overflows the TX FIFO and the far end receives every byte.
+    #[test]
+    fn host_burst_enters_the_modem_at_the_uart_baud() {
+        let mut m = medium();
+        let byte_ns = 10_000_000_000 / 115_200u64;
+        let burst: Vec<u8> = (0..20_000u32).map(|i| i as u8).collect();
+        m.host_write(0, 0, &burst);
+        assert_eq!(m.host_staged(0), burst.len());
+        // after 10 ms of UART time only about 115 bytes may have left the station
+        m.step(10_000_000);
+        let fed = burst.len() - m.host_staged(0);
+        assert_eq!(fed as u64, 10_000_000 / byte_ns);
+        // run until every byte crossed the air
+        let mut t = 10_000_000;
+        let mut got = Vec::new();
+        while got.len() < burst.len() && t < 30_000_000_000 {
+            t = m.next_event().max(t + 1).min(t + 5_000_000);
+            m.step(t);
+            while let Some((_, bytes)) = m.uart_out(1, t, t + 1_000_000) {
+                got.extend(bytes);
+            }
+        }
+        assert_eq!(m.modems[0].stats[1], 0, "no TX FIFO overflow");
+        assert_eq!(got, burst);
+        // the UART time of the whole burst at least (it cannot arrive faster than the station's UART sends it)
+        assert!(t >= burst.len() as u64 * byte_ns);
+    }
+
+    /// Idle UART time before a write is not credited: a write after a quiet second still starts at its own time.
+    #[test]
+    fn staged_bytes_start_at_their_write_time() {
+        let mut m = medium();
+        m.step(1_000_000_000);
+        m.host_write(0, 1_000_000_000, &[1, 2, 3, 4]);
+        m.step(1_000_000_000);
+        assert_eq!(m.host_staged(0), 4);
+        assert!(m.next_event() > 1_000_000_000);
+        m.step(1_000_000_000 + 4 * (10_000_000_000 / 115_200));
+        assert_eq!(m.host_staged(0), 0);
     }
 }
