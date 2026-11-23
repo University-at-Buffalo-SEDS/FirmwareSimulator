@@ -329,6 +329,24 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
   the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
   pins (`pin:<index>`) and CAN link changes. `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing`
   lights the motor without an igniter.
+* Pace without catch-up: the station leads network time from its own wall clock, and every board's network time
+  follows it on virtual time. A bay that fell behind (a slow board boot, host load) and then raced to catch up ran
+  every board's clock 3-4x fast for seconds: the boards led the station's network time, named diverged epochs, the
+  station refused their valve reports as ahead of its clock (STALE valve state, the GSE self-test pausing on valve
+  acknowledgements) and the radio PTY filled. `gs_bay.py` sets `FIRMWARE_SIM_PACE_MAX_CATCHUP_MS=20`: lag beyond it
+  is dropped (`slipped_ms`, `slip_events` in `status.json`), so a board that fell behind is only stepped forward by
+  its time sync. Unset (fullnet under a dilated station clock) the bay catches up as before.
+* Radio PTY: each step drains the station's PTY completely (up to 64 KiB not yet sent) into the modem's host staging
+  queue, and the medium feeds those bytes to the modem at the UART baud in virtual time, as the station's kernel
+  serial buffer would; bytes toward the station wait in the bay while its PTY is full. The station's writes no
+  longer fail with "operation would block" when steps run slow, and a burst no longer overflows the modem FIFO.
+* The tank holds air at atmospheric pressure when empty and the VB tank PT reads gauge (`gauge_psi` beside the
+  absolute `pressure_psi`): the station's GSE zero baseline (taken empty) matches the tank after a dump.
+* DAQ frame engine (DAQ-Board 99db2e6+, register-level TIM2 in `sim_tim2.c`): the idle skip and WFI refresh the
+  live registers before choosing their target, so a compare the firmware enables with plain CCRx/DIER writes (the
+  slot START after scan A) is scheduled before the core jumps ahead. Before, the slot START came about 560 us late
+  and about a third of all frames timed out (`g_mcp3564r_diag.scans_timed_out`); now 0 in 5000 frames, with late
+  STARTs only at boot or inside 100 us busy-wait slices.
 * `control` (`DIR/control.json`, polled every 200 ms of wall time): plant inputs, conditions, calibration masses and
   faults; `status` (`DIR/status.json`, every virtual second): pace, nodes, resets, firmware revisions, plant.
 * `sim_flight_sensors.c` accepts live barometer pressure and body-Z specific force through the "flightsens" device
