@@ -59,6 +59,9 @@ static size_t flash_size;
 static void retained_restore(void);
 static void rtc_live(void);
 volatile uint8_t *sim_ppb_alias;
+/* set while sim_mmio_live runs from the stall signal: only memory may be touched there, no scheduling */
+volatile int sim_mmio_in_signal;
+void sim_tim2_live(void);
 uint64_t sim_next_tick_ns(void);
 void sim_advance_raw_ns(uint64_t ns);
 extern uint32_t sim_cycles_per_us;
@@ -91,6 +94,7 @@ void sim_mmio_live(void)
     ALIAS32(0xE010) |= 7u;
     ALIAS32(0xED04) = (ALIAS32(0xED04) & ~(1u << 26)) | (pend << 26);
     rtc_live();
+    sim_tim2_live();
 }
 extern volatile int sim_core_busy;
 static uint64_t stall_last;
@@ -98,7 +102,7 @@ static void on_stall_timer(int sig)
 {
     (void)sig;
     uint64_t now = sim_now_ns();
-    if (!sim_core_busy && now == stall_last) { sim_advance_raw_ns(20000); sim_mmio_live(); }
+    if (!sim_core_busy && now == stall_last) { sim_advance_raw_ns(20000); sim_mmio_in_signal = 1; sim_mmio_live(); sim_mmio_in_signal = 0; }
     stall_last = sim_now_ns();
 }
 static void trap_core_pages(void)

@@ -23,6 +23,7 @@ static struct {
     int running, data_ready, channel, latched_channel; int32_t latched_code;
     int position, reading, reg_addr, reg_byte, data_bytes; uint32_t data;
     int selected; uint64_t transactions;
+    int conv_left;  /* one-shot: conversions left in this START (-1: continuous) */
 } m;
 
 static uint8_t reg(int a) { return m.regs[(a << 2) & 63]; }
@@ -77,9 +78,18 @@ static void conversion_isr(void *a, uintptr_t b)
     convert_sample(); advance_channel();
     m.data_ready = 1;
     set_irq(0);
+    /* one-shot (CONFIG3 CONV_MODE 0x/10): a START converts the SCAN list once, then standby */
+    if (m.conv_left > 0 && --m.conv_left == 0) { m.running = 0; sim_cancel(release_isr, &m); return; }
     arm();
 }
-static void start(void) { m.channel = 15; m.data_ready = 0; set_irq(1); m.running = 1; arm(); }
+static void start(void)
+{
+    m.channel = 15; m.data_ready = 0; set_irq(1); m.running = 1;
+    int continuous = ((reg(4) >> 6) & 3) == 3;
+    int n = __builtin_popcount(scan_mask());
+    m.conv_left = continuous ? -1 : (n ? n : 1);
+    arm();
+}
 static void stop(void) { m.running = 0; m.data_ready = 0; set_irq(1); sim_cancel(conversion_isr, &m); sim_cancel(release_isr, &m); }
 static void reset_regs(void)
 {
