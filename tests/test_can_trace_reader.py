@@ -27,16 +27,16 @@ class CanTraceReaderTests(unittest.TestCase):
         return path
 
     def test_raw_full_and_compact_have_distinct_taxonomy(self):
-        for data, expected in [(b'\1\0\x7fdata', ('canonical', 127)),
-                               (b'SDT\1\x81\1\1\0\x7fdata', ('sdt-full', 127)),
-                               (b'SDT\2anything', ('sdt-kind-2-undecoded', None)),
-                               (b'SDT\1\x80', ('malformed', None))]:
+        for data, expected in [(b'\1\x7fdata', ('canonical', 127)),
+                               (b'\x60\x81\1\0\1\x7fdata', ('side-full', 127)),
+                               (b'\x70anything', ('side-kind-0x70-undecoded', None)),
+                               (b'\x60\x80', ('malformed', None))]:
             self.assertEqual(M.taxonomy(data), expected)
 
     def test_link_v2_fragments_padding_and_exact_bytes(self):
-        payload = b'\1\0\x7f' + bytes(range(80))           # 83 bytes: FIRST 64 + LAST 19 (+1 pad)
+        payload = b'\1\x7f\0' + bytes(range(80))           # 83 bytes: FIRST 64 + LAST 19 (+1 pad)
         last = payload[64:] + b'\1'
-        single = b'\1\0\x7f' + b'xyzabc' + b'\0' * 2 + b'\3'  # 9 bytes padded to 12
+        single = b'\1\x7f\0' + b'xyzabc' + b'\0' * 2 + b'\3'  # 9 bytes padded to 12
         with tempfile.TemporaryDirectory() as tmp:
             rows = []
             path = self.capture(tmp, [(1, payload[:64], 0x132), (2, single, 0x0B9), (3, last, 0x135)])

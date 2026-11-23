@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read passive SEDSCAN1 captures; reassemble CAN link v2 fragments without decoding SDT compact/chunk frames.
+"""Read passive SEDSCAN1 captures; reassemble CAN link v2 fragments without decoding SEDSnet compact/chunk frames.
 
 Link format v2 (boards' Core/Inc/can_link.h): identifier bits 8..7 band, 6..3 board, 2..0 kind
 (0 SINGLE, 1 SINGLE+PAD, 2 FIRST, 3 MIDDLE, 4 LAST, 5 LAST+PAD); no payload header; a PAD frame's
@@ -33,23 +33,28 @@ def uleb(data, offset):
 
 
 def taxonomy(data):
+    """SEDSnet 7: canonical frames start flags, type ULEB128; a FULL template
+    frame (0x60) prefixes template id/generation and base delta ULEB128s;
+    other side-transport kinds (first byte with both 0x60 bits set) carry no
+    visible type."""
     offset = 0
-    if data.startswith(b'SDT'):
-        if len(data) < 4:
-            return 'malformed', None
-        if data[3] != 1:
-            return 'sdt-kind-' + str(data[3]) + '-undecoded', None
+    if not data:
+        return 'malformed', None
+    if data[0] & 0x60 == 0x60:
+        if data[0] != 0x60:
+            return 'side-kind-0x%02x-undecoded' % data[0], None
         try:
-            _, offset = uleb(data, 4)
+            _, offset = uleb(data, 1)
+            _, offset = uleb(data, offset)
         except ValueError:
             return 'malformed', None
-        kind = 'sdt-full'
+        kind = 'side-full'
     else:
         kind = 'canonical'
     try:
-        if len(data) - offset < 3:
+        if len(data) - offset < 2:
             raise ValueError('short canonical header')
-        ty, _ = uleb(data, offset + 2)
+        ty, _ = uleb(data, offset + 1)
         return kind, ty
     except ValueError:
         return 'malformed', None
@@ -180,7 +185,7 @@ def main():
                 raise ValueError('logical packet output exceeds 64MiB bound')
             output.write(line)
         summaries = [read_capture(path, emit if output else None) for path in args.captures]
-        print(json.dumps({'scope': 'Passive CAN taxonomy; compact/chunk SDT remains undecoded; no CRC/application validity claim', 'captures': summaries}, indent=2))
+        print(json.dumps({'scope': 'Passive CAN taxonomy; compact/chunk side-transport frames remain undecoded; no CRC/application validity claim', 'captures': summaries}, indent=2))
     finally:
         if output:
             output.close()
