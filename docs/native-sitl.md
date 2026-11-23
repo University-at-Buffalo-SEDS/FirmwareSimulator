@@ -314,3 +314,22 @@ latest Renode acceptance runs keeps the native tier honest.
   stays `--station-lockstep off` with `--native-pace 10`. For throughput, use
   `--station-lockstep threads --native-pace 0 --native-quantum-us 4000` with several runs in parallel.
   `FIRMWARE_SIM_STATION_IDLE_GRANT` (the earlier schedstat governor) is superseded.
+
+## Station-managed bay (GroundStation firmware simulation mode)
+
+`scripts/gs_bay.py --manifest <cache>/manifest.json --out DIR [--mode MODE]` runs the seven boards for a station that
+starts the bay itself and connects to it like hardware (GroundStation26 `docs/firmware-sim.md`,
+`tools/firmware_sim.py` builds the cache). Differences from the scenario engine:
+
+* `native.json` `external_station`: the topology's host node is not started; its endpoints (the radio PTY and the
+  Pico-Fi discovery port) are written to `DIR/endpoints.json`. The bay runs at pace 1 (the station keeps its own wall
+  clock; no simclock, no lockstep), forever, until SIGTERM. The launcher dies with its parent (PR_SET_PDEATHSIG).
+* `plant` (`src/bay/native_plant.rs`, physics in `src/bay/native_physics.rs`): stepped every 10 ms of virtual time,
+  it observes the boards' output pins (MSG_GPIO edges, kept per pin) and the VB servo compare registers (read from
+  the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
+  pins (`pin:<index>`) and CAN link changes. `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing`
+  lights the motor without an igniter.
+* `control` (`DIR/control.json`, polled every 200 ms of wall time): plant inputs, conditions, calibration masses and
+  faults; `status` (`DIR/status.json`, every virtual second): pace, nodes, resets, firmware revisions, plant.
+* `sim_flight_sensors.c` accepts live barometer pressure and body-Z specific force through the "flightsens" device
+  (the weather trim set must be selected at boot with `SIM_BARO_PA`, which the launcher sets to the pad pressure).

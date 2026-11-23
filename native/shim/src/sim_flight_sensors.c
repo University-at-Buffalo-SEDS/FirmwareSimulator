@@ -8,7 +8,12 @@
  * Pad weather (optional): SIM_BARO_PA sets the barometer's pressure in Pa and SIM_BARO_RAMP_PA_PER_H a steady
  * drift from boot (weather on a long pad sit); SIM_BARO_TEMP_C its temperature (default 25). They select the
  * Renode flight-profile trim set, under which the firmware's own compensation gives P = raw / 128 Pa and
- * T = (raw - 6.4e6) / 65536 C. */
+ * T = (raw - 6.4e6) / 65536 C.
+ *
+ * Flight (optional): the coordinator's flight model sends SIM_MSG_ADC device "flightsens" with
+ * "<pressure Pa>,<accel x>,<accel y>,<accel z>" (specific force in m/s^2, body z up). From the first such message the
+ * barometer reads that pressure (under the weather trim set, so SIM_BARO_PA must select it at boot) and the
+ * accelerometer that specific force instead of the resting 1 g. */
 #include "sim.h"
 #include "main.h"
 #include <stdio.h>
@@ -26,7 +31,17 @@ static struct {
     int dev, selected, position, reading, sample_read; uint8_t address;
     int baro_ready;
     int weather; double baro_pa, ramp_pa_per_h, temp_c;
+    int live; double live_pa, live_acc[3];
 } f;
+
+/* Called by the device layer for SIM_MSG_ADC "flightsens" (see the header). */
+void sim_flight_sensors_set(const char *csv)
+{
+    double v[4]; int n = 0; const char *p = csv;
+    while (n < 4 && p && *p) { char *end; v[n] = strtod(p, &end); if (end == p) break; n++; p = *end == ',' ? end + 1 : NULL; }
+    if (n < 4) return;
+    f.live = 1; f.live_pa = v[0]; f.live_acc[0] = v[1]; f.live_acc[1] = v[2]; f.live_acc[2] = v[3];
+}
 
 static void set_line(int sensor, int level)
 {
@@ -65,12 +80,21 @@ static uint8_t read_reg(int d, uint8_t r)
     if (d == BARO && r == 0x03) return 0x60;
     if (d == BARO && r == 0x11) { uint8_t st = f.baro_ready ? 8 : 0; f.baro_ready = 0; sim_cancel(baro_pulse_isr, &f); baro_irq(0); return st; }
     if (d == BARO && r >= 0x04 && r <= 0x09 && f.weather) {
-        double pa = f.baro_pa + f.ramp_pa_per_h * ((double)sim_now_ns() / 3.6e12);
+        double pa = f.live ? f.live_pa : f.baro_pa + f.ramp_pa_per_h * ((double)sim_now_ns() / 3.6e12);
         uint32_t p = (uint32_t)(pa * 128.0 + 0.5), t = (uint32_t)(6400000.0 + f.temp_c * 65536.0 + 0.5);
         uint8_t v[6] = {(uint8_t)p, (uint8_t)(p >> 8), (uint8_t)(p >> 16), (uint8_t)t, (uint8_t)(t >> 8), (uint8_t)(t >> 16)};
         return v[r - 4];
     }
     if (d == BARO && r >= 0x04 && r <= 0x09) { static const uint8_t v[6] = {0x00, 0x80, 0x65, 0x00, 0x6a, 0x31}; return v[r - 4]; }
+    if (d == ACCEL && r >= 0x12 && r <= 0x17 && f.live) {
+        int16_t a[3];
+        for (int i = 0; i < 3; i++) {
+            double c = f.live_acc[i] / accel_lsb();
+            a[i] = (int16_t)(c > 32767 ? 32767 : c < -32768 ? -32768 : (c < 0 ? c - 0.5 : c + 0.5));
+        }
+        uint8_t v[6] = {(uint8_t)a[0], (uint8_t)(a[0] >> 8), (uint8_t)a[1], (uint8_t)(a[1] >> 8), (uint8_t)a[2], (uint8_t)(a[2] >> 8)};
+        return v[r - 0x12];
+    }
     if (d == ACCEL && r >= 0x12 && r <= 0x17) { int16_t z = (int16_t)(9.80665 / accel_lsb() + 0.5); uint8_t v[6] = {0, 0, 0, 0, (uint8_t)z, (uint8_t)(z >> 8)}; return v[r - 0x12]; }
     if (d == GYRO && r >= 0x02 && r <= 0x07) return 0;
     return f.regs[d][r];
@@ -132,6 +156,7 @@ __attribute__((constructor(200))) static void fs_load(void)
     for (int s = 0; s < 3; s++) sim_pin_set_input((unsigned)f.irq[s], 0);
 }
 #else
+void sim_flight_sensors_set(const char *csv) { (void)csv; }
 int sim_flight_sensors_xfer(const char *bus, const unsigned char *tx, unsigned char *rx, unsigned short n) { (void)bus; (void)tx; (void)rx; (void)n; return 0; }
 void sim_flight_sensors_cs(unsigned idx, int value) { (void)idx; (void)value; }
 #endif

@@ -112,6 +112,7 @@ int sim_i2c_read(const char *bus, int addr, uint8_t *d, unsigned n)
 }
 int sim_i2c_present(const char *bus, int addr) { return ltc_find(bus, addr) != NULL; }
 
+void sim_flight_sensors_set(const char *csv);
 static void on_adc(uint16_t type, const uint8_t *b, uint32_t len)
 {
     (void)type;
@@ -126,6 +127,7 @@ static void on_adc(uint16_t type, const uint8_t *b, uint32_t len)
         }
         return;
     }
+    if (!strcmp(dev, "flightsens")) { sim_flight_sensors_set(csv); return; }
     if (!strncmp(dev, "pin:", 4)) { int idx = atoi(dev + 4); if (idx >= 0 && idx < 256) pins[idx] = (int8_t)atoi(csv); return; }
     sim_adc_set_samples(dev, csv);
 }

@@ -1418,6 +1418,10 @@ struct PreparedBay {
 pub mod native;
 #[path = "bay/native_pico.rs"]
 mod native_pico;
+#[path = "bay/native_plant.rs"]
+pub mod native_plant;
+#[path = "bay/native_physics.rs"]
+pub mod native_physics;
 #[path = "bay/native_radio.rs"]
 mod native_radio;
 #[path = "bay/owned.rs"]

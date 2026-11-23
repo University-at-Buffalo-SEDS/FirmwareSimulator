@@ -90,6 +90,23 @@ pub struct NativeConfig {
     /// Shared page the host station's clocks follow (native/simclock): the station runs on the bay's virtual time.
     #[serde(default)]
     pub station_clock: Option<PathBuf>,
+    /// Station-managed bay: the topology's host nodes are not started here. The station runs on its own (wall)
+    /// clock and connects to the endpoints written to this file ({"<host>": {"<serial env>": "<pty path or port>"}}),
+    /// so the bay must run at pace 1.
+    #[serde(default)]
+    pub external_station: Option<PathBuf>,
+    /// Station control file (plant inputs, faults; polled every 200 ms of wall time) and the status file written
+    /// every virtual second (pace, nodes, resets, plant).
+    #[serde(default)]
+    pub control: Option<PathBuf>,
+    #[serde(default)]
+    pub status: Option<PathBuf>,
+    /// Physical plant closing the loop around the boards (native_plant.rs).
+    #[serde(default)]
+    pub plant: Option<super::native_plant::PlantConfig>,
+    /// Firmware revisions being simulated, copied into the status file.
+    #[serde(default)]
+    pub firmware: Option<serde_json::Value>,
 }
 
 /// Per-thread accounting of the host stations (layout shared with native/simclock/simclock.c): per station slot,
@@ -346,6 +363,21 @@ fn atomic_write(path: &Path, text: &str) {
     }
 }
 
+/// The plant's view of the boards: output pin levels from their GPIO reports, words from their mapped memory.
+struct NodeObserver<'a> {
+    procs: &'a [Proc],
+    gpio: &'a BTreeMap<(String, u8, u8), u8>,
+}
+impl super::native_plant::Observe for NodeObserver<'_> {
+    fn pin(&self, node: &str, port: u8, pin: u8) -> Option<u8> {
+        self.gpio.get(&(node.to_string(), port, pin)).copied()
+    }
+    fn word(&self, node: &str, address: u32) -> Option<u32> {
+        let p = self.procs.iter().find(|p| p.name == node && p.alive)?;
+        read_word(p.child.id(), address, 4)
+    }
+}
+
 pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let topology: BayTopology = serde_json::from_str(&fs::read_to_string(topology_path)?)
         .with_context(|| format!("reading {}", topology_path.display()))?;
@@ -493,9 +525,29 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut idle_cap_state: (u32, u32, u32) = (0, 0, 0);
     let mut idle_culprits: BTreeMap<String, u64> = BTreeMap::new();
     let mut hosts = Vec::new();
-    for host in &topology.host_nodes {
-        hosts.push(spawn_host_node(host, topology_path.parent().unwrap_or(Path::new(".")), &scratch, &sample_path, &host_serial_paths, false)?);
+    if let Some(path) = &cfg.external_station {
+        let mut endpoints = serde_json::Map::new();
+        for host in &topology.host_nodes {
+            let mut links = serde_json::Map::new();
+            for s in &host.serial_links {
+                if let Some(p) = host_serial_paths.get(&(host.name.clone(), s.link.clone())) {
+                    links.insert(s.env.clone(), serde_json::Value::String(p.display().to_string()));
+                }
+            }
+            endpoints.insert(host.name.clone(), serde_json::Value::Object(links));
+        }
+        let doc = serde_json::json!({"pid": std::process::id(), "hosts": endpoints});
+        atomic_write(path, &serde_json::to_string_pretty(&doc)?);
+    } else {
+        for host in &topology.host_nodes {
+            hosts.push(spawn_host_node(host, topology_path.parent().unwrap_or(Path::new(".")), &scratch, &sample_path, &host_serial_paths, false)?);
+        }
     }
+    let mut plant = cfg.plant.clone().map(super::native_plant::Plant::new);
+    let mut gpio_state: BTreeMap<(String, u8, u8), u8> = BTreeMap::new();
+    let mut next_plant: u64 = 0;
+    let mut next_control = Instant::now();
+    let mut control_text = String::new();
     let wall0 = Instant::now();
     let mut t: u64 = 0;
     let mut second: u64 = 0;
@@ -744,6 +796,75 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 }
             }
         }
+        // ---- plant: observe the boards' outputs, deliver sensor codes, input pins and umbilical link changes
+        if let Some(path) = cfg.control.as_ref().filter(|_| Instant::now() >= next_control) {
+            next_control = Instant::now() + Duration::from_millis(200);
+            if let Ok(text) = fs::read_to_string(path) {
+                if text != control_text {
+                    if let (Some(pl), Ok(v)) = (plant.as_mut(), serde_json::from_str::<serde_json::Value>(&text)) {
+                        pl.apply_control(&v);
+                        let _ = writeln!(gpio_out, "{} control {}", t, text.trim().replace('\n', " "));
+                    }
+                    control_text = text;
+                }
+            }
+        }
+        if let Some(pl) = plant.as_mut().filter(|_| t >= next_plant) {
+            next_plant = t + 10_000_000;
+            let observe = NodeObserver { procs: &procs, gpio: &gpio_state };
+            let outputs = pl.step(t, &observe);
+            let mut links_changed = false;
+            for o in outputs {
+                match o {
+                    super::native_plant::Output::Adc { node, device, text } => {
+                        if let Some(p) = procs.iter_mut().find(|p| p.name == node) {
+                            let mut dev = [0u8; 16];
+                            for (i, b) in device.bytes().take(16).enumerate() {
+                                dev[i] = b;
+                            }
+                            let mut m = dev.to_vec();
+                            m.extend_from_slice(text.as_bytes());
+                            p.inbound.push((t, MSG_ADC, m));
+                        }
+                    }
+                    super::native_plant::Output::Pin { node, index, value } => {
+                        if let Some(p) = procs.iter_mut().find(|p| p.name == node) {
+                            let mut dev = [0u8; 16];
+                            for (i, b) in format!("pin:{index}").bytes().take(16).enumerate() {
+                                dev[i] = b;
+                            }
+                            let mut m = dev.to_vec();
+                            m.extend_from_slice(value.to_string().as_bytes());
+                            p.inbound.push((t, MSG_ADC, m));
+                        }
+                        let _ = writeln!(gpio_out, "{} plant_pin {} {} {}", t, node, index, value);
+                    }
+                    super::native_plant::Output::CanLink { node, peripheral, connected } => {
+                        for e in can.iter_mut().filter(|e| e.node == node && e.peripheral == peripheral) {
+                            e.connected = connected;
+                            links_changed = true;
+                        }
+                        let _ = writeln!(gpio_out, "{} can_link {} {} {}", t, node, peripheral, connected as u8);
+                    }
+                    super::native_plant::Output::RadioCut(cut) => {
+                        for (medium, _, eps) in radios.iter_mut() {
+                            let names: Vec<String> = eps.iter().map(|e| e.0.clone()).collect();
+                            for a in &names {
+                                for b in &names {
+                                    if a != b {
+                                        medium.cut.insert((a.clone(), b.clone()), cut);
+                                    }
+                                }
+                            }
+                        }
+                        let _ = writeln!(gpio_out, "{} radio_drop {}", t, cut as u8);
+                    }
+                }
+            }
+            if links_changed {
+                push_link_state(&mut procs, &can, t);
+            }
+        }
         if let Some(c) = station_clock.as_mut() {
             c.publish(t, horizon);
         }
@@ -828,6 +949,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     MSG_GPIO => {
                         // Every edge of a pin up to 200, then counts only (chip selects and blinkers are chatty).
                         let ts = u64::from_le_bytes(body[..8].try_into().unwrap());
+                        gpio_state.insert((procs[i].name.clone(), body[8], body[9]), body[10]);
                         let key = format!("{} {} {}", procs[i].name, body[8], body[9]);
                         let n = gpio_edges.entry(key).or_insert(0u64);
                         *n += 1;
@@ -978,6 +1100,21 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step,
                 "station_idle_waits": idle_waits, "station_idle_cap_hits": idle_cap_hits, "station_idle_culprits": idle_culprits});
             atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
+            if let Some(path) = &cfg.status {
+                let nodes: Vec<serde_json::Value> = procs
+                    .iter()
+                    .map(|p| serde_json::json!({"node": p.name, "alive": p.alive, "boots": p.boots, "pid": p.child.id()}))
+                    .collect();
+                let wall = wall0.elapsed().as_secs_f64();
+                let status = serde_json::json!({
+                    "pid": std::process::id(), "virtual_ms": t / 1_000_000, "wall_s": wall,
+                    "pace_target": cfg.pace, "pace_actual": if wall > 0.0 { (t as f64 / 1e9) / wall } else { 0.0 },
+                    "max_lag_ms": max_lag_ms, "nodes": nodes, "resets": resets, "can_frames": can_frames,
+                    "firmware": cfg.firmware, "plant": plant.as_ref().map(|p| p.status()),
+                    "updated_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                });
+                atomic_write(path, &serde_json::to_string_pretty(&status)?);
+            }
         }
     }
     stop.store(true, Ordering::Release);
