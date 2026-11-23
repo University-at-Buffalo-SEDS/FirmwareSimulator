@@ -14,8 +14,10 @@ class CanTraceReaderTests(unittest.TestCase):
         path = Path(directory) / 'wire.bin'
         until = 10000000
         content = M.HEADER.pack(b'SEDSCAN1', 1, 80, until, M.MAX_BYTES)
-        for now, data in frames:
-            content += M.RECORD.pack(now, 6, 1, len(data), 0, data.ljust(64, b'\0'))
+        for frame in frames:
+            now, data = frame[0], frame[1]
+            identifier = frame[2] if len(frame) > 2 else 0x130  # data band, board 6, SINGLE
+            content += M.RECORD.pack(now, identifier, 1, len(data), 0, data.ljust(64, b'\0'))
         path.write_bytes(content)
         status = dict(version=1, record_bytes=80, records=len(frames), until_us=until,
                       max_bytes=M.MAX_BYTES, last_record_us=frames[-1][0] if frames else 0,
@@ -31,18 +33,19 @@ class CanTraceReaderTests(unittest.TestCase):
                                (b'SDT\1\x80', ('malformed', None))]:
             self.assertEqual(M.taxonomy(data), expected)
 
-    def test_reorders_fragments_preserves_duplicates_and_exact_bytes(self):
-        payload = b'\1\0\x7f' + bytes(range(80))
-        def frag(i):
-            return M.FRAGMENT.pack(b'SD', 2, 9, i, 2, 1 if i == 0 else 2, len(payload)) + payload[i*55:(i+1)*55]
+    def test_link_v2_fragments_padding_and_exact_bytes(self):
+        payload = b'\1\0\x7f' + bytes(range(80))           # 83 bytes: FIRST 64 + LAST 19 (+1 pad)
+        last = payload[64:] + b'\1'
+        single = b'\1\0\x7f' + b'xyzabc' + b'\0' * 2 + b'\3'  # 9 bytes padded to 12
         with tempfile.TemporaryDirectory() as tmp:
             rows = []
-            path = self.capture(tmp, [(1, frag(1)), (2, frag(1)), (3, frag(0))])
+            path = self.capture(tmp, [(1, payload[:64], 0x132), (2, single, 0x0B9), (3, last, 0x135)])
             result = M.read_capture(path, rows.append)
-        self.assertEqual(result['logical_packets'], 1)
-        self.assertEqual(result['fragment_duplicates'], 1)
-        self.assertEqual(rows[0]['bytes_hex'], payload.hex())
-        self.assertEqual(result['data_types'], {'127': 1})
+        self.assertEqual(result['logical_packets'], 2)
+        self.assertEqual(result['fragment_frames'], 2)
+        self.assertEqual(rows[0]['bytes_hex'], single[:9].hex())
+        self.assertEqual(rows[1]['bytes_hex'], payload.hex())
+        self.assertEqual(result['data_types'], {'127': 2})
 
     def test_rejects_incomplete_faulted_or_mismatched_status(self):
         for changes in [dict(finished=False), dict(capped=True), dict(faulted=True), dict(records=3)]:
@@ -55,11 +58,15 @@ class CanTraceReaderTests(unittest.TestCase):
             path = self.capture(tmp, [(1, b'\1\0\1')])
             path.write_bytes(path.read_bytes()[:-1])
             with self.assertRaises(ValueError): M.read_capture(path)
-        fragment = M.FRAGMENT.pack(b'SD', 2, 1, 0, 2, 0, 60)
+        # An orphan LAST, a FIRST replaced by another FIRST, and a bad pad
+        # length are visible as rejected; nothing is misdelivered.
         with tempfile.TemporaryDirectory() as tmp:
-            result = M.read_capture(self.capture(tmp, [(1, fragment + b'A'*55), (2, fragment + b'B'*55)]))
-        self.assertEqual(result['fragment_rejected'], 1)
+            result = M.read_capture(self.capture(tmp, [
+                (1, b'B' * 64, 0x134), (2, b'A' * 64, 0x132), (3, b'C' * 64, 0x132),
+                (4, b'x' * 11 + b'\x0c', 0x131)]))
+        self.assertEqual(result['fragment_rejected'], 3)
         self.assertEqual(result['logical_packets'], 0)
+        self.assertEqual(result['fragment_incomplete_at_end'], 1)
 
 
 if __name__ == '__main__':

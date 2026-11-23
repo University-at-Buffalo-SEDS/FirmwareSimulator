@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read passive SEDSCAN1 captures; reassemble CAN fragments without decoding SDT compact/chunk frames."""
+"""Read passive SEDSCAN1 captures; reassemble CAN link v2 fragments without decoding SDT compact/chunk frames.
+
+Link format v2 (boards' Core/Inc/can_link.h): identifier bits 8..7 band, 6..3 board, 2..0 kind
+(0 SINGLE, 1 SINGLE+PAD, 2 FIRST, 3 MIDDLE, 4 LAST, 5 LAST+PAD); no payload header; a PAD frame's
+last byte is its pad length."""
 import argparse
 import collections
 import json
@@ -8,7 +12,7 @@ import struct
 
 HEADER = struct.Struct('<8sIIQQ')
 RECORD = struct.Struct('<QIBBH64s')
-FRAGMENT = struct.Struct('<2sBBBBBH')
+MAX_PACKET = 128
 MAX_BYTES = 64 * 1024 * 1024
 MAX_ASSEMBLIES = 256
 
@@ -49,6 +53,28 @@ def taxonomy(data):
         return kind, ty
     except ValueError:
         return 'malformed', None
+
+
+def dlc_len(n):
+    for size in (0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64):
+        if n <= size:
+            return size
+    raise ValueError('over 64 bytes')
+
+
+def link_payload(identifier, data):
+    """Packet bytes of one link v2 frame, or None when malformed."""
+    kind = identifier & 7
+    if kind > 5 or not data:
+        return None
+    if kind in (2, 3):
+        return data if len(data) == 64 else None
+    if not kind & 1:
+        return data
+    pad = data[-1]
+    if not 0 < pad < len(data) or dlc_len(len(data) - pad) != len(data):
+        return None
+    return data[:-pad]
 
 
 def read_capture(path, emit=None):
@@ -100,43 +126,36 @@ def read_capture(path, emit=None):
                 if now - active[key]['last'] > 1000000:
                     del active[key]
                     result['fragment_expired'] += 1
-            if not data.startswith(b'SD') or data.startswith(b'SDT'):
-                packet(now, identifier, data, now)
+            kind = identifier & 7
+            body = link_payload(identifier, data)
+            if body is None:
+                result['fragment_rejected'] += 1
+                continue
+            if kind <= 1:
+                packet(now, identifier, body, now)
                 continue
             result['fragment_frames'] += 1
-            if len(data) < FRAGMENT.size:
-                result['fragment_rejected'] += 1
-                continue
-            _, sender, seq, index, total, frag_flags, total_length = FRAGMENT.unpack_from(data)
-            if (not total or index >= total or not total_length or total_length > 55 * total
-                    or total != (total_length + 54) // 55 or len(data) < FRAGMENT.size + min(55, total_length - 55 * index)):
-                result['fragment_rejected'] += 1
-                continue
-            key = (identifier, sender, seq)
+            key = identifier & 0x1F8
             item = active.get(key)
-            if item and (item['total'], item['length']) != (total, total_length):
-                del active[key]
-                result['fragment_rejected'] += 1
-                continue
-            if item is None:
+            if kind == 2:
+                if item is not None:
+                    result['fragment_rejected'] += 1   # unfinished packet replaced
+                    del active[key]
                 if len(active) >= MAX_ASSEMBLIES:
                     active.popitem(last=False)
                     result['fragment_expired'] += 1
-                item = {'first': now, 'last': now, 'total': total, 'length': total_length,
-                        'flags': frag_flags, 'parts': {}}
-                active[key] = item
-            payload = data[FRAGMENT.size:FRAGMENT.size + min(55, total_length - 55 * index)]
-            if index in item['parts']:
-                if item['parts'][index] != payload:
+                active[key] = {'first': now, 'last': now, 'parts': [body]}
+                continue
+            if item is None or sum(map(len, item['parts'])) + len(body) > MAX_PACKET:
+                if item is not None:
                     del active[key]
-                    result['fragment_rejected'] += 1
-                    continue
-                result['fragment_duplicates'] += 1
-            item['parts'][index] = payload
+                result['fragment_rejected'] += 1       # orphan or oversize
+                continue
+            item['parts'].append(body)
             item['last'] = now
             active.move_to_end(key)
-            if len(item['parts']) == total:
-                packet(now, identifier, b''.join(item['parts'][i] for i in range(total)), item['first'])
+            if kind >= 4:
+                packet(now, key, b''.join(item['parts']), item['first'])
                 del active[key]
         if status.get('last_record_us') != last_time:
             raise ValueError('last timestamp/status mismatch')
