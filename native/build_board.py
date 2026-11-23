@@ -100,6 +100,21 @@ def cohort_options(src: Path):
     return opts
 
 
+def tree_digest(src: Path) -> str:
+    """What decides the configure: the CMake files and the set of source files (a new source file needs a new
+    configure even when the tree's path is the same)."""
+    h = hashlib.sha256()
+    for f in sorted(src.rglob('*')):
+        rel = f.relative_to(src).as_posix()
+        if '/build/' in f'/{rel}' or rel.startswith(('.git/', 'build/')):
+            continue
+        if f.name == 'CMakeLists.txt' or f.suffix == '.cmake' or f.name == 'CMakePresets.json':
+            h.update(rel.encode() + b'\0' + f.read_bytes())
+        elif f.suffix in ('.c', '.h', '.s', '.S', '.rs', '.toml'):
+            h.update(rel.encode() + b'\0')
+    return h.hexdigest()
+
+
 def configure(src: Path, out: Path, a):
     """ARM configure (no build) with pinned deps; returns the ARM build dir."""
     deps = out / 'deps'; arm = out / 'arm'
@@ -109,7 +124,7 @@ def configure(src: Path, out: Path, a):
     fx_dir, fx_ref = spec(a.filex) if a.filex else (SEDS / '.workspace-progress/firmware-public439-qualification-20261103/deps/DAQ-Board/filex-src',
                                                     pins.get('filex') or 'b93ac4ae77ee12196f15f341cffb0a9810d2484f')
     stamp = {'src': str(src), 'sdk': [str(sdk_dir), sdk_ref], 'launchcore': [str(lc_dir), lc_ref], 'filex': [str(fx_dir), fx_ref],
-             'defines': a.define, 'cohort_options': cohort_options(src)}
+             'defines': a.define, 'cohort_options': cohort_options(src), 'tree': tree_digest(src)}
     stamp_path = out / 'configure.json'
     if stamp_path.exists() and (arm / 'build.ninja').exists() and json.loads(stamp_path.read_text()).get('inputs') == stamp:
         return arm, json.loads(stamp_path.read_text())
