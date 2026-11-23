@@ -571,6 +571,12 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut slowest_step: (f64, u64) = (0.0, 0); // virtual time the GB UART RX wire is free again
     let mut steps: u64 = 0;
     let mut max_lag_ms: f64 = 0.0;
+    // Wall time dropped from the pace (see "pace against the wall clock") and how often.
+    let mut slipped = Duration::ZERO;
+    let mut slip_events: u64 = 0;
+    let max_catchup = Duration::from_millis(
+        env::var("FIRMWARE_SIM_PACE_MAX_CATCHUP_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20),
+    );
     let mut can_frames: u64 = 0;
     let mut uart_bytes = [0u64; 2];
     let reboots = topology.reboots.clone();
@@ -660,14 +666,24 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         }
         // ---- pace against the wall clock
         if cfg.pace > 0.0 {
-            let target = Duration::from_nanos((horizon as f64 / cfg.pace) as u64);
+            let target = Duration::from_nanos((horizon as f64 / cfg.pace) as u64) + slipped;
             let elapsed = wall0.elapsed();
             if target > elapsed {
                 thread::sleep(target - elapsed);
             } else {
-                let lag = (elapsed - target).as_secs_f64() * 1000.0;
-                if lag > max_lag_ms {
-                    max_lag_ms = lag;
+                let lag = elapsed - target;
+                if lag.as_secs_f64() * 1000.0 > max_lag_ms {
+                    max_lag_ms = lag.as_secs_f64() * 1000.0;
+                }
+                // A station on its own wall clock (no station clock file) syncs the boards' network time to it. A bay
+                // that fell behind (slow boots, host load) and then raced to catch up would run every board's clock
+                // faster than the station's for seconds, and the boards would lead the station's network time (no
+                // real oscillator does that). Beyond `max_catchup` the lag is dropped instead: virtual time then never
+                // runs faster than the pace, and a board that fell behind is merely stepped forward by its time sync.
+                let slip = if station_clock.is_none() { pace_slip(lag, max_catchup) } else { Duration::ZERO };
+                if !slip.is_zero() {
+                    slipped += slip;
+                    slip_events += 1;
                 }
             }
         }
@@ -1109,7 +1125,8 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 eprintln!("[native-bay] {msg}");
             }
             let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
-                "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets,
+                "max_lag_ms": max_lag_ms, "slipped_ms": slipped.as_millis() as u64, "slip_events": slip_events,
+                "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets,
                 "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step,
                 "station_idle_waits": idle_waits, "station_idle_cap_hits": idle_cap_hits, "station_idle_culprits": idle_culprits});
             atomic_write(&cfg.diagnostics.join("native-report.json"), &serde_json::to_string_pretty(&report)?);
@@ -1119,10 +1136,12 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     .map(|p| serde_json::json!({"node": p.name, "alive": p.alive, "boots": p.boots, "pid": p.child.id()}))
                     .collect();
                 let wall = wall0.elapsed().as_secs_f64();
+                // pace over the paced wall time (the slipped wall time excluded)
+                let paced = wall - slipped.as_secs_f64();
                 let status = serde_json::json!({
                     "pid": std::process::id(), "virtual_ms": t / 1_000_000, "wall_s": wall,
-                    "pace_target": cfg.pace, "pace_actual": if wall > 0.0 { (t as f64 / 1e9) / wall } else { 0.0 },
-                    "max_lag_ms": max_lag_ms, "nodes": nodes, "resets": resets, "can_frames": can_frames,
+                    "pace_target": cfg.pace, "pace_actual": if paced > 0.0 { (t as f64 / 1e9) / paced } else { 0.0 },
+                    "max_lag_ms": max_lag_ms, "slipped_ms": slipped.as_millis() as u64, "slip_events": slip_events, "nodes": nodes, "resets": resets, "can_frames": can_frames,
                     "firmware": cfg.firmware, "plant": plant.as_ref().map(|p| p.status()),
                     "updated_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
                 });
@@ -1148,7 +1167,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
         let _ = h.child.wait();
     }
     let report = serde_json::json!({"virtual_ms": t / 1_000_000, "wall_s": wall0.elapsed().as_secs_f64(), "steps": steps,
-        "max_lag_ms": max_lag_ms, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
+        "max_lag_ms": max_lag_ms, "slipped_ms": slipped.as_millis() as u64, "slip_events": slip_events, "can_frames": can_frames, "pico_uart_bytes_tx_rx": uart_bytes, "resets": resets, "completed": true,
         "node_wall_s": node_wait, "slowest_step_ms_at": slowest_step, "gpio_edges": gpio_edges,
         "station_clock": cfg.station_clock.is_some(), "station_idle_grant": idle_grant, "station_busy_waits": station_waits,
         "station_lockstep_threads": lockstep_threads, "station_idle_waits": idle_waits, "station_idle_wait_s": idle_wait_ns as f64 / 1e9,
@@ -1200,3 +1219,25 @@ fn host_cpu_ns(pid: u32) -> u64 {
     }
     total
 }
+
+/// Wall time a bay `lag` behind its pace drops instead of racing to catch up (see "pace against the wall clock"):
+/// everything beyond `max_catchup`.
+fn pace_slip(lag: Duration, max_catchup: Duration) -> Duration {
+    lag.saturating_sub(max_catchup)
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::*;
+
+    /// A bay that fell 1.7 s behind (a slow board boot) keeps only the catch-up window: its virtual time never runs
+    /// faster than the pace for more than that, so no board clock leads the station's.
+    #[test]
+    fn lag_beyond_the_catch_up_window_is_dropped() {
+        let w = Duration::from_millis(20);
+        assert_eq!(pace_slip(Duration::from_millis(5), w), Duration::ZERO);
+        assert_eq!(pace_slip(Duration::from_millis(20), w), Duration::ZERO);
+        assert_eq!(pace_slip(Duration::from_millis(1_700), w), Duration::from_millis(1_680));
+    }
+}
+
