@@ -329,6 +329,15 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
   the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
   pins (`pin:<index>`) and CAN link changes. `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing`
   lights the motor without an igniter.
+* Motor: GroundStation26's hybrid motor model, the one the apogee planner flies (`src/bay/hybrid_motor.rs` and
+  `src/bay/model/`, byte-identical copies of GS `backend/src/apogee_planner/hybrid.rs` and `model/`; reference
+  `tools/flight_profile/hybrid_motor.py`, spec `docs/hybrid-motor-model.md`). At ignition it takes the run tank's
+  N2O, N2 and temperature and, sub-stepped at 5 ms, drains the tank until burnout: thrust into the stand load path,
+  chamber pressure above ambient on the DAQ chamber PT, tank pressure on the VB tank PT; `status.json` `motor` carries
+  O/F, fuel flow and liner exposure. It burns vehicle.json `motor.hybrid_grain` (gs_bay.py passes it) or the spec's
+  flight grain. Plant `"motor": {"model": "isp"}` selects the earlier delivered-Isp blowdown. After copying a new
+  model from GS, `cargo test hybrid_motor` checks the vectors and that the copies match (`GS_REPO`, else
+  `../GroundStation26`).
 * Pace without catch-up: the station leads network time from its own wall clock, and every board's network time
   follows it on virtual time. A bay that fell behind (a slow board boot, host load) and then raced to catch up ran
   every board's clock 3-4x fast for seconds: the boards led the station's network time, named diverged epochs, the
