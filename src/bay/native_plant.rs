@@ -426,10 +426,12 @@ impl Default for PlantConfig {
             vehicle: VehicleParams::default(),
             kg50: phys::kg50_default(),
             kg1000: phys::kg1000_default(),
-            // ActuatorBoard26 main.h: N2_SIG PB13, N20_SIG PB14, IGNITER_SIG PB12
+            // ActuatorBoard26 main.h: N2_SIG PB13, N20_SIG PB14 (driven with each solenoid's gate pin); the igniter
+            // driver (Drivers/spark_stuff/igniter_driver.c) drives only its enable, IGNITER_PIN PB7 (IGNITER_SIG
+            // PB12 is never driven, so an igniter watched there never fired and the stand never lit)
             nitrogen_valve: pin("actuator", 1, 13),
             nitrous_valve: pin("actuator", 1, 14),
-            igniter: pin("actuator", 1, 12),
+            igniter: pin("actuator", 1, 7),
             // ValveBoard26 main.h: Solenoid PB11; servo_driver.h: NO servo TIM2 CH2, dump servo TIM2 CH1, open near
             // 0 degrees (~530 us), closed near 90 degrees (~1200 us) on the 500-2500 us / 270 degree mapping
             pilot_valve: pin("valve", 1, 11),
@@ -1016,7 +1018,7 @@ mod tests {
         let mut plant = Plant::new(PlantConfig { test_stand: true, ..PlantConfig::default() });
         plant.fluids.n2o_kg = 5.6;
         let mut io = io();
-        io.0.insert(("actuator".into(), 1, 12), 1); // igniter
+        io.0.insert(("actuator".into(), 1, 7), 1); // igniter (IGNITER_PIN PB7)
         run(&mut plant, &io, 0, 2000);
         let w0 = plant.vehicle_mass();
         io.0.insert(("valve".into(), 1, 11), 1); // pilot
