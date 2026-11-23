@@ -252,6 +252,9 @@ def main() -> int:
     pad_msl = (plant.get("vehicle") or {}).get("pad_msl_m", 890.016)
     shm = Path("/dev/shm") if Path("/dev/shm").is_dir() else None
     scratch = Path(tempfile.mkdtemp(prefix="seds-gs-bay-", dir=shm))
+    if os.environ.get("FIRMWARE_SIM_CONTROL"):
+        # an initial control document (diagnostics: e.g. start with the GPS without a fix)
+        (out / "control.json").write_text(os.environ["FIRMWARE_SIM_CONTROL"])
     # the FC's SD card (FAT32), with the selected IGT dataset if any
     control_doc = {}
     try:
