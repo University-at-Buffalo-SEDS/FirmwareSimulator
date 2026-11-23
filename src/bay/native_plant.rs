@@ -335,14 +335,17 @@ pub fn dac_connector_v(o: &dyn Observe, p: &DacParams, c: usize, t: f64, starts:
         let ch = p.dma_channel_base[c];
         let bytes = o.word(&p.node, ch + 0x48).unwrap_or(0) & 0xFFFF;
         let table = o.word(&p.node, ch + 0x4C).unwrap_or(0);
-        let n = (bytes / 4).max(1);
+        // source data width from CTR1.SDW_LOG2 (word tables, or halfword shapes)
+        let width = 1u32 << (o.word(&p.node, ch + 0x40).unwrap_or(2) & 3).min(2);
+        let n = (bytes / width).max(1);
         let psc = o.word(&p.node, tim + 0x28).unwrap_or(0) as f64;
         let arr = o.word(&p.node, tim + 0x2C).unwrap_or(0) as f64;
         let clock = p.clock_addr.and_then(|a| o.word(&p.node, a)).map(f64::from).filter(|c| *c > 1e6).unwrap_or(p.timer_clock_hz);
         let rate = clock / ((psc + 1.0) * (arr + 1.0));
         let t0 = *starts[c].get_or_insert(t);
         let idx = (((t - t0) * rate).floor() as u64 % u64::from(n)) as u32;
-        o.word(&p.node, table + 4 * idx)? & 0xFFF
+        let raw = o.word(&p.node, table + width * idx)?;
+        (if width == 2 { raw & 0xFFFF } else { raw }) & 0xFFF
     } else {
         starts[c] = None;
         o.word(&p.node, p.dac_base + if c == 0 { 0x08 } else { 0x14 })? & 0xFFF
@@ -457,6 +460,8 @@ pub enum Output {
     Pin { node: String, index: u32, value: u8 },
     CanLink { node: String, peripheral: String, connected: bool },
     RadioCut(bool),
+    /// Packet loss on the radio link (parts per million, both directions) from the range to the vehicle.
+    RadioLoss(u32),
 }
 
 /// What the coordinator lets the plant observe.
@@ -476,6 +481,8 @@ pub struct Faults {
     pub fc_sd_missing: bool,
     /// The GPS reports no fix (antenna blocked).
     pub gps_no_fix: bool,
+    /// The igniter circuit is open: no current when the AB energizes it.
+    pub igniter_open: bool,
 }
 
 pub struct Plant {
@@ -507,6 +514,7 @@ pub struct Plant {
     pub p10_swapped: bool,
     dac_starts: [Option<f64>; 2],
     last_gps_t: f64,
+    radio_loss_sent: u32,
     pub dac_out: [Option<f64>; 2],
     pub events: Vec<(f64, String)>,
 }
@@ -542,6 +550,7 @@ impl Plant {
             p10_swapped: false,
             dac_starts: [None, None],
             last_gps_t: -1.0,
+            radio_loss_sent: 0,
             dac_out: [None, None],
             events: Vec::new(),
         }
@@ -723,6 +732,18 @@ impl Plant {
             let fix = !self.faults.gps_no_fix as u8;
             self.send(&mut out, &cfg.gps_node, "gps", format!("{lat:.7},{lon:.7},{:.1},{:.2},{course:.1},{fix},12", v.pad_msl_m + self.flight.h, self.conditions.wind_mps.min(30.0) * (self.flight.phase != Phase::Pad && self.flight.phase != Phase::Landed) as u8 as f64));
         }
+        // AB current sense (ADC1: N2O solenoid, N2 solenoid, igniter): energized loads draw current, an open
+        // igniter circuit draws none (the AB's commanded-vs-sensed check sees it)
+        let on = |b: bool| if b { 3000 } else { 20 };
+        let igniter_on = Self::active(o, &cfg.igniter) && !self.faults.igniter_open;
+        self.send(&mut out, "actuator", "adc1", format!("{},{},{}", on(v.nitrous), on(v.nitrogen), on(igniter_on)));
+        // radio quality from the slant range: clean to 3 km, then losses growing to 30 % at 12 km
+        let range = (self.flight.h.powi(2) + self.flight.east.powi(2) + self.flight.north.powi(2)).sqrt();
+        let loss = if range < 3000.0 { 0 } else { (((range - 3000.0) / 9000.0).min(1.0) * 300_000.0) as u32 / 10_000 * 10_000 };
+        if loss != self.radio_loss_sent {
+            self.radio_loss_sent = loss;
+            out.push(Output::RadioLoss(loss));
+        }
         let sd = format!("absent={}", self.faults.fc_sd_missing as u8);
         if self.sent.get("flight/sdcard").is_some() || self.faults.fc_sd_missing {
             self.send(&mut out, &cfg.flight_node, "sdcard", sd);
@@ -790,6 +811,7 @@ impl Plant {
         self.faults.radio_drop = fb("radio_drop");
         self.faults.fc_sd_missing = fb("fc_sd_missing");
         self.faults.gps_no_fix = fb("gps_no_fix");
+        self.faults.igniter_open = fb("igniter_open");
         self.kg1000.faults.supply_dip = fb("kg1000_supply_dip");
         self.kg1000.faults.open_lead = fb("kg1000_open_lead");
         self.kg50.faults.open_lead = fb("kg50_open_lead");

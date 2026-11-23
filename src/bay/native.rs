@@ -859,6 +859,19 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                         }
                         let _ = writeln!(gpio_out, "{} radio_drop {}", t, cut as u8);
                     }
+                    super::native_plant::Output::RadioLoss(ppm) => {
+                        for (medium, _, eps) in radios.iter_mut() {
+                            let names: Vec<String> = eps.iter().map(|e| e.0.clone()).collect();
+                            for a in &names {
+                                for b in &names {
+                                    if a != b {
+                                        medium.loss_ppm.insert((a.clone(), b.clone()), ppm);
+                                    }
+                                }
+                            }
+                        }
+                        let _ = writeln!(gpio_out, "{} radio_loss_ppm {}", t, ppm);
+                    }
                 }
             }
             if links_changed {
