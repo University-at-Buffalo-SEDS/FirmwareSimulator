@@ -12,7 +12,7 @@ from pathlib import Path
 
 STREAMS = [('FC', 'ACCEL_DATA'), ('FC', 'GYRO_DATA'), ('FC', 'BAROMETER_DATA'), ('PB', 'BATTERY_VOLTAGE'),
            ('PB', 'BATTERY_CURRENT'), ('RF', 'GPS_SATELLITE_NUMBER'), ('RF', 'GPS_STATUS'), ('RF', 'BATTERY_VOLTAGE'),
-           ('DAQ', 'KG1000'), ('DAQ', 'DAQ_SAR_VOLTAGES'), ('VB', 'FUEL_TANK_PRESSURE'), ('GB', 'BATTERY_VOLTAGE')]
+           ('DAQ', 'KG1000'), ('DAQ', 'DAQ_SAR_VOLTAGES'), ('VB', 'OX_TANK_PRESSURE'), ('GB', 'BATTERY_VOLTAGE')]
 
 
 def pct(a, p):

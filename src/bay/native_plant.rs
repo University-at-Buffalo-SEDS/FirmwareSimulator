@@ -426,11 +426,10 @@ impl Default for PlantConfig {
             vehicle: VehicleParams::default(),
             kg50: phys::kg50_default(),
             kg1000: phys::kg1000_default(),
-            // ActuatorBoard26 main.h: N2_SIG PB13, N20_SIG PB14 (driven with each solenoid's gate pin); the igniter
-            // driver (Drivers/spark_stuff/igniter_driver.c) drives only its enable, IGNITER_PIN PB7 (IGNITER_SIG
-            // PB12 is never driven, so an igniter watched there never fired and the stand never lit)
-            nitrogen_valve: pin("actuator", 1, 13),
-            nitrous_valve: pin("actuator", 1, 14),
+            // ActuatorBoard26 schematic: the drive enables N2_Valve_EN PB3, N20_Valve_EN PB4, Igniter_EN PB7 (PB12-14,
+            // the *_Sig lines, are external ribbon inputs the AB no longer drives)
+            nitrogen_valve: pin("actuator", 1, 3),
+            nitrous_valve: pin("actuator", 1, 4),
             igniter: pin("actuator", 1, 7),
             // ValveBoard26 main.h: Solenoid PB11; servo_driver.h: NO servo TIM2 CH2, dump servo TIM2 CH1, open near
             // 0 degrees (~530 us), closed near 90 degrees (~1200 us) on the 500-2500 us / 270 degree mapping
@@ -940,7 +939,7 @@ mod tests {
         let mut io = io();
         run(&mut plant, &io, 0, 2000);
         assert_eq!(plant.fluids.gauge_psi(), 0.0, "valves closed");
-        io.0.insert(("actuator".into(), 1, 13), 1); // AB N2_SIG
+        io.0.insert(("actuator".into(), 1, 3), 1); // AB N2_Valve_EN PB3
         let out = run(&mut plant, &io, 2010, 12000);
         let rose = plant.fluids.gauge_psi();
         assert!(rose > 30.0, "{rose}");
@@ -958,7 +957,7 @@ mod tests {
         run(&mut plant, &io, 30010, 35000);
         assert!(plant.fluids.gauge_psi() > rose + 10.0, "all open again");
         io.1.insert(("valve".into(), 0x4000_0034), 530); // dump servo open
-        io.0.insert(("actuator".into(), 1, 13), 0);
+        io.0.insert(("actuator".into(), 1, 3), 0);
         let before = plant.fluids.gauge_psi();
         run(&mut plant, &io, 35010, 40000);
         assert!(plant.fluids.gauge_psi() < before - 20.0, "dump bleeds");

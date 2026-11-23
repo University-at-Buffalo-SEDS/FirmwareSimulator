@@ -6,7 +6,7 @@ use std::sync::{Arc,Mutex};
 #[unsafe(no_mangle)] pub extern "C" fn telemetry_unlock() {}
 #[test]
 fn accepted_rare_voltage_survives_fast_same_sender_pressure_before_later_current() {
- let voltage=DataType::named("BATTERY_VOLTAGE");let current=DataType::named("BATTERY_CURRENT");let pressure=DataType::named("FUEL_TANK_PRESSURE");
+ let voltage=DataType::named("BATTERY_VOLTAGE");let current=DataType::named("BATTERY_CURRENT");let pressure=DataType::named("OX_TANK_PRESSURE");
  let sd=DataType::named("VALVE_PRESSURE_SD_V1");
  let mut tuning=sedsnet::config::runtime_tuning_config();
  tuning.reliable_max_pending=8;tuning.reliable_max_return_routes=8;tuning.reliable_max_end_to_end_pending=8;tuning.reliable_max_end_to_end_ack_cache=8;
