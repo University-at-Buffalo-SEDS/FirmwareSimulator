@@ -138,7 +138,7 @@ pub struct VehicleParams {
     pub pad_msl_m: f64,
     pub launch_lat: f64,
     pub launch_lon: f64,
-    /// GroundStation26 tools/flight_profile/vehicle.json (15 ft x 6 in, 31.6 kg dry, Cd about 0.5).
+    /// GroundStation26 tools/flight_profile/vehicle.json (15 ft x 6 in, 33.2 kg dry, Cd about 0.5).
     pub dry_mass_kg: f64,
     pub fuel_kg: f64,
     pub diameter_m: f64,
@@ -155,14 +155,14 @@ impl Default for VehicleParams {
             pad_msl_m: 890.016,
             launch_lat: 31.758,
             launch_lon: -102.046,
-            dry_mass_kg: 31.6,
+            dry_mass_kg: 33.2,
             fuel_kg: 1.1,
             diameter_m: 0.1524,
             cd: 0.5,
             drogue_vt: 25.0,
             main_vt: 5.8,
             inflate_s: 1.0,
-            tare_kg: 32.7,
+            tare_kg: 34.3,
         }
     }
 }

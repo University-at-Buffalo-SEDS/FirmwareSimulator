@@ -4,7 +4,8 @@
 //! Sources and assumptions (all SI unless named):
 //! * N2O saturation properties: ESDU 91022 correlations as used in the Aspire Space run-tank model (vapour pressure,
 //!   saturated liquid and vapour density, liquid/vapour enthalpy, liquid heat capacity), valid about 183-309 K.
-//! * Run tank 12 L Al 6061 (GroundStation26 tools/flight_profile/vehicle.json: "n2o_run_tank_al6061_12L", 7 kg),
+//! * Run tank 15.85 L Al 6061 (measured 967.45 in^3; GroundStation26 tools/flight_profile/vehicle.json:
+//!   "run_tank_volume_l", and "n2o_run_tank_al6061_15p85L_with_bulkheads", 8.6 kg, an estimate; gs_bay.py seeds both),
 //!   lumped liquid/vapour/wall temperature, equilibrium liquid/vapour split; evaporation to refill the ullage cools it.
 //! * Supply bottle: 50 lb (22.7 kg) of N2O at ambient temperature (assumed); nitrogen K bottle 49 L at 2200 psi
 //!   (assumed) behind a regulator (setpoint configurable); bottle blowdown polytropic (n = 1.3) with heat back from
@@ -77,6 +78,9 @@ pub fn gas_flow(cda: f64, p_up: f64, t_up: f64, p_down: f64, gamma: f64, r: f64)
     cda * p_up * (term.max(0.0) / (r * t_up)).sqrt()
 }
 
+/// The run tank's measured volume: 967.45 in^3 (GroundStation26 tools/flight_profile/vehicle.json run_tank_volume_l).
+pub const RUN_TANK_VOLUME_M3: f64 = 967.45 * 0.016387064e-3;
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default)]
 pub struct FluidParams {
@@ -101,8 +105,8 @@ pub struct FluidParams {
 impl Default for FluidParams {
     fn default() -> Self {
         Self {
-            tank_volume_m3: 0.012,
-            tank_wall_kg: 7.0,
+            tank_volume_m3: RUN_TANK_VOLUME_M3,
+            tank_wall_kg: 8.6,
             wall_cp: 900.0,
             tank_ua: 4.0,
             n2o_bottle_kg: 22.7,
@@ -428,6 +432,16 @@ mod tests {
         assert!((n2o_rho_liquid(293.15) - 786.0).abs() < 15.0);
         assert!((n2o_rho_vapour(293.15) - 160.0).abs() < 10.0);
         assert!(n2o_latent(293.15) > 1.3e5 && n2o_latent(293.15) < 2.2e5);
+    }
+
+    #[test]
+    fn the_default_run_tank_is_the_measured_one() {
+        // 967.45 in^3 = 15.8537 L (Rylan, 2026-11-23)
+        let p = FluidParams::default();
+        assert!((p.tank_volume_m3 * 1000.0 - 15.8537).abs() < 1e-4, "{}", p.tank_volume_m3);
+        // a 20 C fill with 15 % ullage holds about 11 kg, not the 8 kg the assumed 12 L tank held
+        let max_kg = n2o_rho_liquid(293.15) * p.tank_volume_m3 * 0.85 + n2o_rho_vapour(293.15) * p.tank_volume_m3 * 0.15;
+        assert!((10.5..11.5).contains(&max_kg), "{max_kg}");
     }
 
     #[test]

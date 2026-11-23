@@ -125,14 +125,21 @@ def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
     (the apogee planner, the fire archive) flow into the sim. Returns (plant overrides, provenance)."""
     vehicle = json.loads((directory / "vehicle.json").read_text())
     v, m, rec, env = vehicle.get("vehicle", {}), vehicle.get("motor", {}), vehicle.get("recovery", {}), vehicle.get("environment", {})
-    out = {"vehicle": {}, "motor": {}}
+    out = {"vehicle": {}, "motor": {}, "fluids": {}}
     veh = out["vehicle"]
+    # the run tank: its measured volume and the (estimated) wall mass from the mass breakdown
+    volume_l = v.get("run_tank_volume_l")
+    if isinstance(volume_l, (int, float)) and volume_l > 0:
+        out["fluids"]["tank_volume_m3"] = float(volume_l) / 1000.0
+    tank_kg = next((kg for name, kg in (v.get("mass_breakdown_kg") or {}).items() if name.startswith("n2o_run_tank")), None)
+    if isinstance(tank_kg, (int, float)) and tank_kg > 0:
+        out["fluids"]["tank_wall_kg"] = float(tank_kg)
     for key, src in (("dry_mass_kg", v.get("dry_mass_kg")), ("diameter_m", v.get("diameter_m")),
                      ("drogue_vt", rec.get("drogue_descent_mps")), ("main_vt", rec.get("main_descent_mps")),
                      ("launch_lat", env.get("site_lat_deg")), ("launch_lon", env.get("site_lon_deg")), ("pad_msl_m", env.get("site_msl_m"))):
         if isinstance(src, (int, float)):
             veh[key] = float(src)
-    info = {"vehicle_json": str(directory / "vehicle.json")}
+    info = {"vehicle_json": str(directory / "vehicle.json"), **({"run_tank_volume_l": float(volume_l)} if "tank_volume_m3" in out["fluids"] else {})}
     curve = m.get("thrust_curve_csv")
     summary_path = (directory / curve).with_suffix(".json") if curve else None
     if summary_path and summary_path.exists():
@@ -148,7 +155,7 @@ def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
             out["motor"]["of_ratio"] = of
         if isinstance(fuel, (int, float)):
             veh["fuel_kg"] = float(fuel)
-            veh["tare_kg"] = veh.get("dry_mass_kg", 31.6) + float(fuel)
+            veh["tare_kg"] = veh.get("dry_mass_kg", 33.2) + float(fuel)
         info.update(motor_summary=str(summary_path), total_impulse_ns=impulse, oxidizer_kg=ox, fuel_kg=fuel,
                     isp_s=round(out["motor"].get("isp_s", 0.0), 1))
     if isinstance(m.get("total_impulse_ns"), (int, float)) and info.get("total_impulse_ns"):
