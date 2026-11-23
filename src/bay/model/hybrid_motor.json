@@ -186,7 +186,7 @@
       }
     },
     "star_stl": {
-      "_about": "The flight grain: the 10-point star of motor_design/star_grain.stl (prismatic, sharp straight-sided points). The tips reach the OD after 8.2 mm of web, the valleys after 29.8 mm. Materials: assumed to be the same printed ABS gyroid filled with paraffin as the preset (the STL is a solid outline), with the preset radial ABS share.",
+      "_about": "The flight grain: the 10-point star of motor_design/star_grain.stl (prismatic, sharp straight-sided points). The tips reach the OD after 8.2 mm of web, the valleys after 29.8 mm. Same material as the preset grain (Rylan 2026-11-23): a printed ABS gyroid infill filled with paraffin; only the port differs. The print's ABS share is remapped onto the star: its inner wall follows the star outline, its outer wall the OD, the gyroid between (hybrid_motor.py Grain.abs_share).",
       "port_shape": {
         "value": "star",
         "unit": "-",
@@ -225,17 +225,17 @@
       "paraffin_rho": {
         "value": 900.0,
         "unit": "kg/m^3",
-        "source": "preset"
+        "source": "preset (same material, Rylan 2026-11-23)"
       },
       "abs_rho": {
         "value": 1020.0,
         "unit": "kg/m^3",
-        "source": "preset"
+        "source": "preset (same material, Rylan 2026-11-23)"
       },
       "abs_profile": {
         "value": "gyroid_print",
         "unit": "-",
-        "source": "assumed: the preset gyroid matrix, ABS share as a function of radius (the STL is a solid outline; confirm the star is printed the same way)"
+        "source": "Rylan 2026-11-23: same ABS gyroid infill filled with paraffin as the preset grain; motors/sweet_v6_grain.json remapped by distance from the port outline and the OD (the axial pattern repeats, so the 203.2 mm length takes the same profile)"
       }
     }
   },

@@ -493,6 +493,15 @@ impl Grain {
             }
             g.core.1 = 0.5 * (lo + hi);
         }
+        if cfg.star_points > 0 {
+            // the last fuel burns where the OD is farthest from the outline (the Python Grain)
+            let half = std::f64::consts::PI / cfg.star_points as f64;
+            let far = (0..=2000).map(|j| {
+                let th = half * j as f64 / 2000.0;
+                g.dist_core(r_out * th.cos(), r_out * th.sin())
+            });
+            g.w_max = far.fold(0.0, f64::max) - cfg.star_tip_fillet_m + 1e-9;
+        }
         g.tabulate(profile);
         g
     }
@@ -550,7 +559,18 @@ impl Grain {
         let dth = 2.0 * std::f64::consts::PI / thetas.len() as f64;
         self.area = radii.iter().map(|row| 0.5 * row.iter().map(|r| r * r).sum::<f64>() * dth).collect();
         self.wall = ws.iter().map(|w| thetas.iter().filter(|th| self.boundary_r(**th, *w) >= self.r_out).count() as f64 / thetas.len() as f64).collect();
-        let share = |r: f64| profile.map(|p| p.at(r)).unwrap_or(0.0);
+        // ABS share at distance d_in from the initial port outline and d_out from the OD: the print's inner wall
+        // follows the port outline, its outer wall the OD, the gyroid fills between (the Python `abs_share`).
+        let r_out = self.r_out;
+        let share = |d_in: f64, d_out: f64| {
+            profile
+                .map(|p| {
+                    let (r0, r1) = (p.edges[0], p.edges[p.edges.len() - 1]);
+                    let half = 0.5 * (r1 - r0);
+                    if d_in <= d_out { p.at(r0 + d_in.min(half)) } else { p.at(r1 - d_out.min(half)) }
+                })
+                .unwrap_or(0.0)
+        };
         self.abs_shell = (0..n_w)
             .map(|i| {
                 let (mut num, mut den) = (0.0, 0.0);
@@ -560,9 +580,11 @@ impl Grain {
                     }
                     let k = 6;
                     for s in 0..k {
-                        let r = a + (b - a) * (s as f64 + 0.5) / k as f64;
+                        let u = (s as f64 + 0.5) / k as f64;
+                        let r = a + (b - a) * u;
                         let da = r * (b - a) / k as f64;
-                        num += share(r) * da;
+                        let d_in = ws[i] + (ws[i + 1] - ws[i]) * u;
+                        num += share(d_in, r_out - r) * da;
                         den += da;
                     }
                 }
