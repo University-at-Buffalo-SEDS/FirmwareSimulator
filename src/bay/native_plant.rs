@@ -410,6 +410,9 @@ pub struct PlantConfig {
     pub dac: DacParams,
     /// Test fire: the rocket stays on the stand (load cells see the thrust, no flight).
     pub test_stand: bool,
+    /// How the FC lies when it is not flying: "vertical" (gravity on body +Z) or "horizontal" (on +X). In IGT the
+    /// avionics bay lies on the ground apart from the stand: no thrust or vibration reaches its sensors.
+    pub fc_attitude: String,
     pub qd_connected: bool,
     pub nitrogen_bottle_open: bool,
     pub nitrous_bottle_open: bool,
@@ -445,6 +448,7 @@ impl Default for PlantConfig {
             require_igniter: true,
             dac: DacParams::default(),
             test_stand: false,
+            fc_attitude: "vertical".into(),
             qd_connected: true,
             nitrogen_bottle_open: true,
             nitrous_bottle_open: true,
@@ -721,7 +725,12 @@ impl Plant {
         // FC barometer and accelerometer
         let pa = std_pressure(cfg.vehicle.pad_msl_m + self.flight.h);
         let f_body = if cfg.test_stand { G } else { self.flight.f };
-        self.send(&mut out, &cfg.flight_node, "flightsens", format!("{:.1},0,0,{:.3}", pa, f_body));
+        let accel = if cfg.fc_attitude == "horizontal" && (cfg.test_stand || self.flight.phase == Phase::Pad) {
+            format!("{f_body:.3},0,0")
+        } else {
+            format!("0,0,{f_body:.3}")
+        };
+        self.send(&mut out, &cfg.flight_node, "flightsens", format!("{pa:.1},{accel}"));
         // RF NEO-M9N: the vehicle's position from the launch site and the drift, once per second
         if (t - self.last_gps_t) >= 1.0 || self.last_gps_t < 0.0 {
             self.last_gps_t = t;

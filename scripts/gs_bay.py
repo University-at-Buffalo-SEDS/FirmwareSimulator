@@ -233,6 +233,8 @@ def main() -> int:
             for k, val in values.items():
                 plant.setdefault(section, {}).setdefault(k, val)
     plant.setdefault("test_stand", a.mode in ("test_fire", "integrated_ground_test"))
+    # IGT: the motor burns on the stand while the avionics bay lies still on the ground, apart from it
+    plant.setdefault("fc_attitude", "horizontal" if a.mode == "integrated_ground_test" else "vertical")
     plant.setdefault("require_igniter", a.mode not in ("hitl", "testing"))
     plant.setdefault("seed", a.seed)
     # the DAQ's SystemCoreClock (its DAC trigger timers' clock) for the plant's DAC playback
