@@ -586,6 +586,11 @@ impl Plant {
     fn stuck(&self, name: &str, commanded: bool) -> bool {
         *self.faults.stuck.get(name).unwrap_or(&commanded)
     }
+    /// How often the coordinator steps the plant: every 1 ms while a DAC output is patched (so the DAQ's 1 kHz frame
+    /// engine sees waveforms up to a few hundred Hz), else every 10 ms.
+    pub fn step_interval_ns(&self) -> u64 {
+        if self.patch.iter().any(Option::is_some) { 1_000_000 } else { 10_000_000 }
+    }
     /// Vehicle mass (kg): dry, fuel left, tank contents.
     pub fn vehicle_mass(&self) -> f64 {
         self.cfg.vehicle.dry_mass_kg + self.fuel_left + self.fluids.n2o_kg + self.fluids.n2_kg

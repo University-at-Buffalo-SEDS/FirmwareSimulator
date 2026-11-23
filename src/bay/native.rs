@@ -810,7 +810,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             }
         }
         if let Some(pl) = plant.as_mut().filter(|_| t >= next_plant) {
-            next_plant = t + 10_000_000;
+            next_plant = t + pl.step_interval_ns();
             let observe = NodeObserver { procs: &procs, gpio: &gpio_state };
             let outputs = pl.step(t, &observe);
             let mut links_changed = false;
