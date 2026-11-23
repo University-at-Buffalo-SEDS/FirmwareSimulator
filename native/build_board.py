@@ -54,6 +54,11 @@ def run(cmd, **kw):
 def git_archive(repo: Path, ref: str, dest: Path):
     if dest.exists():
         shutil.rmtree(dest)
+    if not (repo / '.git').exists() and not (repo / 'HEAD').exists():
+        # a plain source tree (a staged copy for a remote or container build): copied as is, per build
+        shutil.copytree(repo, dest, symlinks=True)
+        stamp = repo / '.source-commit'
+        return stamp.read_text().strip() if stamp.exists() else 'tree'
     dest.mkdir(parents=True)
     data = subprocess.check_output(['git', '-C', str(repo), 'archive', ref])
     with tarfile.open(fileobj=io.BytesIO(data)) as t:
