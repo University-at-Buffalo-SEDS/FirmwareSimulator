@@ -576,9 +576,10 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     // Wall time dropped from the pace (see "pace against the wall clock") and how often.
     let mut slipped = Duration::ZERO;
     let mut slip_events: u64 = 0;
-    let max_catchup = Duration::from_millis(
-        env::var("FIRMWARE_SIM_PACE_MAX_CATCHUP_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20),
-    );
+    // FIRMWARE_SIM_PACE_MAX_CATCHUP_MS (scripts/gs_bay.py sets 20 for an external station on its own wall clock);
+    // unset, a bay that fell behind catches up as before (fullnet runs under a dilated station clock rely on it).
+    let max_catchup = env::var("FIRMWARE_SIM_PACE_MAX_CATCHUP_MS").ok().and_then(|v| v.parse().ok())
+        .map(Duration::from_millis).unwrap_or(Duration::MAX);
     let mut can_frames: u64 = 0;
     let mut uart_bytes = [0u64; 2];
     let reboots = topology.reboots.clone();

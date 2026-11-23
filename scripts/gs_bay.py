@@ -301,7 +301,10 @@ def main() -> int:
     (config / "native.json").write_text(json.dumps(native, indent=1))
     coordinator = a.coordinator or Path(manifest["coordinator"])
     cmd = [str(coordinator), "native-bay", "--topology", str(config / "topology.json"), "--native", str(config / "native.json")]
-    env = {**os.environ, "FIRMWARE_SIM_NODE_NICE": os.environ.get("FIRMWARE_SIM_NODE_NICE", "10")}
+    # the station leads network time from its own wall clock: a bay that fell behind must not race to catch up (its
+    # boards' clocks would run ahead of the station's), so lag beyond 20 ms is dropped (src/bay/native.rs)
+    env = {**os.environ, "FIRMWARE_SIM_NODE_NICE": os.environ.get("FIRMWARE_SIM_NODE_NICE", "10"),
+           "FIRMWARE_SIM_PACE_MAX_CATCHUP_MS": os.environ.get("FIRMWARE_SIM_PACE_MAX_CATCHUP_MS", "20")}
     import threading
     stop = threading.Event()
     if "flight" in nodes:
