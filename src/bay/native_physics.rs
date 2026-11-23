@@ -13,10 +13,19 @@
 //! * Flows: liquid through an orifice, mdot = CdA sqrt(2 rho dP) (single-phase approximation of the two-phase fill
 //!   line; no flashing correction), gas/vapour choked or subsonic through an orifice. Effective areas are assumed so
 //!   an 8 kg fill takes a few minutes with venting, the vent bleeds slowly and the dump empties the tank in ~15 s.
-//! * Motor (11-16 static fire, tools/flight_profile/motors/testfire_20261116.json: 9.19 kN s from 5.6 kg N2O, liquid
-//!   phase ~2.7 s at ~2 kN then a vapour tail): oxidiser through the injector from tank conditions (liquid, then
-//!   choked vapour), thrust = delivered Isp (~140 s, from the motor summary) x g0 x (1 + 1/OF) x mdot_ox, OF 5; chamber pressure from a
-//!   fixed C_F A_t chosen so 2 kN reads ~350 psi.
+//! * Motor (default, `motor.model` "hybrid"): GroundStation26's physics-based hybrid motor model, the same one the
+//!   ground station's apogee planner flies, vendored byte-identical as hybrid_motor.rs with its data in model/ (GS
+//!   backend/src/apogee_planner/hybrid.rs and model/; reference implementation tools/flight_profile/hybrid_motor.py,
+//!   spec docs/hybrid-motor-model.md and motors/hybrid_motor.json; a test checks the copies against a GS checkout).
+//!   Equilibrium two-phase N2O tank with an N2 pad and a lumped temperature, the run valve and a Dyer two-phase
+//!   injector, a paraffin-in-ABS-gyroid grain (the flight grain is the 10-point star; the 2026-11-16 fire burned the
+//!   circular-port "cylindrical_preset", `motor.hybrid_grain`), a quasi-steady chamber mass balance on a NASA CEA
+//!   table and a nozzle C_F with ambient back pressure; calibrated to the accepted archive fires. At ignition it takes
+//!   the run tank's state (N2O, N2, temperature) and is the tank's authority until burnout (HybridBurn).
+//! * Motor (`motor.model` "isp", the earlier model; 11-16 static fire, tools/flight_profile/motors/testfire_20261116.json:
+//!   9.19 kN s from 5.6 kg N2O, liquid phase ~2.7 s at ~2 kN then a vapour tail): oxidiser through the injector from
+//!   tank conditions (liquid, then choked vapour), thrust = delivered Isp (~140 s, from the motor summary) x g0 x
+//!   (1 + 1/OF) x mdot_ox, OF 5; chamber pressure from a fixed C_F A_t chosen so 2 kN reads ~350 psi.
 //! * Load cells (GroundStation26 docs/loadcell-investigation-2026-11.md): KG1000 545.8 kg/V at the ADC pin, zero
 //!   0.2126 V (1.83 mV/V, 9.6 V excitation, 100.9x); KG50 12 915 kg/V, zero 0.2112 V; noise 0.03-0.2 kg per sample,
 //!   4 Hz and 10 Hz scheduling lines, first-order settling, optional thermal drift; faults: load bypass fraction
@@ -24,6 +33,8 @@
 //!   Stand load path: thrust first unloads the KG50 (rocket hanging), KG50 = W_hanging - thrust floored at zero
 //!   cell force (its tared reading goes negative), then the gap closes and the KG1000 sees thrust - W_hanging.
 //! * Atmosphere: ISA with a temperature offset from the ambient setting; wind speed/direction with gusts.
+use super::hybrid_motor as hm;
+
 pub const G0: f64 = 9.80665;
 pub const PSI_PA: f64 = 6894.757293;
 /// Atmospheric pressure the tank vents and dumps to (and the gauge zero of the tank PT).
@@ -315,6 +326,11 @@ impl Fluids {
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default)]
 pub struct MotorParams {
+    /// "hybrid" (default): GroundStation26's physics-based hybrid motor (hybrid_motor.rs, HybridBurn) is the tank's
+    /// authority during the burn. "isp": the delivered-Isp blowdown below (isp_s, of_ratio, impulse_scale, cf_at_m2).
+    pub model: String,
+    /// Hybrid: the grain from the spec's "grains" (vehicle.json motor.hybrid_grain); None = its "flight_grain".
+    pub hybrid_grain: Option<String>,
     pub isp_s: f64,
     pub of_ratio: f64,
     /// Thrust multiplier (1 = the measured 11-16 motor; ~1.8 reaches 10 kft with the assumed airframe).
@@ -326,10 +342,27 @@ impl Default for MotorParams {
     fn default() -> Self {
         // 11-16 fire re-extracted with the KG50 unloading: 9.19 kN s from 5.6 kg N2O + 1.1 kg fuel (Isp ~140 s); the
         // launcher overrides these from tools/flight_profile/motors/*.json at start
-        Self { isp_s: 139.9, of_ratio: 5.09, impulse_scale: 1.0, cf_at_m2: 2000.0 / (350.0 * PSI_PA) }
+        Self { model: "hybrid".into(), hybrid_grain: None, isp_s: 139.9, of_ratio: 5.09, impulse_scale: 1.0, cf_at_m2: 2000.0 / (350.0 * PSI_PA) }
     }
 }
 impl MotorParams {
+    /// The hybrid model burns unless the config asks for the Isp model.
+    pub fn hybrid(&self) -> bool {
+        !self.model.eq_ignore_ascii_case("isp")
+    }
+    /// The hybrid model's calibrated parameters for this config's grain, on a run tank of `tank_volume_m3`.
+    /// The grain the hybrid model burns: `hybrid_grain` when the spec has it, else the spec's flight grain.
+    pub fn hybrid_grain_name(&self) -> String {
+        match self.hybrid_grain.as_deref().filter(|g| hm::spec()["grains"].get(*g).is_some()) {
+            Some(g) => g.to_string(),
+            None => hm::spec()["flight_grain"].as_str().unwrap_or_default().to_string(),
+        }
+    }
+    pub fn hybrid_params(&self, tank_volume_m3: f64) -> hm::Params {
+        let mut p = hm::calibrated(Some(&self.hybrid_grain_name()));
+        p.tank_volume_l = tank_volume_m3 * 1000.0;
+        p
+    }
     /// Chamber pressure per oxidiser flow (Pa per kg/s).
     pub fn chamber_k(&self) -> f64 {
         self.thrust(1.0) / self.cf_at_m2
@@ -339,6 +372,77 @@ impl MotorParams {
     }
     pub fn chamber_pa(&self, thrust: f64) -> f64 {
         thrust / self.cf_at_m2
+    }
+}
+
+/// One plant step of the hybrid motor (rates and thrust averaged over the step, pressures at its end).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BurnStep {
+    pub thrust: f64,
+    /// Chamber and tank pressure, Pa absolute.
+    pub pc: f64,
+    pub p_tank: f64,
+    pub mdot_ox: f64,
+    pub mdot_f: f64,
+    pub of: f64,
+    pub liner_exposed: f64,
+    pub liquid: bool,
+    pub done: bool,
+}
+
+/// A burn of GroundStation26's hybrid motor model (hybrid_motor.rs, the apogee planner's motor) fed from the plant's
+/// run tank: built at ignition from the tank's state, it is the tank's authority while it burns. Each step takes the
+/// tank state from `Fluids` (so fill, vent and dump still act on it), sub-steps the motor at 5 ms or less and writes the
+/// N2O, N2 and temperature back.
+#[derive(Clone, Debug)]
+pub struct HybridBurn {
+    pub motor: hm::Motor,
+}
+impl HybridBurn {
+    pub fn new(p: &hm::Params, f: &Fluids, ambient_pa: f64) -> Self {
+        let fill_reading = f.n2o_kg / p.fill_scale.max(1e-9);
+        let mut motor = hm::Motor::new(p, hm::data(), fill_reading, f.t_k - 273.15, 0.0, ambient_pa);
+        motor.mn = f.n2_kg;
+        Self { motor }
+    }
+    pub fn step(&mut self, f: &mut Fluids, dt: f64, ambient_pa: f64) -> BurnStep {
+        let m = &mut self.motor;
+        m.m = f.n2o_kg.max(0.0);
+        m.mn = f.n2_kg.max(0.0);
+        m.temp = f.t_k.clamp(hm::T_MIN, hm::T_MAX);
+        let n = (dt / 0.005).ceil().max(1.0) as usize;
+        let h = dt / n as f64;
+        let mut out = BurnStep::default();
+        let (mut impulse, mut ox, mut fuel) = (0.0, 0.0, 0.0);
+        for _ in 0..n {
+            if m.done {
+                break;
+            }
+            let s = m.step(hm::data(), h, ambient_pa);
+            impulse += s.thrust * h;
+            ox += s.mdot_ox * h;
+            fuel += s.mdot_f * h;
+            out.pc = s.pc;
+            out.of = s.of;
+            out.liner_exposed = s.liner_exposed;
+            out.liquid = s.liquid;
+        }
+        if dt > 0.0 {
+            out.thrust = impulse / dt;
+            out.mdot_ox = ox / dt;
+            out.mdot_f = fuel / dt;
+        }
+        if m.done {
+            out.pc = ambient_pa;
+        }
+        out.p_tank = m.tank_pressure();
+        out.done = m.done;
+        f.n2o_kg = m.m;
+        f.n2_kg = m.mn;
+        f.t_k = m.temp;
+        f.ox_flow = out.mdot_ox;
+        f.ox_liquid = out.liquid;
+        out
     }
 }
 
@@ -487,12 +591,59 @@ mod tests {
         assert!(f.bottle_n2_t < amb, "bottle cools on blowdown");
     }
 
+    /// The plant's tank at the 2026-11-16 fire (5.65 kg reading, 404.1 psig saturated, about -3 C) burned by the hybrid
+    /// model with that fire's circular-port grain: (impulse N s, peak N, burn s, peak chamber psig, tank psig trace).
+    pub(crate) fn burn_11_16(dt: f64) -> (f64, f64, f64, f64, Vec<f64>) {
+        let m = MotorParams { hybrid_grain: Some("cylindrical_preset".into()), ..Default::default() };
+        let p = m.hybrid_params(RUN_TANK_VOLUME_M3);
+        let ambient = p.test_ambient_pa;
+        let t_k = hm::tsat((404.1 + 14.696) * PSI_PA);
+        let mut f = Fluids::new(FluidParams::default(), t_k);
+        f.n2o_kg = 5.65 * p.fill_scale;
+        f.n2_kg = 0.0; // saturated: no pad
+        let mut burn = HybridBurn::new(&p, &f, ambient);
+        let (mut impulse, mut peak, mut peak_pc, mut t, mut on, mut off) = (0.0, 0.0f64, 0.0f64, 0.0, None, 0.0);
+        let mut tank = vec![(burn.motor.tank_pressure() - ATM_PA) / PSI_PA];
+        while t < 30.0 {
+            let s = burn.step(&mut f, dt, ambient);
+            impulse += s.thrust * dt;
+            peak = peak.max(s.thrust);
+            peak_pc = peak_pc.max((s.pc - ambient) / PSI_PA);
+            if s.thrust > 100.0 {
+                on.get_or_insert(t);
+                off = t + dt;
+            }
+            tank.push((s.p_tank - ATM_PA) / PSI_PA);
+            assert!((f.n2o_kg - burn.motor.m).abs() < 1e-12, "the tank follows the motor");
+            t += dt;
+            if s.done {
+                break;
+            }
+        }
+        (impulse, peak, off - on.unwrap_or(0.0), peak_pc, tank)
+    }
+
     #[test]
-    fn blowdown_motor_matches_the_measured_impulse() {
+    fn hybrid_motor_burns_the_11_16_fire_from_the_plant_tank() {
+        // measured: 9.19 kN s (tools/flight_profile/motors/testfire_20261116.json), 5.65 s, about 3.3 kN peak
+        let (impulse, peak, burn, peak_pc, tank) = burn_11_16(0.01);
+        assert!((impulse - 9192.0).abs() < 0.1 * 9192.0, "impulse {impulse}");
+        assert!(burn > 4.5 && burn < 7.0, "burn {burn} s");
+        assert!(peak > 2000.0 && peak < 4500.0, "peak {peak} N");
+        assert!(peak_pc > 150.0 && peak_pc < 600.0, "peak chamber {peak_pc} psig");
+        assert!((tank[0] - 404.1).abs() < 10.0, "starts at the fire's 404 psig: {}", tank[0]);
+        assert!(tank[tank.len() / 2] < tank[0] - 50.0 && *tank.last().unwrap() < 20.0, "falls: {} -> {}", tank[0], tank.last().unwrap());
+        // the plant's 10 ms step sub-steps the motor at 5 ms: the same burn as stepping at 5 ms
+        let (fine, ..) = burn_11_16(0.005);
+        assert!((impulse - fine).abs() < 0.01 * fine, "{impulse} vs {fine}");
+    }
+
+    #[test]
+    fn isp_blowdown_motor_matches_the_measured_impulse() {
         let amb = 293.15;
         let mut f = Fluids::new(FluidParams::default(), amb);
         f.n2o_kg = 5.6;
-        let m = MotorParams::default();
+        let m = MotorParams { model: "isp".into(), ..Default::default() };
         f.chamber_k = m.chamber_k();
         let (mut impulse, mut t, mut chamber, mut liquid_end) = (0.0, 0.0, 0.0, None);
         while t < 15.0 {

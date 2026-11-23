@@ -15,12 +15,15 @@
 //!
 //! Ignition: the igniter must have fired (unless `require_igniter` is off: HITL fires no igniter) and the pilot must
 //! open with liquid in the tank. The pilot actuates the main oxidiser valve, assumed to stay open to burnout once the
-//! motor lights. On a test stand (`test_stand`) the rocket stays put: thrust unloads the KG50 first and the KG1000
-//! sees the rest once the gap closes. In flight, liftoff separates the umbilical; 1-D vertical dynamics (thrust, drag
-//! with the ambient-adjusted density, mass flow) and wind drift; the descent follows the FC's own pyro outputs
-//! (CO2 = drogue, REEF = main), without them the vehicle falls ballistically. The FC barometer reads true ISA pressure
+//! motor lights. The burn is GroundStation26's hybrid motor model (hybrid_motor.rs, unless `motor.model` is "isp"),
+//! built from the run tank at ignition and stepped as the tank's authority: its thrust loads the stand, its chamber
+//! pressure (above ambient) drives the DAQ chamber PT and its tank pressure the VB tank PT. On a test stand
+//! (`test_stand`) the rocket stays put: thrust unloads the KG50 first and the KG1000 sees the rest once the gap closes.
+//! In flight, liftoff separates the umbilical; 1-D vertical dynamics (thrust, drag with the ambient-adjusted density,
+//! mass flow) and wind drift; the descent follows the FC's own pyro outputs (CO2 = drogue, REEF = main), without them
+//! the vehicle falls ballistically. The FC barometer reads true ISA pressure
 //! at the geometric altitude (FlightComputer26 baro_agl since 659440e).
-use super::native_physics::{self as phys, Fluids, LoadCell, Paths};
+use super::native_physics::{self as phys, BurnStep, Fluids, HybridBurn, LoadCell, Paths};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -503,7 +506,11 @@ pub struct Plant {
     /// Calibration masses placed on each cell (kg): (KG50, KG1000).
     pub masses: (f64, f64),
     pub thrust: f64,
+    /// Chamber pressure above ambient (Pa): what the DAQ's chamber PT reads.
     chamber_pa: f64,
+    /// The hybrid model's burn (motor.model "hybrid"), from ignition to burnout, and its last step.
+    hybrid: Option<HybridBurn>,
+    burn_step: BurnStep,
     burning: bool,
     burned_out: bool,
     gap_closed_at: Option<f64>,
@@ -542,6 +549,8 @@ impl Plant {
             masses: (0.0, 0.0),
             thrust: 0.0,
             chamber_pa: 0.0,
+            hybrid: None,
+            burn_step: BurnStep::default(),
             burning: false,
             burned_out: false,
             gap_closed_at: None,
@@ -592,6 +601,18 @@ impl Plant {
     pub fn step_interval_ns(&self) -> u64 {
         if self.patch.iter().any(Option::is_some) { 1_000_000 } else { 10_000_000 }
     }
+    /// Ambient pressure at the vehicle (Pa): ISA at the pad plus the flight altitude.
+    pub fn ambient_pa(&self) -> f64 {
+        std_pressure(self.cfg.vehicle.pad_msl_m + self.flight.h.max(0.0))
+    }
+    /// Tank pressure above atmosphere (psi), what the VB tank PT reads: the hybrid motor's tank while it burns.
+    pub fn tank_gauge_psi(&self) -> f64 {
+        if self.hybrid.is_some() && self.burning {
+            ((self.burn_step.p_tank - phys::ATM_PA) / phys::PSI_PA).max(0.0)
+        } else {
+            self.fluids.gauge_psi()
+        }
+    }
     /// Vehicle mass (kg): dry, fuel left, tank contents.
     pub fn vehicle_mass(&self) -> f64 {
         self.cfg.vehicle.dry_mass_kg + self.fuel_left + self.fluids.n2o_kg + self.fluids.n2_kg
@@ -634,6 +655,12 @@ impl Plant {
             self.burning = true;
             self.flight.t_launch = t;
             self.event(t, format!("ignition with {:.2} kg of nitrous at {:.0} psig", self.fluids.liquid_kg(), self.fluids.gauge_psi()));
+            if cfg.motor.hybrid() {
+                let p = cfg.motor.hybrid_params(self.fluids.p.tank_volume_m3);
+                let burn = HybridBurn::new(&p, &self.fluids, self.ambient_pa());
+                self.burn_step = BurnStep { p_tank: burn.motor.tank_pressure(), pc: self.ambient_pa(), ..Default::default() };
+                self.hybrid = Some(burn);
+            }
             if !cfg.test_stand {
                 self.flight.phase = Phase::Boost;
                 self.event(t, "liftoff");
@@ -641,12 +668,35 @@ impl Plant {
         }
         let ambient_k = self.conditions.ambient_c + 273.15;
         let mut paths = self.supply.paths(v);
+        // the pilot opens the main oxidiser valve, which stays open to burnout once the motor lights
         paths.pilot = v.pilot || self.burning;
-        self.fluids.chamber_k = if self.burning { cfg.motor.chamber_k() } else { 0.0 };
-        self.fluids.step(dt, paths, ambient_k, self.chamber_pa);
-        self.thrust = if self.burning { cfg.motor.thrust(self.fluids.ox_flow) } else { 0.0 };
-        self.chamber_pa = cfg.motor.chamber_pa(self.thrust);
-        if self.burning {
+        if let (true, Some(burn)) = (self.burning, self.hybrid.as_mut()) {
+            // the hybrid motor drains the tank through the main valve; fill, vent and dump still act on it
+            self.fluids.chamber_k = 0.0;
+            self.fluids.step(dt, Paths { pilot: false, ..paths }, ambient_k, 0.0);
+            let ambient = std_pressure(cfg.vehicle.pad_msl_m + self.flight.h.max(0.0));
+            if dt > 0.0 {
+                self.burn_step = burn.step(&mut self.fluids, dt, ambient);
+            }
+            let s = self.burn_step;
+            self.thrust = s.thrust;
+            self.chamber_pa = (s.pc - ambient).max(0.0);
+            self.fuel_left = (self.fuel_left - s.mdot_f * dt).max(0.0);
+            if s.done {
+                self.burning = false;
+                self.burned_out = true;
+                self.thrust = 0.0;
+                self.chamber_pa = 0.0;
+                self.fluids.ox_flow = 0.0;
+                self.event(t, format!("burnout ({:.2} kg nitrous left, liner exposed {:.0} %)", self.fluids.n2o_kg, s.liner_exposed * 100.0));
+            }
+        } else {
+            self.fluids.chamber_k = if self.burning { cfg.motor.chamber_k() } else { 0.0 };
+            self.fluids.step(dt, paths, ambient_k, self.chamber_pa);
+            self.thrust = if self.burning { cfg.motor.thrust(self.fluids.ox_flow) } else { 0.0 };
+            self.chamber_pa = cfg.motor.chamber_pa(self.thrust);
+        }
+        if self.burning && self.hybrid.is_none() {
             self.fuel_left = (self.fuel_left - self.fluids.ox_flow / cfg.motor.of_ratio * dt).max(0.0);
             if t - self.flight.t_launch > 1.0 && self.thrust < 20.0 {
                 self.burning = false;
@@ -691,7 +741,7 @@ impl Plant {
         if !self.faults.dead_tank_pt && self.sent.get(&tank_key).map(String::as_str) == Some("fault=1") {
             out.push(Output::Adc { node: cfg.tank_pt.0.clone(), device: cfg.tank_pt.1.clone(), text: "fault=0".into() });
         }
-        let tank_raw = if self.faults.dead_tank_pt { "fault=1".to_string() } else { vb_pressure_raw(self.fluids.gauge_psi()).to_string() };
+        let tank_raw = if self.faults.dead_tank_pt { "fault=1".to_string() } else { vb_pressure_raw(self.tank_gauge_psi()).to_string() };
         self.send(&mut out, &cfg.tank_pt.0, &cfg.tank_pt.1, tank_raw);
         // Load cells: the hanging rocket on the KG50 until the thrust lifts it, then the KG1000 once the gap closes.
         let on_pad = self.flight.phase == Phase::Pad;
@@ -871,8 +921,13 @@ impl Plant {
                        "nitrous_bottle_open": self.supply.nitrous_bottle_open},
             "conditions": self.conditions,
             "loads": {"kg50_kg": self.masses.0, "kg1000_kg": self.masses.1},
-            "motor": {"burning": self.burning, "burned_out": self.burned_out, "thrust_n": round1(self.thrust),
-                      "chamber_psi": round1(self.chamber_pa / phys::PSI_PA)},
+            "motor": {"model": if self.cfg.motor.hybrid() { "hybrid" } else { "isp" }, "burning": self.burning, "burned_out": self.burned_out,
+                      "thrust_n": round1(self.thrust), "chamber_psi": round1(self.chamber_pa / phys::PSI_PA),
+                      "tank_psi": round1(self.tank_gauge_psi()), "ox_flow_kg_s": round3(self.fluids.ox_flow),
+                      "of": self.hybrid.as_ref().map(|_| round3(self.burn_step.of)),
+                      "fuel_flow_kg_s": self.hybrid.as_ref().map(|_| round3(self.burn_step.mdot_f)),
+                      "liner_exposed": self.hybrid.as_ref().map(|_| round3(self.burn_step.liner_exposed)),
+                      "grain": self.cfg.motor.hybrid().then(|| self.cfg.motor.hybrid_grain_name())},
             "dac": {"connector_v": self.dac_out.map(|v| v.map(round3)),
                     "patch": {"dac1": self.patch[0].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1})),
                               "dac2": self.patch[1].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1}))},
@@ -1045,6 +1100,80 @@ mod tests {
     }
 
     #[test]
+    fn a_lit_hybrid_burn_drives_the_chamber_pt_and_load_cells_and_empties_the_tank() {
+        let mut plant = Plant::new(PlantConfig { test_stand: true, ..PlantConfig::default() });
+        assert!(plant.cfg.motor.hybrid(), "the hybrid model is the default");
+        plant.fluids.n2o_kg = 6.0;
+        let mut io = io();
+        io.0.insert(("actuator".into(), 1, 7), 1); // igniter
+        run(&mut plant, &io, 0, 1000);
+        let tank0 = plant.tank_gauge_psi();
+        assert!(tank0 > 600.0, "a 20 C tank: {tank0} psig");
+        let kg50_rest = plant.kg50.p.zero_v;
+        io.0.insert(("valve".into(), 1, 11), 1); // pilot
+        let (mut peak_ch6, mut peak_kg1000, mut min_kg50, mut impulse, mut peak_pc) = (0i64, 0i64, f64::MAX, 0.0, 0.0f64);
+        let (mut tank_mid, mut saw_of) = (None, false);
+        for ms in (1010..=20000).step_by(10) {
+            for o in plant.step(ms * 1_000_000, &io) {
+                if let Output::Adc { device, text, .. } = o {
+                    if device == "mcp3564r" {
+                        let c: Vec<i64> = text.split(',').map(|x| x.parse().unwrap()).collect();
+                        peak_ch6 = peak_ch6.max(c[6]);
+                        peak_kg1000 = peak_kg1000.max(c[0]);
+                        min_kg50 = min_kg50.min(c[1] as f64 * 2.4 / f64::from(1u32 << 23));
+                    }
+                }
+            }
+            impulse += plant.thrust * 0.01;
+            peak_pc = peak_pc.max(plant.chamber_pa);
+            if ms == 3000 {
+                tank_mid = Some(plant.tank_gauge_psi());
+                let st = plant.status();
+                assert!(st["motor"]["of"].as_f64().unwrap() > 1.0, "{}", st["motor"]);
+                assert!(st["motor"]["liner_exposed"].as_f64().is_some());
+                assert_eq!(st["motor"]["model"], "hybrid");
+                saw_of = true;
+            }
+        }
+        assert!(saw_of);
+        // chamber PT on CH6: pc gauge through the 11:1 divider, 200 psi/V
+        let peak_psi = peak_pc / phys::PSI_PA;
+        assert!(peak_psi > 150.0 && peak_psi < 800.0, "peak chamber {peak_psi} psig");
+        assert!(peak_ch6 >= mcp_code(peak_psi * 0.9 / 200.0 / 11.0), "the DAQ saw the chamber pressure");
+        // the stand: the KG50 unloads below its tare, the KG1000 takes the thrust once lifted
+        assert!(min_kg50 < kg50_rest - 10.0 / plant.cfg.kg50.kg_per_v, "KG50 unloaded: {min_kg50} V");
+        assert!(peak_kg1000 > mcp_code(plant.cfg.kg1000.zero_v + 100.0 / plant.cfg.kg1000.kg_per_v), "KG1000 loaded");
+        assert!(impulse > 7000.0, "impulse {impulse}");
+        // the tank drains through the motor and the VB tank PT follows it down
+        assert!(tank_mid.unwrap() < tank0 - 50.0, "{tank0} -> {tank_mid:?}");
+        assert!(plant.burned_out && plant.fluids.n2o_kg < 0.5, "{} kg left", plant.fluids.n2o_kg);
+        assert!(plant.tank_gauge_psi() < 20.0, "{}", plant.tank_gauge_psi());
+        assert_eq!(plant.chamber_pa, 0.0);
+    }
+
+    #[test]
+    fn the_isp_motor_model_stays_selectable() {
+        let cfg: PlantConfig = serde_json::from_value(json!({"test_stand": true, "motor": {"model": "isp"}})).unwrap();
+        assert!(!cfg.motor.hybrid());
+        let mut plant = Plant::new(cfg);
+        plant.fluids.n2o_kg = 5.6;
+        let mut io = io();
+        io.0.insert(("actuator".into(), 1, 7), 1);
+        io.0.insert(("valve".into(), 1, 11), 1);
+        let mut impulse = 0.0;
+        for ms in (0..=20000).step_by(10) {
+            plant.step(ms * 1_000_000, &io);
+            impulse += plant.thrust * 0.01;
+        }
+        assert!(plant.hybrid.is_none() && plant.burned_out);
+        assert!((impulse - 9192.0).abs() < 2000.0, "impulse {impulse}");
+        assert_eq!(plant.status()["motor"]["model"], "isp");
+        let grain: PlantConfig = serde_json::from_value(json!({"motor": {"hybrid_grain": "cylindrical_preset"}})).unwrap();
+        assert_eq!(grain.motor.hybrid_grain_name(), "cylindrical_preset");
+        assert_eq!(PlantConfig::default().motor.hybrid_grain_name(), crate::bay::hybrid_motor::spec()["flight_grain"].as_str().unwrap());
+    }
+
+    #[test]
     fn hitl_flight_lights_on_the_pilot_flies_and_descends_on_the_fcs_deployments() {
         let mut plant = Plant::new(PlantConfig { require_igniter: false, ..PlantConfig::default() });
         plant.fluids.n2o_kg = 5.6;
@@ -1065,8 +1194,9 @@ mod tests {
             ms += 10;
         }
         assert!(plant.events.iter().any(|e| e.1.starts_with("liftoff")));
-        // the measured motor on the assumed airframe: about 1.4 km (tools/flight_profile measured_motor)
-        assert!(plant.flight.apogee > 900.0 && plant.flight.apogee < 2200.0, "apogee {}", plant.flight.apogee);
+        // the hybrid model's flight (star) grain, 5.6 kg at 20 C: about 9.3 kN s with a 4.6 kN peak, so about 2.2 km on
+        // the assumed airframe (the 11-16 fire's measured motor gave about 1.4 km)
+        assert!(plant.flight.apogee > 1500.0 && plant.flight.apogee < 3000.0, "apogee {}", plant.flight.apogee);
         assert_eq!(plant.flight.phase, Phase::Landed);
         assert!(plant.flight.east.abs() + plant.flight.north.abs() > 50.0, "wind drift");
     }
