@@ -20,6 +20,25 @@ class FrameCoverageTests(unittest.TestCase):
         self.assertEqual(result['by_output_kind'],{'1':2,'5':1})
         self.assertEqual(result['maximum_forwarding_age_ms'],30)
 
+    def test_rr_v2_envelopes_unwrap_in_both_forms(self):
+        import zlib
+        crc=lambda data: zlib.crc32(data).to_bytes(4,'little')
+        sdk=b'\x42frame'+crc(b'\x42frame')
+        for kind in range(17):
+            encoded=bytes([0xE0+kind])+b'body'
+            self.assertEqual(COVERAGE.unwrap(encoded+crc(encoded)),(kind,b'body'))
+            self.assertIsNone(COVERAGE.unwrap(encoded+bytes(4)))
+        for marker,kind in COVERAGE.SELF_CHECKED.items():
+            self.assertEqual(COVERAGE.unwrap(bytes([marker])+sdk),(kind,sdk))
+            self.assertIsNone(COVERAGE.unwrap(bytes([marker])+sdk[:-1]+b'\x00'))
+            for bit in range(8):
+                flipped=bytes([marker^(1<<bit)])+sdk
+                self.assertNotIn(flipped[0],COVERAGE.SELF_CHECKED)
+                self.assertIsNone(COVERAGE.unwrap(flipped))
+        for marker in (0xF1,0xF2,0xF4,0xFF,0x42):
+            self.assertIsNone(COVERAGE.unwrap(bytes([marker])+sdk))
+        self.assertIsNone(COVERAGE.unwrap(b'RR\x01\x05'+sdk+crc(b'RR\x01\x05'+sdk)))
+
     def test_empty_scope_cannot_pass(self):
         with self.assertRaises(ValueError):
             COVERAGE.match([(100_000,7,b'proof')],[],100,150)

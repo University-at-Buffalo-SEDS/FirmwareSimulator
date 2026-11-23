@@ -17,10 +17,10 @@ SPEC.loader.exec_module(VALIDATE)
 
 
 def relay_fixtures(gs_source):
-    """Execute the exact production GS envelope functions on canonical fixtures."""
+    """Execute the exact production GS RR v2 envelope functions on canonical fixtures."""
     source = (gs_source / 'backend/src/rrls.rs').read_text()
     functions = []
-    for name in ('crc', 'encode', 'decode'):
+    for name in ('crc', 'rr_marker', 'self_verifying', 'envelope_valid', 'payload_unchecked', 'encode', 'decode'):
         start = source.index('fn ' + name + '(')
         body = source.index('{', start)
         depth, end = 1, body + 1
@@ -29,7 +29,8 @@ def relay_fixtures(gs_source):
             end += 1
         functions.append(source[start:end])
     maximum = re.search(r'const MAX_PAYLOAD: usize = ([0-9_]+);', source).group(0)
-    contract = maximum + '\n' + '\n'.join(functions)
+    constants = re.findall(r'^(?:pub\(crate\) )?(const RR_[A-Z_]+: .+;)$', source, re.M)
+    contract = '\n'.join([maximum, *constants]) + '\n' + '\n'.join(functions)
     program = contract + r'''
 fn main() {
     for kind in [1u8, 2, 5] {

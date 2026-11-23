@@ -19,12 +19,26 @@ VALIDATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VALIDATOR)
 
 
+# RR v2 (GroundStation26 backend/src/rrls.rs): one marker byte. 0xE0+kind is
+# the CRC form (payload, CRC32 of marker+payload); these six markers carry an
+# SDK frame of kind 1..6 that ends in its own CRC32, with no outer CRC.
+SELF_CHECKED={0xF3:1,0xF5:2,0xF6:3,0xF9:4,0xFA:5,0xFC:6}
+
+
+def _crc_ok(data):
+    return len(data)>=4 and zlib.crc32(data[:-4])==int.from_bytes(data[-4:],'little')
+
+
 def unwrap(encoded):
-    if len(encoded)<8 or encoded[:3]!=b'RR\x01':
+    """(kind, payload) of a valid RR envelope, else None."""
+    if len(encoded)<5:
         return None
-    if zlib.crc32(encoded[:-4]) != int.from_bytes(encoded[-4:],'little'):
-        return None
-    return encoded[3],encoded[4:-4]
+    marker=encoded[0]
+    if marker in SELF_CHECKED:
+        return (SELF_CHECKED[marker],encoded[1:]) if _crc_ok(encoded[1:]) else None
+    if 0xE0<=marker<=0xF0 and _crc_ok(encoded):
+        return marker-0xE0,encoded[1:-4]
+    return None
 
 
 def frames(stream):
