@@ -25,6 +25,8 @@
 //! * Atmosphere: ISA with a temperature offset from the ambient setting; wind speed/direction with gusts.
 pub const G0: f64 = 9.80665;
 pub const PSI_PA: f64 = 6894.757293;
+/// Atmospheric pressure the tank vents and dumps to (and the gauge zero of the tank PT).
+pub const ATM_PA: f64 = 101_325.0;
 const TC: f64 = 309.57;
 const PC: f64 = 7_251_000.0;
 const RHOC: f64 = 452.0;
@@ -151,7 +153,9 @@ pub struct Fluids {
 impl Fluids {
     pub fn new(p: FluidParams, ambient_k: f64) -> Self {
         let n2_kg = p.n2_bottle_psi * PSI_PA * p.n2_bottle_volume_m3 / (R_N2 * ambient_k);
-        Self { bottle_n2o_kg: p.n2o_bottle_kg, bottle_n2_kg: n2_kg, bottle_n2_t: ambient_k, p, n2o_kg: 0.0, n2_kg: 0.0, t_k: ambient_k, ox_flow: 0.0, ox_liquid: false, chamber_k: 0.0 }
+        // an empty run tank holds air at atmospheric pressure (modelled as nitrogen)
+        let air_kg = ATM_PA * p.tank_volume_m3 / (R_N2 * ambient_k);
+        Self { bottle_n2o_kg: p.n2o_bottle_kg, bottle_n2_kg: n2_kg, bottle_n2_t: ambient_k, p, n2o_kg: 0.0, n2_kg: air_kg, t_k: ambient_k, ox_flow: 0.0, ox_liquid: false, chamber_k: 0.0 }
     }
     /// Liquid volume (m^3) at the current temperature, equilibrium split.
     pub fn liquid_volume(&self) -> f64 {
@@ -189,8 +193,13 @@ impl Fluids {
     pub fn pressure_pa(&self) -> f64 {
         self.n2o_pa() + self.n2_pa()
     }
+    /// Absolute tank pressure, psi.
     pub fn pressure_psi(&self) -> f64 {
-        self.pressure_pa() / PSI_PA - 0.0
+        self.pressure_pa() / PSI_PA
+    }
+    /// Tank pressure above atmosphere, psi: what the VB's gauge transducer reads (never below zero).
+    pub fn gauge_psi(&self) -> f64 {
+        ((self.pressure_pa() - ATM_PA) / PSI_PA).max(0.0)
     }
     pub fn bottle_n2_pa(&self) -> f64 {
         self.bottle_n2_kg * R_N2 * self.bottle_n2_t / self.p.n2_bottle_volume_m3
@@ -208,7 +217,7 @@ impl Fluids {
         }
     }
     fn integrate(&mut self, dt: f64, paths: Paths, ambient_k: f64, chamber_pa: f64) {
-        let atm = 101_325.0;
+        let atm = ATM_PA;
         let p_tank = self.pressure_pa();
         let vapour_before = self.n2o_kg - self.liquid_kg();
         let rl = n2o_rho_liquid(self.t_k);
@@ -426,7 +435,9 @@ mod tests {
         let amb = 293.15;
         let mut f = Fluids::new(FluidParams::default(), amb);
         f.step(5.0, Paths::default(), amb, 0.0);
-        assert_eq!(f.pressure_psi(), 0.0);
+        // an empty tank holds air at atmospheric pressure; its gauge reads zero
+        assert!((f.pressure_psi() - 14.696).abs() < 0.01, "{}", f.pressure_psi());
+        assert_eq!(f.gauge_psi(), 0.0);
         // closed vent: self-pressurises to the bottle and stops
         f.step(30.0, Paths { nitrous_in: true, ..Default::default() }, amb, 0.0);
         let sealed = f.n2o_kg;

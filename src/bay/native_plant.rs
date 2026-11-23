@@ -632,7 +632,7 @@ impl Plant {
         if !self.burning && !self.burned_out && (self.igniter_fired || !cfg.require_igniter) && v.pilot && self.fluids.liquid_kg() >= 0.5 {
             self.burning = true;
             self.flight.t_launch = t;
-            self.event(t, format!("ignition with {:.2} kg of nitrous at {:.0} psi", self.fluids.liquid_kg(), self.fluids.pressure_psi()));
+            self.event(t, format!("ignition with {:.2} kg of nitrous at {:.0} psig", self.fluids.liquid_kg(), self.fluids.gauge_psi()));
             if !cfg.test_stand {
                 self.flight.phase = Phase::Boost;
                 self.event(t, "liftoff");
@@ -690,7 +690,7 @@ impl Plant {
         if !self.faults.dead_tank_pt && self.sent.get(&tank_key).map(String::as_str) == Some("fault=1") {
             out.push(Output::Adc { node: cfg.tank_pt.0.clone(), device: cfg.tank_pt.1.clone(), text: "fault=0".into() });
         }
-        let tank_raw = if self.faults.dead_tank_pt { "fault=1".to_string() } else { vb_pressure_raw(self.fluids.pressure_psi()).to_string() };
+        let tank_raw = if self.faults.dead_tank_pt { "fault=1".to_string() } else { vb_pressure_raw(self.fluids.gauge_psi()).to_string() };
         self.send(&mut out, &cfg.tank_pt.0, &cfg.tank_pt.1, tank_raw);
         // Load cells: the hanging rocket on the KG50 until the thrust lifts it, then the KG1000 once the gap closes.
         let on_pad = self.flight.phase == Phase::Pad;
@@ -860,7 +860,7 @@ impl Plant {
     pub fn status(&self) -> Value {
         let fl = &self.fluids;
         json!({
-            "tank": {"pressure_psi": round1(fl.pressure_psi()), "liquid_kg": round3(fl.liquid_kg()), "n2o_kg": round3(fl.n2o_kg),
+            "tank": {"pressure_psi": round1(fl.pressure_psi()), "gauge_psi": round1(fl.gauge_psi()), "liquid_kg": round3(fl.liquid_kg()), "n2o_kg": round3(fl.n2o_kg),
                      "n2_kg": round3(fl.n2_kg), "nitrogen_psi": round1(fl.n2_pa() / phys::PSI_PA), "temperature_c": round1(fl.t_k - 273.15)},
             "bottles": {"n2o_kg": round3(fl.bottle_n2o_kg), "n2_psi": round1(fl.bottle_n2_pa() / phys::PSI_PA),
                         "n2_regulator_psi": fl.p.n2_regulator_psi},
@@ -937,29 +937,29 @@ mod tests {
         let mut plant = Plant::new(PlantConfig::default());
         let mut io = io();
         run(&mut plant, &io, 0, 2000);
-        assert_eq!(plant.fluids.pressure_psi(), 0.0, "valves closed");
+        assert_eq!(plant.fluids.gauge_psi(), 0.0, "valves closed");
         io.0.insert(("actuator".into(), 1, 13), 1); // AB N2_SIG
         let out = run(&mut plant, &io, 2010, 12000);
-        let rose = plant.fluids.pressure_psi();
+        let rose = plant.fluids.gauge_psi();
         assert!(rose > 30.0, "{rose}");
         assert!(out.iter().any(|o| matches!(o, Output::Adc { device, .. } if device == "adc3")));
         plant.apply_control(&json!({"plant": {"qd_connected": false}}));
         run(&mut plant, &io, 12010, 20000);
-        assert!((plant.fluids.pressure_psi() - rose).abs() < 0.5, "QD off: {} vs {rose}", plant.fluids.pressure_psi());
+        assert!((plant.fluids.gauge_psi() - rose).abs() < 0.5, "QD off: {} vs {rose}", plant.fluids.gauge_psi());
         plant.apply_control(&json!({"plant": {"qd_connected": true, "nitrogen_bottle_open": false}}));
         run(&mut plant, &io, 20010, 25000);
-        assert!((plant.fluids.pressure_psi() - rose).abs() < 0.5, "bottle closed");
+        assert!((plant.fluids.gauge_psi() - rose).abs() < 0.5, "bottle closed");
         plant.apply_control(&json!({"faults": {"stuck_valves": {"nitrogen": "closed"}}}));
         run(&mut plant, &io, 25010, 30000);
-        assert!((plant.fluids.pressure_psi() - rose).abs() < 0.5, "valve stuck closed");
+        assert!((plant.fluids.gauge_psi() - rose).abs() < 0.5, "valve stuck closed");
         plant.apply_control(&json!({"plant": {"nitrogen_bottle_open": true}}));
         run(&mut plant, &io, 30010, 35000);
-        assert!(plant.fluids.pressure_psi() > rose + 10.0, "all open again");
+        assert!(plant.fluids.gauge_psi() > rose + 10.0, "all open again");
         io.1.insert(("valve".into(), 0x4000_0034), 530); // dump servo open
         io.0.insert(("actuator".into(), 1, 13), 0);
-        let before = plant.fluids.pressure_psi();
+        let before = plant.fluids.gauge_psi();
         run(&mut plant, &io, 35010, 40000);
-        assert!(plant.fluids.pressure_psi() < before - 20.0, "dump bleeds");
+        assert!(plant.fluids.gauge_psi() < before - 20.0, "dump bleeds");
         plant.apply_control(&json!({"faults": {"dead_tank_pt": true}}));
         let out = plant.step(40_010_000_000, &io);
         assert!(out.contains(&Output::Adc { node: "valve".into(), device: "adc3".into(), text: "fault=1".into() }));
