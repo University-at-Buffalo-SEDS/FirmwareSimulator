@@ -312,6 +312,7 @@ void sim_wfi(void)
 {
     /* Sleep until the next interrupt: skip to the next event. */
     if (sim_primask) { sim_charge_ns(1000); return; }
+    sim_mmio_live();  /* register-level timers pick up compares the firmware just enabled before the skip */
     uint64_t t = next_tick_ns;
     if (events && events->at < t) t = events->at;
     if (t > now_ns) advance_to(t);
@@ -332,6 +333,9 @@ void sim_busy_wait_ns(uint64_t ns)
 /* Called by the scheduler when no thread is ready: skip to the next event. */
 void sim_core_idle(void)
 {
+    /* Refresh the live registers first: a register-level timer (sim_tim2.c) schedules a compare the firmware just
+     * enabled with a plain CCRx/DIER write only when it is synced, and the skip below must not jump past it. */
+    sim_mmio_live();
     uint64_t t = next_tick_ns;
     if (events && events->at < t) t = events->at;
     if (t <= now_ns) t = now_ns;
