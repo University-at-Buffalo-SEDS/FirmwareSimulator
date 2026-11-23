@@ -30,6 +30,17 @@ class PlantFromFlightProfile(unittest.TestCase):
         self.assertEqual(plant["fluids"], {})
         self.assertNotIn("run_tank_volume_l", info)
 
+    def test_the_hybrid_grain_comes_from_vehicle_json_when_named(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "vehicle.json").write_text(json.dumps({"motor": {"hybrid_grain": "cylindrical_preset"}}))
+            plant, info = gs_bay.plant_from_flight_profile(Path(d))
+        self.assertEqual(plant["motor"]["hybrid_grain"], "cylindrical_preset")
+        self.assertEqual(info["hybrid_grain"], "cylindrical_preset")
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "vehicle.json").write_text(json.dumps({"motor": {}}))
+            plant, _ = gs_bay.plant_from_flight_profile(Path(d))
+        self.assertNotIn("hybrid_grain", plant["motor"])
+
     def test_the_groundstation_vehicle_json_carries_the_measured_tank(self):
         gs = ROOT.parent / "GroundStation26" / "tools" / "flight_profile"
         if not (gs / "vehicle.json").exists():

@@ -140,6 +140,11 @@ def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
         if isinstance(src, (int, float)):
             veh[key] = float(src)
     info = {"vehicle_json": str(directory / "vehicle.json"), **({"run_tank_volume_l": float(volume_l)} if "tank_volume_m3" in out["fluids"] else {})}
+    # the hybrid motor model (the plant's default) burns this grain of the spec; without it, the spec's flight grain
+    grain = m.get("hybrid_grain")
+    if isinstance(grain, str) and grain:
+        out["motor"]["hybrid_grain"] = grain
+        info["hybrid_grain"] = grain
     curve = m.get("thrust_curve_csv")
     summary_path = (directory / curve).with_suffix(".json") if curve else None
     if summary_path and summary_path.exists():
