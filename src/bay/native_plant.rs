@@ -184,7 +184,8 @@ pub struct VehicleParams {
     pub static_margin_cal: f64,
     pub pitch_inertia_factor: f64,
     pub pitch_damping_ratio: f64,
-    /// The launcher (`vehicle.json` launch): rail length, tilt from vertical, azimuth (deg from north), friction.
+    /// The launcher (`vehicle.json` launch): rail length, tilt from vertical, azimuth (deg from north), and the
+    /// rail buttons' Coulomb friction coefficient on the load across the rail ([`Flight::rail_normal_accel`]).
     pub rail_length_m: f64,
     pub rail_tilt_deg: f64,
     pub rail_azimuth_deg: f64,
@@ -205,16 +206,16 @@ impl Default for VehicleParams {
             inflate_s: 1.0,
             tare_kg: 34.3,
             // tools/flight_profile/vehicle.json (SWEET_V6 .ork import): 4.39 m, CNa 9.28/rad, 3.49 cal, factor 0.85;
-            // damping ratio 0.08 (assumed there); 17 ft rail at 5 deg towards 60 deg, friction 0.03
+            // damping ratio 0.08 (assumed there); 30 ft (9.144 m) rail at 5 deg towards 60 deg, Coulomb friction 0.15
             length_m: 4.38658,
             cn_alpha_per_rad: 9.28,
             static_margin_cal: 3.49,
             pitch_inertia_factor: 0.85,
             pitch_damping_ratio: 0.08,
-            rail_length_m: 5.18,
+            rail_length_m: 9.144,
             rail_tilt_deg: 5.0,
             rail_azimuth_deg: 60.0,
-            rail_friction: 0.03,
+            rail_friction: 0.15,
         }
     }
 }
@@ -300,6 +301,28 @@ impl Flight {
         let (tilt, az) = (veh.rail_tilt_deg.to_radians(), veh.rail_azimuth_deg.to_radians());
         [tilt.sin() * az.sin(), tilt.sin() * az.cos(), tilt.cos()]
     }
+    /// The load per kg the rail buttons carry on the launcher: the weight's component across the rail plus the
+    /// cross-flow's aerodynamic normal force (the free flight's CNa force, capped at 15 deg), as a magnitude.
+    /// GroundStation26 apogee_planner flight.rs `rail_normal_accel` (and tools/flight_profile/flightsim.py).
+    pub fn rail_normal_accel(dir: [f64; 3], vair: [f64; 3], qd: f64, area: f64, cna: f64, mass: f64) -> f64 {
+        let gpar = -G * dir[2];
+        let mut load = [-gpar * dir[0], -gpar * dir[1], -G - gpar * dir[2]];
+        let vmag = norm3(vair);
+        if vmag > 0.5 {
+            let vh = [vair[0] / vmag, vair[1] / vmag, vair[2] / vmag];
+            let du = dot3(dir, vh);
+            let nperp = [dir[0] - du * vh[0], dir[1] - du * vh[1], dir[2] - du * vh[2]];
+            let sin_a = norm3(nperp);
+            let lim = 15.0_f64.to_radians().sin();
+            let ks = if sin_a > lim { (lim / sin_a).min(1.0) } else { 1.0 };
+            let fa = [0, 1, 2].map(|i| qd * area * cna * nperp[i] * ks / mass);
+            let fa_par = dot3(fa, dir);
+            for i in 0..3 {
+                load[i] += fa[i] - fa_par * dir[i];
+            }
+        }
+        norm3(load)
+    }
     /// The body axis' angle from vertical (deg).
     pub fn pitch_deg(&self) -> f64 {
         self.axis[2].clamp(-1.0, 1.0).acos().to_degrees()
@@ -341,11 +364,11 @@ impl Flight {
         let u = self.axis;
         let mut acc = [0.0; 3];
         if let Some(s) = self.rail_s {
-            // on the launcher: motion only along the rail (friction loads the weight component), no rotation
+            // on the launcher: motion only along the rail, Coulomb friction on the load across it, no rotation
             let dir = Self::rail_dir(veh);
-            let fric = 1.0 + veh.rail_friction;
             let drag = qd * veh.cd * area;
-            let mut along = (thrust - drag) / mass - G * dir[2] * fric;
+            let normal = Self::rail_normal_accel(dir, vair, qd, area, veh.cn_alpha_per_rad, mass);
+            let mut along = (thrust - drag) / mass - G * dir[2] - veh.rail_friction * normal;
             let sp = dot3(vel, dir);
             if sp <= 0.0 && along < 0.0 {
                 along = 0.0;
@@ -1741,6 +1764,35 @@ mod tests {
         assert!(plant.flight.apogee > 1500.0 && plant.flight.apogee < 3000.0, "apogee {}", plant.flight.apogee);
         assert_eq!(plant.flight.phase, Phase::Landed);
         assert!(plant.flight.east.abs() + plant.flight.north.abs() > 50.0, "wind drift");
+    }
+
+    #[test]
+    fn the_30_ft_rail_and_its_button_friction_match_the_apogee_planner() {
+        // GroundStation26 vehicle.json launch: the 30 ft rail, Coulomb friction 0.15
+        let veh = VehicleParams::default();
+        assert!((veh.rail_length_m - 30.0 * 0.3048).abs() < 1e-9);
+        assert_eq!(veh.rail_friction, 0.15);
+        // the cross-rail load agrees with the planner's rail_normal_accel (values from
+        // tools/flight_profile/flightsim.py rail_normal_accel, which the planner's Rust port matches)
+        let dir = Flight::rail_dir(&veh);
+        assert!((Flight::rail_normal_accel(dir, [0.0; 3], 0.0, 0.018242, 9.28, 40.0) - 0.8547058646163219).abs() < 1e-9);
+        let vair = [-4.0, 1.0, 30.0];
+        let qd = 0.5 * 1.1 * norm3(vair).powi(2);
+        assert!((Flight::rail_normal_accel(dir, vair, qd, 0.018242, 9.28, 40.0) - 1.2543290446596356).abs() < 1e-9);
+        // friction costs a little rail-exit speed, never much at 5 degrees
+        let still = Conditions { wind_mps: 0.0, gust_mps: 0.0, ..Conditions::default() };
+        let exit = |veh: &VehicleParams| {
+            let mut f = Flight { phase: Phase::Boost, ..Flight::default() };
+            let mut t = 0.0;
+            while f.rail_s.is_some() && t < 5.0 {
+                f.step(t, 0.001, 2500.0, 40.0, false, false, veh, &still);
+                t += 0.001;
+            }
+            f.rail_exit_mps.expect("left the rail")
+        };
+        let (with, without) = (exit(&veh), exit(&VehicleParams { rail_friction: 0.0, ..veh.clone() }));
+        assert!(with < without && without - with < 0.01 * without, "{with} {without}");
+        assert!((25.0..40.0).contains(&with), "rail exit {with}");
     }
 
     #[test]

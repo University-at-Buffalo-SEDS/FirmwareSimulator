@@ -367,7 +367,7 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
   constant-power board draw plus the switched solenoid/igniter/pyro loads, encoded through each board's own LTC2990
   conversion (dividers, Rsense, the VB current calibration; VB's 12 V and 7 V rails drop out with the pack). Control
   `batteries: {"<node>": {"soc": 0-1, "load_w": W}}` sets a pack's charge once per new value and adds a load.
-* Flight: the launcher (vehicle.json `launch`: rail length, tilt, azimuth, friction), then the apogee planner's
+* Flight: the launcher (vehicle.json `launch`: rail length, tilt, azimuth, and the Coulomb friction coefficient on the load across the rail: the weight's cross-rail part plus the cross-flow normal force, as GroundStation26's apogee planner), then the apogee planner's
   pitch/yaw dynamics (CNa, static margin, pitch inertia, damping ratio from vehicle.json): the vehicle weathercocks
   into the wind off the rail; `status.json` `flight` carries `rail_exit_m_s`, `pitch_deg` and `heading_deg`.
 * Motor: GroundStation26's hybrid motor model, the one the apogee planner flies (`src/bay/hybrid_motor.rs` and

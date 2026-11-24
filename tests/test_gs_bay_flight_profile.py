@@ -45,14 +45,14 @@ class PlantFromFlightProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             vehicle = {"vehicle": {"length_m": 4.38658, "cn_alpha_per_rad": 9.28, "static_margin_cal": 3.49,
                                    "pitch_inertia_factor": 0.85},
-                       "launch": {"rail_length_m": 5.18, "tilt_deg": 5.0, "azimuth_deg": 60.0, "rail_friction": 0.03},
+                       "launch": {"rail_length_m": 9.144, "tilt_deg": 5.0, "azimuth_deg": 60.0, "rail_friction": 0.15},
                        "attitude": {"pitch_damping_ratio": 0.08}}
             (Path(d) / "vehicle.json").write_text(json.dumps(vehicle))
             plant, _ = gs_bay.plant_from_flight_profile(Path(d))
         self.assertEqual(plant["vehicle"], {"length_m": 4.38658, "cn_alpha_per_rad": 9.28, "static_margin_cal": 3.49,
                                             "pitch_inertia_factor": 0.85, "pitch_damping_ratio": 0.08,
-                                            "rail_length_m": 5.18, "rail_tilt_deg": 5.0, "rail_azimuth_deg": 60.0,
-                                            "rail_friction": 0.03})
+                                            "rail_length_m": 9.144, "rail_tilt_deg": 5.0, "rail_azimuth_deg": 60.0,
+                                            "rail_friction": 0.15})
 
     def test_the_groundstation_vehicle_json_carries_the_measured_tank(self):
         gs = ROOT.parent / "GroundStation26" / "tools" / "flight_profile"
