@@ -361,8 +361,12 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
 * `plant` (`src/bay/native_plant.rs`, physics in `src/bay/native_physics.rs`): stepped every 10 ms of virtual time,
   it observes the boards' output pins (MSG_GPIO edges, kept per pin) and the VB servo compare registers (read from
   the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
-  pins (`pin:<index>`) and CAN link changes. `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing`
-  lights the motor without an igniter.
+  pins (`pin:<index>`), CAN link changes and the PB/GB/VB LTC2990 battery monitors (`ltc2990:<bus>@<addr>`).
+  `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing` lights the motor without an igniter.
+* Batteries (plant `batteries`, one per pack: PB 2S, GB and VB 4S Li-ion): OCV(SoC) with R0 and one RC branch,
+  constant-power board draw plus the switched solenoid/igniter/pyro loads, encoded through each board's own LTC2990
+  conversion (dividers, Rsense, the VB current calibration; VB's 12 V and 7 V rails drop out with the pack). Control
+  `batteries: {"<node>": {"soc": 0-1, "load_w": W}}` sets a pack's charge once per new value and adds a load.
 * Flight: the launcher (vehicle.json `launch`: rail length, tilt, azimuth, friction), then the apogee planner's
   pitch/yaw dynamics (CNa, static margin, pitch inertia, damping ratio from vehicle.json): the vehicle weathercocks
   into the wind off the rail; `status.json` `flight` carries `rail_exit_m_s`, `pitch_deg` and `heading_deg`.

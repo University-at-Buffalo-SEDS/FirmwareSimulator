@@ -33,6 +33,10 @@
 //!   Stand load path: thrust first unloads the KG50 (rocket hanging), KG50 = W_hanging - thrust floored at zero
 //!   cell force (its tared reading goes negative), then the gap closes and the KG1000 sees thrust - W_hanging.
 //! * Atmosphere: ISA with a temperature offset from the ambient setting; wind speed/direction with gusts.
+//! * Batteries (PB, GB, VB packs): a first-order Thevenin cell model (OCV(SoC) x cells, R0 plus one RC branch),
+//!   coulomb counting against the capacity; the boards' converters draw constant power, solenoids, the igniter and
+//!   pyro channels are resistive. OCV tables are typical datasheet curves (Li-ion NMC 3.0-4.2 V per cell, LiFePO4
+//!   2.5-3.6 V); pack sizes and resistances are assumptions (native_plant.rs `BatteryConfig` defaults).
 use super::hybrid_motor as hm;
 
 pub const G0: f64 = 9.80665;
@@ -522,6 +526,92 @@ pub fn air_density(h_msl: f64, ambient_c: f64, pad_msl: f64) -> f64 {
     101_325.0 * (1.0 - 2.25577e-5 * h_msl).powf(5.25588) / (287.05 * t)
 }
 
+/// A battery pack: open-circuit voltage from the state of charge (per-cell table for the chemistry, times the cells
+/// in series), an ohmic resistance R0 and one RC polarisation branch (R1, tau) in series (a first-order Thevenin
+/// model). Its load is a regulated part drawing constant power (the boards' converters: the current rises as the
+/// voltage falls) plus resistive switched loads (solenoids, igniter, pyro channels) given as a conductance.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BatteryParams {
+    /// "li_ion" (NMC 18650-type, 3.0-4.2 V per cell) or "lifepo4" (2.5-3.6 V).
+    pub chemistry: String,
+    pub cells: u32,
+    pub capacity_ah: f64,
+    pub r0_ohm: f64,
+    pub r1_ohm: f64,
+    pub tau_s: f64,
+    /// State of charge at power-on (0-1).
+    pub soc: f64,
+    /// The board's regulated draw (W), constant power.
+    pub base_w: f64,
+}
+impl Default for BatteryParams {
+    fn default() -> Self {
+        Self { chemistry: "li_ion".into(), cells: 4, capacity_ah: 5.0, r0_ohm: 0.08, r1_ohm: 0.04, tau_s: 30.0, soc: 0.8, base_w: 10.0 }
+    }
+}
+
+/// Open-circuit voltage per cell against the state of charge (typical datasheet curves at 25 C, rested).
+pub fn cell_ocv(chemistry: &str, soc: f64) -> f64 {
+    const LI_ION: [(f64, f64); 11] = [
+        (0.0, 3.00), (0.05, 3.30), (0.10, 3.45), (0.20, 3.56), (0.30, 3.62), (0.40, 3.68), (0.50, 3.74), (0.60, 3.82),
+        (0.70, 3.90), (0.85, 4.02), (1.0, 4.20),
+    ];
+    const LIFEPO4: [(f64, f64); 9] =
+        [(0.0, 2.50), (0.05, 3.00), (0.10, 3.20), (0.20, 3.25), (0.50, 3.30), (0.80, 3.33), (0.90, 3.35), (0.97, 3.40), (1.0, 3.60)];
+    let table: &[(f64, f64)] = if chemistry == "lifepo4" { &LIFEPO4 } else { &LI_ION };
+    let s = soc.clamp(0.0, 1.0);
+    for w in table.windows(2) {
+        if s <= w[1].0 {
+            let f = (s - w[0].0) / (w[1].0 - w[0].0);
+            return w[0].1 + f * (w[1].1 - w[0].1);
+        }
+    }
+    table[table.len() - 1].1
+}
+
+#[derive(Clone, Debug)]
+pub struct Battery {
+    pub p: BatteryParams,
+    pub soc: f64,
+    /// Polarisation (RC branch) voltage (V).
+    pub v_rc: f64,
+    pub terminal_v: f64,
+    pub current_a: f64,
+}
+impl Battery {
+    pub fn new(p: BatteryParams) -> Self {
+        let mut b = Self { soc: p.soc.clamp(0.0, 1.0), p, v_rc: 0.0, terminal_v: 0.0, current_a: 0.0 };
+        b.solve(0.0, 0.0);
+        b
+    }
+    pub fn ocv(&self) -> f64 {
+        cell_ocv(&self.p.chemistry, self.soc) * f64::from(self.p.cells)
+    }
+    /// Terminal voltage and current for `extra_w` more constant power and the switched loads' conductance `g` (S).
+    fn solve(&mut self, extra_w: f64, g: f64) {
+        // V = E - R0 (P / V + G V)  =>  (1 + R0 G) V^2 - E V + R0 P = 0 (the upper root; past the knee the
+        // converters fold back and the rail collapses to half the source)
+        let e = (self.ocv() - self.v_rc).max(0.0);
+        let p = (self.p.base_w + extra_w).max(0.0);
+        let a = 1.0 + self.p.r0_ohm * g;
+        let disc = e * e - 4.0 * a * self.p.r0_ohm * p;
+        let v = if disc > 0.0 { (e + disc.sqrt()) / (2.0 * a) } else { e / (2.0 * a) };
+        self.terminal_v = v;
+        self.current_a = if v > 0.1 { p / v + g * v } else { g * v };
+    }
+    /// Discharge for `dt` seconds.
+    pub fn step(&mut self, dt: f64, extra_w: f64, g: f64) {
+        self.solve(extra_w, g);
+        if dt > 0.0 {
+            self.soc = (self.soc - self.current_a * dt / (3600.0 * self.p.capacity_ah.max(1e-3))).clamp(0.0, 1.0);
+            let k = (dt / self.p.tau_s.max(1e-3)).min(1.0);
+            self.v_rc += (self.current_a * self.p.r1_ohm - self.v_rc) * k;
+            self.solve(extra_w, g);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +764,36 @@ mod tests {
             v = c.sample(20.0 + i as f64 * 0.01, 0.01, 10.0, 20.0);
         }
         assert!(((v - 0.2112) * 12_915.0 - 5.0).abs() < 2.5, "half sensitivity");
+    }
+
+    #[test]
+    fn a_battery_sags_under_load_recovers_at_rest_and_discharges() {
+        let p = BatteryParams { chemistry: "li_ion".into(), cells: 4, capacity_ah: 2.0, r0_ohm: 0.1, r1_ohm: 0.05, tau_s: 10.0, soc: 0.6, base_w: 10.0 };
+        let mut b = Battery::new(p.clone());
+        let rest = b.terminal_v;
+        assert!((b.ocv() - 4.0 * 3.82).abs() < 1e-9);
+        // constant power: I = P / V, drop I R0
+        assert!((b.current_a - 10.0 / rest).abs() < 1e-6 && (b.ocv() - rest - b.current_a * 0.1).abs() < 1e-6);
+        // a 2 Ohm load (about 7.6 A) sags the terminal at once by I R0 and further as the RC branch charges
+        b.step(0.01, 0.0, 0.5);
+        let instant = b.terminal_v;
+        assert!(instant < rest - 0.6, "{rest} -> {instant}");
+        for _ in 0..3000 {
+            b.step(0.01, 0.0, 0.5);
+        }
+        assert!(b.terminal_v < instant - 0.3, "polarisation {instant} -> {}", b.terminal_v);
+        let soc_after = b.soc;
+        assert!((0.6 - soc_after - 30.0 * 8.0 / 7200.0).abs() < 0.01, "coulombs: {soc_after}");
+        // released: the RC branch relaxes back towards the OCV
+        for _ in 0..6000 {
+            b.step(0.01, 0.0, 0.0);
+        }
+        assert!(b.terminal_v > instant && (b.ocv() - b.terminal_v) < 0.15);
+        // empty pack: the OCV ends at 3.0 V per cell
+        let mut e = Battery::new(BatteryParams { soc: 0.0, ..p });
+        assert!((e.ocv() - 12.0).abs() < 1e-9);
+        e.step(1.0, 0.0, 0.0);
+        assert!(e.terminal_v < 12.0 && e.soc == 0.0);
+        assert!(cell_ocv("lifepo4", 0.5) > 3.25 && cell_ocv("lifepo4", 0.5) < 3.35);
     }
 }

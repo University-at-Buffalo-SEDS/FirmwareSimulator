@@ -7,7 +7,8 @@
 //!   (QD connected, supply bottles open, calibration masses on the load cells, ambient and wind) and injected faults;
 //! * outputs are sensor codes the shim delivers to the firmware (VB tank PT on ADC3, DAQ MCP3564R channels for the
 //!   KG1000/KG50 load cells and the chamber PT, FC barometer/accelerometer through the "flightsens" device), input
-//!   pins (VB umbilical continuity) and CAN link changes (the umbilical separating at liftoff).
+//!   pins (VB umbilical continuity), CAN link changes (the umbilical separating at liftoff) and the PB/GB/VB LTC2990
+//!   battery monitors (each pack discharging under its board's draw and the switched solenoid/igniter/pyro loads).
 //!
 //! Fluid, motor, load-cell and atmosphere physics: native_physics.rs (sources and assumptions there). Supply path:
 //! nitrous/nitrogen only reach the tank while the AB valve is open AND the QD is connected AND that bottle is open
@@ -573,6 +574,122 @@ pub fn patch_pins(target: &str, connector_v: f64, attenuation: f64) -> Option<Ve
         _ => return None,
     })
 }
+/// A board's battery pack and the LTC2990 monitors it reports through, with the firmware's own conversions, so the
+/// boards' BATTERY_VOLTAGE / BATTERY_CURRENT follow the pack's discharge.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct BatteryConfig {
+    pub node: String,
+    pub pack: phys::BatteryParams,
+    /// Voltage monitor ("bus@address") and channel; the firmware reports pin V x scale - offset.
+    pub voltage_monitor: String,
+    pub voltage_channel: usize,
+    pub voltage_scale: f64,
+    pub voltage_offset_v: f64,
+    /// Current monitor and channel (V1-V2 differential); the firmware reports counts x amps_per_count x gain + offset.
+    pub current_monitor: String,
+    pub current_channel: usize,
+    pub amps_per_count: f64,
+    pub current_gain: f64,
+    pub current_offset_a: f64,
+    /// Regulated rails on the voltage monitor's other channels: [channel, nominal V, dropout V, divider].
+    pub rails: Vec<(usize, f64, f64, f64)>,
+    /// Switched resistive loads on this pack: [signal, ohms]; signals nitrogen, nitrous, igniter (AB drive enables),
+    /// pilot (VB solenoid), drogue, main (FC pyro outputs).
+    pub loads: Vec<(String, f64)>,
+}
+/// LTC2990 single-ended LSB (V per count, 14 bits over 5 V) and the current-sense counts' scale used by the boards'
+/// firmware: 19.42 uV per count across Rsense behind the 10k/(71.5k+10k) attenuator.
+const LTC_SE_LSB: f64 = 5.0 / 16384.0;
+fn ltc_amps_per_count(rsense_ohm: f64) -> f64 {
+    19.42e-6 / (rsense_ohm * 10_000.0 / 81_500.0)
+}
+impl Default for BatteryConfig {
+    fn default() -> Self {
+        // GatewayBoard26 (fill box): ltc2990.h voltage 0x4D V1 x (91k+10k)/10k - 0.07 V, current 0x4C V1, 20 mOhm
+        Self {
+            node: "gateway".into(),
+            pack: phys::BatteryParams { chemistry: "li_ion".into(), cells: 4, capacity_ah: 6.0, r0_ohm: 0.08, r1_ohm: 0.04, tau_s: 30.0, soc: 0.6, base_w: 15.0 },
+            voltage_monitor: "i2c2@0x4d".into(),
+            voltage_channel: 0,
+            voltage_scale: 10.1,
+            voltage_offset_v: 0.07,
+            current_monitor: "i2c2@0x4c".into(),
+            current_channel: 0,
+            amps_per_count: ltc_amps_per_count(0.02),
+            current_gain: 1.0,
+            current_offset_a: 0.0,
+            rails: Vec::new(),
+            // the AB in the fill box: N2/N2O solenoids (about 1.8 A at 14.8 V) and the igniter (assumed 2.5 Ohm)
+            loads: vec![("nitrogen".into(), 8.0), ("nitrous".into(), 8.0), ("igniter".into(), 2.5)],
+        }
+    }
+}
+/// The three packs the boards monitor (sizes, resistances and the gateway's share of the AB loads are assumptions;
+/// the idle draws are the Nov 2026 Pi recordings: PB 4.05-4.37 A, GB 0.41-1.54 A, VB -0.14-0.55 A).
+pub fn default_batteries() -> Vec<BatteryConfig> {
+    vec![
+        // PowerBoard26 (AV bay, 2S): ltc2990.h voltage 0x4C V1 x 2.8, current 0x4D V1, 5 mOhm
+        BatteryConfig {
+            node: "power".into(),
+            pack: phys::BatteryParams { chemistry: "li_ion".into(), cells: 2, capacity_ah: 10.0, r0_ohm: 0.05, r1_ohm: 0.03, tau_s: 30.0, soc: 0.8, base_w: 32.0 },
+            voltage_monitor: "i2c2@0x4c".into(),
+            voltage_scale: 2.8,
+            voltage_offset_v: 0.0,
+            current_monitor: "i2c2@0x4d".into(),
+            amps_per_count: ltc_amps_per_count(0.005),
+            loads: vec![("drogue".into(), 2.0), ("main".into(), 2.0)],
+            ..BatteryConfig::default()
+        },
+        BatteryConfig::default(),
+        // ValveBoard26: ltc2990.h voltage 0x4D (V1 12 V rail /4, V2 battery x 5.7, V3/V4 7 V rails /2.5), current
+        // 0x4C V1, 20 mOhm, then x 0.58047616 - 1.4267476 A (its calibration)
+        BatteryConfig {
+            node: "valve".into(),
+            pack: phys::BatteryParams { chemistry: "li_ion".into(), cells: 4, capacity_ah: 3.0, r0_ohm: 0.1, r1_ohm: 0.05, tau_s: 30.0, soc: 0.6, base_w: 4.0 },
+            voltage_monitor: "i2c2@0x4d".into(),
+            voltage_channel: 1,
+            voltage_scale: 5.7,
+            voltage_offset_v: 0.0,
+            current_monitor: "i2c2@0x4c".into(),
+            amps_per_count: ltc_amps_per_count(0.02),
+            current_gain: 0.580_476_16,
+            current_offset_a: -1.426_747_6,
+            rails: vec![(0, 12.0, 0.6, 4.0), (2, 7.0, 0.4, 2.5), (3, 7.0, 0.4, 2.5)],
+            loads: vec![("pilot".into(), 8.0)],
+            ..BatteryConfig::default()
+        },
+    ]
+}
+/// The native shim's live-update device name for an LTC2990 ("i2c2@0x4c" -> "ltc2990:i2c2@76").
+pub fn ltc_device(monitor: &str) -> Option<String> {
+    let (bus, addr) = monitor.split_once('@')?;
+    let addr = match addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => addr.parse().ok()?,
+    };
+    Some(format!("ltc2990:{bus}@{addr}"))
+}
+/// The monitors' codes for a pack's terminal voltage and current: (voltage-monitor codes, current-monitor codes).
+pub fn ltc_codes(b: &BatteryConfig, terminal_v: f64, current_a: f64) -> ([i64; 4], [i64; 4]) {
+    let se = |pin_v: f64| (pin_v / LTC_SE_LSB).round().clamp(0.0, 16383.0) as i64;
+    let mut v = [0i64; 4];
+    for &(ch, nominal, dropout, divider) in &b.rails {
+        if ch < 4 {
+            v[ch] = se(nominal.min(terminal_v - dropout).max(0.0) / divider);
+        }
+    }
+    if b.voltage_channel < 4 {
+        v[b.voltage_channel] = se((terminal_v + b.voltage_offset_v) / b.voltage_scale);
+    }
+    let mut i = [0i64; 4];
+    if b.current_channel < 4 {
+        let counts = ((current_a - b.current_offset_a) / (b.amps_per_count * b.current_gain)).round().clamp(-16384.0, 16383.0) as i64;
+        i[b.current_channel] = counts & 0x7FFF; // 15-bit two's complement, as the firmware decodes it
+    }
+    (v, i)
+}
+
 /// The DAC validation targets the plant can patch (SAR inputs and the internal readback are not modelled).
 pub const PATCH_TARGETS: [&str; 9] = ["mcp_ch2", "mcp_ch3", "mcp_ch4", "mcp_ch5", "hvain1", "hvain2", "p6_diff", "loadcell_kg1000", "loadcell_kg50"];
 
@@ -616,6 +733,8 @@ pub struct PlantConfig {
     pub qd_connected: bool,
     pub nitrogen_bottle_open: bool,
     pub nitrous_bottle_open: bool,
+    /// Battery packs and their LTC2990 monitors (PB, GB, VB).
+    pub batteries: Vec<BatteryConfig>,
     pub seed: u64,
 }
 impl Default for PlantConfig {
@@ -657,6 +776,7 @@ impl Default for PlantConfig {
             qd_connected: true,
             nitrogen_bottle_open: true,
             nitrous_bottle_open: true,
+            batteries: default_batteries(),
             seed: 1,
         }
     }
@@ -741,6 +861,12 @@ pub struct Plant {
     radio_loss_sent: u32,
     pub dac_out: [Option<f64>; 2],
     pub events: Vec<(f64, String)>,
+    /// One per `cfg.batteries`: the pack, extra constant load from the control (W) and the last state of charge the
+    /// control set (a new value resets the pack's charge once).
+    pub batteries: Vec<phys::Battery>,
+    battery_extra_w: Vec<f64>,
+    battery_soc_set: Vec<Option<f64>>,
+    last_power_t: f64,
 }
 
 impl Plant {
@@ -752,6 +878,10 @@ impl Plant {
             kg50: LoadCell::new(cfg.kg50.clone(), cfg.seed.wrapping_mul(7919) + 1),
             kg1000: LoadCell::new(cfg.kg1000.clone(), cfg.seed.wrapping_mul(104_729) + 3),
             fuel_left: cfg.vehicle.fuel_kg,
+            batteries: cfg.batteries.iter().map(|b| phys::Battery::new(b.pack.clone())).collect(),
+            battery_extra_w: vec![0.0; cfg.batteries.len()],
+            battery_soc_set: vec![None; cfg.batteries.len()],
+            last_power_t: -1.0,
             cfg,
             supply,
             valves: Valves::default(),
@@ -1020,6 +1150,38 @@ impl Plant {
         let on = |b: bool| if b { 3000 } else { 20 };
         let igniter_on = Self::active(o, &cfg.igniter) && !self.faults.igniter_open;
         self.send(&mut out, "actuator", "adc1", format!("{},{},{}", on(v.nitrous), on(v.nitrogen), on(igniter_on)));
+        // Batteries: the packs discharge under their boards' draw and the switched loads; the LTC2990 monitors read
+        // the terminal voltage (and regulated rails) and the current, at 10 Hz (the boards sample at 1 Hz or slower)
+        let signal = |name: &str| match name {
+            "nitrogen" => Self::active(o, &cfg.nitrogen_valve),
+            "nitrous" => Self::active(o, &cfg.nitrous_valve),
+            "igniter" => igniter_on,
+            "pilot" => Self::active(o, &cfg.pilot_valve),
+            "drogue" => Self::active(o, &cfg.drogue_pyro),
+            "main" => Self::active(o, &cfg.main_pyro),
+            _ => false,
+        };
+        let conductance: Vec<f64> = cfg
+            .batteries
+            .iter()
+            .map(|b| b.loads.iter().filter(|(name, _)| signal(name)).map(|(_, ohm)| 1.0 / ohm.max(0.05)).sum())
+            .collect();
+        for (i, bat) in self.batteries.iter_mut().enumerate() {
+            bat.step(dt, self.battery_extra_w[i], conductance[i]);
+        }
+        if t - self.last_power_t >= 0.1 || self.last_power_t < 0.0 {
+            self.last_power_t = t;
+            for (i, b) in cfg.batteries.iter().enumerate() {
+                let (v, c) = ltc_codes(b, self.batteries[i].terminal_v, self.batteries[i].current_a);
+                let join = |x: [i64; 4]| x.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+                if let Some(dev) = ltc_device(&b.voltage_monitor) {
+                    self.send(&mut out, &b.node, &dev, join(v));
+                }
+                if let Some(dev) = ltc_device(&b.current_monitor) {
+                    self.send(&mut out, &b.node, &dev, join(c));
+                }
+            }
+        }
         // radio quality from the slant range: clean to 3 km, then losses growing to 30 % at 12 km
         let range = (self.flight.h.powi(2) + self.flight.east.powi(2) + self.flight.north.powi(2)).sqrt();
         let loss = if range < 3000.0 { 0 } else { (((range - 3000.0) / 9000.0).min(1.0) * 300_000.0) as u32 / 10_000 * 10_000 };
@@ -1165,6 +1327,17 @@ impl Plant {
         self.kg1000.faults.bypass = ff("kg1000_bypass").unwrap_or(0.0);
         self.kg50.p.drift_kg_per_c = ff("kg50_drift_kg_per_c").unwrap_or(self.cfg.kg50.drift_kg_per_c);
         self.kg1000.p.drift_kg_per_c = ff("kg1000_drift_kg_per_c").unwrap_or(self.cfg.kg1000.drift_kg_per_c);
+        let batteries = section("batteries");
+        for (i, b) in self.cfg.batteries.iter().enumerate() {
+            let entry = batteries.get(&b.node).cloned().unwrap_or(Value::Null);
+            self.battery_extra_w[i] = f(&entry, "load_w").unwrap_or(0.0).clamp(0.0, 500.0);
+            let soc = f(&entry, "soc").map(|x| x.clamp(0.0, 1.0));
+            if soc.is_some() && soc != self.battery_soc_set[i] {
+                self.batteries[i].soc = soc.unwrap_or(0.0);
+                self.batteries[i].v_rc = 0.0;
+            }
+            self.battery_soc_set[i] = soc;
+        }
         let patch = section("patch");
         for (c, key) in ["dac1", "dac2"].iter().enumerate() {
             self.patch[c] = patch.get(*key).and_then(Value::as_str).filter(|t| PATCH_TARGETS.contains(t)).map(|t| {
@@ -1216,6 +1389,9 @@ impl Plant {
             "qd": {"actuator_powered": self.qd.powered, "output_on": self.qd.powered_since.is_some(),
                    "travel_s": round1(self.qd.travel_s), "travel_needed_s": self.cfg.qd_travel_s,
                    "limit_switch": self.qd.limit_switch, "limit_switch_after_s": self.qd.tripped_after_s.map(round1), "last_output_on_s": self.qd.last_run_s.map(round1)},
+            "batteries": self.cfg.batteries.iter().zip(&self.batteries).map(|(c, b)| (c.node.clone(), json!({
+                "soc": round3(b.soc), "ocv_v": round3(b.ocv()), "terminal_v": round3(b.terminal_v), "current_a": round3(b.current_a),
+                "capacity_ah": c.pack.capacity_ah, "cells": c.pack.cells, "chemistry": c.pack.chemistry}))).collect::<BTreeMap<_, _>>(),
             "umbilical_attached": self.umbilical_attached,
             "igniter_fired": self.igniter_fired,
             "test_stand": self.cfg.test_stand,
@@ -1615,5 +1791,59 @@ mod tests {
         }
         assert_eq!(weak.phase, Phase::Landed);
         assert!(weak.rail_exit_mps.is_none() && weak.h == 0.0);
+    }
+
+    #[test]
+    fn battery_monitors_read_the_packs_through_the_firmware_conversions() {
+        let bats = default_batteries();
+        let (pb, gb, vb) = (&bats[0], &bats[1], &bats[2]);
+        assert_eq!(ltc_device(&pb.voltage_monitor).unwrap(), "ltc2990:i2c2@76");
+        assert_eq!(ltc_device(&gb.voltage_monitor).unwrap(), "ltc2990:i2c2@77");
+        // decode as each firmware does (PowerBoard26/gateway-board26/ValveBoard26 ltc2990.c)
+        let se = |code: i64| code as f64 * 5.0 / 16384.0;
+        let diff = |code: i64| if code >= 0x4000 { code - 0x8000 } else { code } as f64;
+        let (v, i) = ltc_codes(pb, 7.62, 4.2);
+        assert!((se(v[0]) * 2.8 - 7.62).abs() < 0.002 && (diff(i[0]) * pb.amps_per_count - 4.2).abs() < 0.04);
+        let (v, i) = ltc_codes(gb, 14.1, -0.3);
+        assert!((se(v[0]) * 10.1 - 0.07 - 14.1).abs() < 0.005 && (diff(i[0]) * gb.amps_per_count + 0.3).abs() < 0.01);
+        let (v, i) = ltc_codes(vb, 15.0, 0.25);
+        assert!((se(v[1]) * 5.7 - 15.0).abs() < 0.002);
+        assert!((diff(i[0]) * vb.amps_per_count * 0.580_476_16 - 1.426_747_6 - 0.25).abs() < 0.01);
+        assert!((se(v[0]) * 4.0 - 12.0).abs() < 0.002 && (se(v[2]) * 2.5 - 7.0).abs() < 0.002);
+        // a sagging pack pulls the 12 V regulator out of regulation
+        let (v, _) = ltc_codes(vb, 12.2, 0.25);
+        assert!((se(v[0]) * 4.0 - 11.6).abs() < 0.002);
+    }
+
+    #[test]
+    fn the_fill_box_battery_sags_with_the_ab_solenoids_and_a_low_charge_reads_low() {
+        let mut plant = Plant::new(PlantConfig::default());
+        let mut io = io();
+        let gb_v = |out: &[Output]| {
+            out.iter().rev().find_map(|o| match o {
+                Output::Adc { node, device, text } if node == "gateway" && device == "ltc2990:i2c2@77" => {
+                    let code: f64 = text.split(',').next()?.parse().ok()?;
+                    Some(code * 5.0 / 16384.0 * 10.1 - 0.07)
+                }
+                _ => None,
+            })
+        };
+        let idle = gb_v(&run(&mut plant, &io, 0, 1000)).expect("gateway voltage");
+        assert!(idle > 14.5 && idle < 15.5, "idle {idle}");
+        io.0.insert(("actuator".into(), 1, 3), 1);
+        io.0.insert(("actuator".into(), 1, 4), 1);
+        let loaded = gb_v(&run(&mut plant, &io, 1010, 3000)).expect("loaded");
+        assert!(loaded < idle - 0.25, "solenoids sag the pack: {idle} -> {loaded}");
+        assert!(plant.batteries[1].current_a > 4.0);
+        // the operator drains the fill-box pack: GroundStation26 warns at 13.0 V and below
+        plant.apply_control(&json!({"batteries": {"gateway": {"soc": 0.02}}}));
+        io.0.clear();
+        let low = gb_v(&run(&mut plant, &io, 3010, 4000)).expect("low");
+        assert!(low <= 13.0 && low > 11.5, "low {low}");
+        // the same control again does not reset the charge; a new value does
+        plant.batteries[1].soc = 0.5;
+        plant.apply_control(&json!({"batteries": {"gateway": {"soc": 0.02}}}));
+        assert_eq!(plant.batteries[1].soc, 0.5);
+        assert_eq!(plant.status()["batteries"]["gateway"]["soc"], json!(0.5));
     }
 }
