@@ -225,7 +225,17 @@ static void pwm_report(TIM_HandleTypeDef *h, uint32_t ch, int on)
     struct __attribute__((packed)) { uint64_t t; uint8_t port, pin, value, pad; } m = {sim_local_to_global(sim_now_ns()), (uint8_t)(0x80 | ((((uintptr_t)h->Instance) >> 10) & 0x3F)), (uint8_t)(ch / 4), (uint8_t)on, 0};
     sim_send(SIM_MSG_GPIO, &m, sizeof m);
 }
-HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *h, uint32_t ch) { h->Instance->CR1 |= TIM_CR1_CEN; pwm_report(h, ch, 1); return HAL_OK; }
+/* A PWM output started with the update interrupt enabled (DIER.UIE set through the register macros, as the AB's
+ * stepper driver counts its steps in the TIM1 update callback) gets its update interrupts like Base_Start_IT. */
+HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *h, uint32_t ch)
+{
+    h->Instance->CR1 |= TIM_CR1_CEN; pwm_report(h, ch, 1);
+    if (h->Instance->DIER & TIM_DIER_UIE) {
+        sim_cancel(tim_isr, h);
+        sim_schedule(sim_now_ns() + tim_period_ns(h), -1, tim_isr, h, 0);
+    }
+    return HAL_OK;
+}
 HAL_StatusTypeDef HAL_TIM_PWM_Stop(TIM_HandleTypeDef *h, uint32_t ch) { pwm_report(h, ch, 0); return HAL_OK; }
 HAL_StatusTypeDef HAL_TIM_PWM_Start_IT(TIM_HandleTypeDef *h, uint32_t ch) { return HAL_TIM_PWM_Start(h, ch); }
 HAL_StatusTypeDef HAL_TIM_PWM_Stop_IT(TIM_HandleTypeDef *h, uint32_t ch) { return HAL_TIM_PWM_Stop(h, ch); }
