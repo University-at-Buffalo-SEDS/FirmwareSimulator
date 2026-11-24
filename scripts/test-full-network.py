@@ -1948,15 +1948,19 @@ def sc_pyro_paths(sim):
         if res.get('success'):
             verify_clear(sim, f'after {path} Abort', boards=boards, timeout_ms=60000)
         return bool(res.get('success'))
-    def rrls_query(path):
+    def rrls_query(path, until_v=None):
         """An RRLS operator's own command, proxied to the primary (board-recovery queries stay at the primary by
         design). Harmless: toggles the AV-bay underglow. Measures POST -> accepted by the primary."""
         if not r: return
+        # The RRLS keeps its previous request's outcome in `last` until the new one is created: only a request
+        # newer than that one counts (the relay phase used to pass on the direct phase's accepted outcome, 3 ms).
+        c0, ctl0 = r.api('/api/rrls/control')
+        before = ((ctl0 or {}).get('last') or {}).get('request_id') if c0 == 200 and isinstance(ctl0, dict) else None
         v0 = sim.vclock(); c, b = r.api('/api/command', 'ToggleAvBayUnderglow'); got = None; last = None
-        while c in (200, 202) and sim.vclock() - v0 < 15000:
+        while c in (200, 202) and sim.vclock() - v0 < 15000 and (until_v is None or sim.vclock() < until_v):
             cc, ctl = r.api('/api/rrls/control')
             last = (ctl or {}).get('last') if cc == 200 and isinstance(ctl, dict) else None
-            if last and last.get('primary_accepted'): got = sim.vclock(); break
+            if last and last.get('request_id') != before and last.get('primary_accepted'): got = sim.vclock(); break
             time.sleep(.1)
         rec(kind='rrls_command', path=path, http=c, after_v_ms=(got - v0) if got else None, last=last)
         sim.check(f'RRLS-issued command accepted by the primary within 1 s ({path})', got is not None and got - v0 <= 1000,
@@ -1964,7 +1968,9 @@ def sc_pyro_paths(sim):
     # 1. direct path
     rs0 = rrls_status()
     pyro('direct', S['cut0'] * 1000 - 8000)
-    rrls_query('direct')
+    # The direct-phase measurements end before the cut: waiting through it reported the cut's relay forwarding
+    # as forwarding on a healthy direct path.
+    rrls_query('direct', until_v=S['cut0'] * 1000 - 500)
     rs1 = rrls_status()
     if r:
         sim.check('no relay forwarding while the direct path is healthy', not rs1.get('forwarding') and (rs1.get('relayed_frames') or 0) == (rs0.get('relayed_frames') or 0),
@@ -3202,10 +3208,16 @@ def sc_rrls_relay(sim):
         sim.wait_v(3000)
         mirror('flight state', 'AdvanceFlightState', fstate)
         if not a.radio_reject:
-            phase_to(sim, 6, 'advance to Armed')
+            armed = phase_to(sim, 6, 'advance to Armed')
+            sim.check('in relay, the primary steps to Armed (State +1) for the T clock and rewind mirrors', armed,
+                      flight_state=(sim.st().get('rec') or {}).get('flight_state'))
             mirror('T clock', 'Launch', tclock)
             mirror('T clock reset', 'ResetTClock', tclock)
-            mirror('flight state (rewind)', 'RewindFlightState', fstate)
+            # The labels compared are the network flight state's: PreFill to NitrousFill are all "Fill", so a
+            # rewind that starts short of Armed moves between two "Fill" sub-phases and shows no change to mirror
+            # (it timed out with primary_changed_ms null). The step above reports that case.
+            if armed:
+                mirror('flight state (rewind)', 'RewindFlightState', fstate)
         else:
             # The radio test is allowed only in Startup/Idle/PreFill, so Launch and the T clock (which need Armed) cannot
             # run in relay. Instead: still on after the change above; the relay is held as long as the medium cut's
