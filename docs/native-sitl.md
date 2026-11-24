@@ -348,8 +348,16 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
 `tools/firmware_sim.py` builds the cache). Differences from the scenario engine:
 
 * `native.json` `external_station`: the topology's host node is not started; its endpoints (the radio PTY and the
-  Pico-Fi discovery port) are written to `DIR/endpoints.json`. The bay runs at pace 1 (the station keeps its own wall
-  clock; no simclock, no lockstep), forever, until SIGTERM. The launcher dies with its parent (PR_SET_PDEATHSIG).
+  Pico-Fi discovery port) are written to `DIR/endpoints.json`. The bay runs at pace 1, forever, until SIGTERM. The
+  launcher dies with its parent (PR_SET_PDEATHSIG).
+* Station clock (`--station-clock follow`, the default): the bay publishes the simclock page (`native.json`
+  `station_clock`, in the scratch directory) and `endpoints.json` `station_clock` names the page, its epoch (the wall
+  clock at virtual 0) and the library (`--simclock`, the manifest's `simclock`, else built from `native/simclock`).
+  The station preloads it and follows the bay's virtual clock (clock reads and timed waits; no thread lockstep), so
+  a bay slowed by host load slows the station with it. `status.json` stamps `updated_unix_ms` on that clock and
+  reports `station_clock: "bay"`. On exit (or a coordinator crash) `gs_bay.py` releases the page (horizon open, rate
+  1x), so the station's clock runs on at the wall rate. Lag beyond 20 ms is still dropped
+  (`FIRMWARE_SIM_PACE_MAX_CATCHUP_MS`). `--station-clock wall` keeps the station on its wall clock.
 * `plant` (`src/bay/native_plant.rs`, physics in `src/bay/native_physics.rs`): stepped every 10 ms of virtual time,
   it observes the boards' output pins (MSG_GPIO edges, kept per pin) and the VB servo compare registers (read from
   the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
