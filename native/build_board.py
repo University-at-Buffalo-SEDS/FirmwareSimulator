@@ -31,6 +31,12 @@ HOSTS = {
               'nm': 'arm-linux-gnueabihf-nm', 'ldflags': ['-static', '-no-pie'],
               'cargo_env': {'CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER': 'arm-linux-gnueabihf-gcc'}},
 }
+# i686 prefers Ubuntu's i686 cross toolchain when present: the station builder image carries it because Ubuntu's
+# gcc-multilib conflicts with the aarch64/armhf cross compilers. Otherwise host gcc -m32 (multilib).
+if shutil.which('i686-linux-gnu-gcc'):
+    HOSTS['i686'].update(cc='i686-linux-gnu-gcc', nm='i686-linux-gnu-nm',
+                         cargo_env={'CC_i686_unknown_linux_gnu': 'i686-linux-gnu-gcc',
+                                    'CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER': 'i686-linux-gnu-gcc'})
 HOST = HOSTS[os.environ.get('FIRMWARE_SIM_HOST', 'i686')]
 HOST_TARGET = HOST['target']
 REPO_NODE = {'gateway-board26': 'gateway', 'ActuatorBoard26': 'actuator', 'ValveBoard26': 'valve', 'DAQ-Board': 'daq',
