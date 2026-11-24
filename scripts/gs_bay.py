@@ -148,6 +148,15 @@ def plant_from_flight_profile(directory: Path) -> tuple[dict, dict]:
                      ("launch_lat", env.get("site_lat_deg")), ("launch_lon", env.get("site_lon_deg")), ("pad_msl_m", env.get("site_msl_m"))):
         if isinstance(src, (int, float)):
             veh[key] = float(src)
+    # attitude and launcher, as the apogee planner flies them (weathercocking off the rail)
+    lau, att = vehicle.get("launch", {}), vehicle.get("attitude", {})
+    for key, src in (("length_m", v.get("length_m")), ("cn_alpha_per_rad", v.get("cn_alpha_per_rad")),
+                     ("static_margin_cal", v.get("static_margin_cal")), ("pitch_inertia_factor", v.get("pitch_inertia_factor")),
+                     ("pitch_damping_ratio", att.get("pitch_damping_ratio")), ("rail_length_m", lau.get("rail_length_m")),
+                     ("rail_tilt_deg", lau.get("tilt_deg")), ("rail_azimuth_deg", lau.get("azimuth_deg")),
+                     ("rail_friction", lau.get("rail_friction"))):
+        if isinstance(src, (int, float)) and not isinstance(src, bool):
+            veh[key] = float(src)
     info = {"vehicle_json": str(directory / "vehicle.json"), **({"run_tank_volume_l": float(volume_l)} if "tank_volume_m3" in out["fluids"] else {})}
     # the hybrid motor model (the plant's default) burns this grain of the spec; without it, the spec's flight grain
     grain = m.get("hybrid_grain")

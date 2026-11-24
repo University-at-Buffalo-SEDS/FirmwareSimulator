@@ -27,9 +27,11 @@
 //! built from the run tank at ignition and stepped as the tank's authority: its thrust loads the stand, its chamber
 //! pressure (above ambient) drives the DAQ chamber PT and its tank pressure the VB tank PT. On a test stand
 //! (`test_stand`) the rocket stays put: thrust unloads the KG50 first and the KG1000 sees the rest once the gap closes.
-//! In flight, liftoff separates the umbilical; 1-D vertical dynamics (thrust, drag with the ambient-adjusted density,
-//! mass flow) and wind drift; the descent follows the FC's own pyro outputs (CO2 = drogue, REEF = main), without them
-//! the vehicle falls ballistically. The FC barometer reads true ISA pressure
+//! In flight, liftoff separates the umbilical; the vehicle runs up the launcher (rail length, tilt, azimuth, friction),
+//! then flies 3-D with the apogee planner's pitch/yaw dynamics, so it weathercocks into the wind off the rail (thrust,
+//! drag on the air-relative velocity with the ambient-adjusted density, normal force, restoring and damping moments,
+//! mass flow); the descent follows the FC's own pyro outputs (CO2 = drogue, REEF = main) and drifts with the wind
+//! under a canopy, without them the vehicle falls ballistically. The FC barometer reads true ISA pressure
 //! at the geometric altitude (FlightComputer26 baro_agl since 659440e).
 use super::native_physics::{self as phys, BurnStep, Fluids, HybridBurn, LoadCell, Paths};
 use serde::Deserialize;
@@ -146,7 +148,7 @@ impl Conditions {
             let last = l[l.len() - 1];
             return (last.1, last.2);
         }
-        let k = ((h.max(10.0) / 10.0).powf(self.wind_shear_exponent)).min(self.wind_profile_cap);
+        let k = ((h.max(1.0) / 10.0).powf(self.wind_shear_exponent)).min(self.wind_profile_cap);
         (self.wind_mps * k, self.wind_from_deg)
     }
 }
@@ -173,6 +175,19 @@ pub struct VehicleParams {
     pub inflate_s: f64,
     /// Fill load-cell tare: the hanging mass it was zeroed with (the empty rocket with its fuel).
     pub tare_kg: f64,
+    /// Attitude (weathercocking), as the apogee planner flies it (`vehicle.json` vehicle and attitude): body length,
+    /// normal-force slope CNa (per rad), static margin (calibres), pitch inertia factor (x m L^2 / 12) and the
+    /// aerodynamic pitch damping ratio.
+    pub length_m: f64,
+    pub cn_alpha_per_rad: f64,
+    pub static_margin_cal: f64,
+    pub pitch_inertia_factor: f64,
+    pub pitch_damping_ratio: f64,
+    /// The launcher (`vehicle.json` launch): rail length, tilt from vertical, azimuth (deg from north), friction.
+    pub rail_length_m: f64,
+    pub rail_tilt_deg: f64,
+    pub rail_azimuth_deg: f64,
+    pub rail_friction: f64,
 }
 impl Default for VehicleParams {
     fn default() -> Self {
@@ -188,6 +203,17 @@ impl Default for VehicleParams {
             main_vt: 5.8,
             inflate_s: 1.0,
             tare_kg: 34.3,
+            // tools/flight_profile/vehicle.json (SWEET_V6 .ork import): 4.39 m, CNa 9.28/rad, 3.49 cal, factor 0.85;
+            // damping ratio 0.08 (assumed there); 17 ft rail at 5 deg towards 60 deg, friction 0.03
+            length_m: 4.38658,
+            cn_alpha_per_rad: 9.28,
+            static_margin_cal: 3.49,
+            pitch_inertia_factor: 0.85,
+            pitch_damping_ratio: 0.08,
+            rail_length_m: 5.18,
+            rail_tilt_deg: 5.0,
+            rail_azimuth_deg: 60.0,
+            rail_friction: 0.03,
         }
     }
 }
@@ -206,31 +232,89 @@ pub enum Phase {
     Landed,
 }
 
-/// 1-D vertical flight plus horizontal wind drift.
+/// 3-D point-mass flight with the apogee planner's pitch/yaw attitude dynamics (GroundStation26
+/// backend/src/apogee_planner/flight.rs `fly_traced`): the rail constrains the motion along the launcher until the
+/// vehicle has travelled its length, then the body axis turns into the relative wind (weathercocking): normal force
+/// qd A CNa (limited at 15 degrees of attack), restoring moment qd A CNa (static margin x d), damping at the pitch
+/// damping ratio, pitch inertia m L^2/12 x factor. Drag acts along the air-relative velocity; under a canopy the
+/// vehicle drifts with the wind. Gusts ride on the wind speed.
 #[derive(Clone, Debug)]
 pub struct Flight {
     pub phase: Phase,
     pub t_launch: f64,
+    /// Height above the pad (m) and vertical velocity (m/s, up).
     pub h: f64,
     pub v: f64,
+    /// Specific force along the body axis (m/s^2): what the FC's body-Z accelerometer reads.
     pub f: f64,
     pub east: f64,
     pub north: f64,
+    /// Horizontal velocity (m/s, east and north).
+    pub ve: f64,
+    pub vn: f64,
+    /// Body axis (unit vector, east/north/up) and the pitch/yaw rate (rad/s).
+    pub axis: [f64; 3],
+    pub omega: [f64; 3],
+    /// Distance travelled along the rail; `None` once the vehicle has left it.
+    pub rail_s: Option<f64>,
+    pub rail_exit_mps: Option<f64>,
     pub apogee: f64,
     pub drogue_at: Option<f64>,
     pub main_at: Option<f64>,
 }
 impl Default for Flight {
     fn default() -> Self {
-        Self { phase: Phase::Pad, t_launch: 0.0, h: 0.0, v: 0.0, f: G, east: 0.0, north: 0.0, apogee: 0.0, drogue_at: None, main_at: None }
+        Self {
+            phase: Phase::Pad,
+            t_launch: 0.0,
+            h: 0.0,
+            v: 0.0,
+            f: G,
+            east: 0.0,
+            north: 0.0,
+            ve: 0.0,
+            vn: 0.0,
+            axis: [0.0, 0.0, 1.0],
+            omega: [0.0; 3],
+            rail_s: Some(0.0),
+            rail_exit_mps: None,
+            apogee: 0.0,
+            drogue_at: None,
+            main_at: None,
+        }
     }
 }
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+fn norm3(a: [f64; 3]) -> f64 {
+    dot3(a, a).sqrt()
+}
 impl Flight {
+    /// The launcher's direction (unit vector east/north/up) from its tilt from vertical and azimuth.
+    pub fn rail_dir(veh: &VehicleParams) -> [f64; 3] {
+        let (tilt, az) = (veh.rail_tilt_deg.to_radians(), veh.rail_azimuth_deg.to_radians());
+        [tilt.sin() * az.sin(), tilt.sin() * az.cos(), tilt.cos()]
+    }
+    /// The body axis' angle from vertical (deg).
+    pub fn pitch_deg(&self) -> f64 {
+        self.axis[2].clamp(-1.0, 1.0).acos().to_degrees()
+    }
+    /// The body axis' heading (deg from north).
+    pub fn heading_deg(&self) -> f64 {
+        self.axis[0].atan2(self.axis[1]).to_degrees().rem_euclid(360.0)
+    }
     /// Advance by `dt` with `thrust` (N), vehicle mass `mass` (kg), the deployments seen and the conditions.
     #[allow(clippy::too_many_arguments)]
     pub fn step(&mut self, t: f64, dt: f64, thrust: f64, mass: f64, drogue: bool, main: bool, veh: &VehicleParams, c: &Conditions) {
         if matches!(self.phase, Phase::Pad | Phase::Landed) {
             self.f = G;
+            if self.phase == Phase::Pad {
+                self.axis = Self::rail_dir(veh);
+            }
             return;
         }
         if drogue && self.drogue_at.is_none() {
@@ -244,7 +328,54 @@ impl Flight {
         }
         let rho = phys::air_density(veh.pad_msl_m + self.h.max(0.0), c.ambient_c, veh.pad_msl_m);
         let area = std::f64::consts::PI * veh.diameter_m * veh.diameter_m / 4.0;
-        let mut drag = -0.5 * rho * veh.cd * area * self.v * self.v.abs() / mass;
+        let gust = c.gust_mps * (0.7 * (0.37 * t).sin() + 0.3 * (1.3 * t).sin());
+        let (speed, from) = c.wind_at(self.h.max(0.0));
+        let w = (speed + gust).max(0.0);
+        let to = (from + 180.0).to_radians();
+        let (we, wn) = (w * to.sin(), w * to.cos());
+        let vel = [self.ve, self.vn, self.v];
+        let vair = [vel[0] - we, vel[1] - wn, vel[2]];
+        let vmag = norm3(vair);
+        let qd = 0.5 * rho * vmag * vmag;
+        let u = self.axis;
+        let mut acc = [0.0; 3];
+        if let Some(s) = self.rail_s {
+            // on the launcher: motion only along the rail (friction loads the weight component), no rotation
+            let dir = Self::rail_dir(veh);
+            let fric = 1.0 + veh.rail_friction;
+            let drag = qd * veh.cd * area;
+            let mut along = (thrust - drag) / mass - G * dir[2] * fric;
+            let sp = dot3(vel, dir);
+            if sp <= 0.0 && along < 0.0 {
+                along = 0.0;
+            }
+            acc = [along * dir[0], along * dir[1], along * dir[2]];
+            self.axis = dir;
+            self.f = along + G * dir[2];
+            let s = s + sp.max(0.0) * dt;
+            if s >= veh.rail_length_m {
+                self.rail_s = None;
+                self.rail_exit_mps = Some(sp);
+            } else {
+                self.rail_s = Some(s);
+            }
+            for i in 0..3 {
+                let v = vel[i] + acc[i] * dt;
+                match i {
+                    0 => self.ve = v,
+                    1 => self.vn = v,
+                    _ => self.v = v,
+                }
+            }
+            self.east += self.ve * dt;
+            self.north += self.vn * dt;
+            self.h += self.v * dt;
+            if self.phase == Phase::Coast && sp <= 0.0 {
+                // burned out before clearing the rail: it settles back on the pad
+                *self = Self { phase: Phase::Landed, t_launch: self.t_launch, drogue_at: self.drogue_at, main_at: self.main_at, ..Self::default() };
+            }
+            return;
+        }
         let target_vt = if self.main_at.is_some() {
             Some(veh.main_vt)
         } else if self.drogue_at.is_some() {
@@ -252,25 +383,63 @@ impl Flight {
         } else {
             None
         };
-        if let (Some(vt), true) = (target_vt, self.v < 0.0) {
-            drag = drag.max(G + (-vt - self.v) / veh.inflate_s.max(0.05));
+        if self.phase == Phase::Descent || target_vt.is_some() {
+            // descent: vertical drag (a canopy settles to its rate), horizontal air-relative drag; under a canopy the
+            // vehicle drifts with the wind
+            let k = 0.5 * rho * veh.cd * area / mass;
+            let mut az = -k * self.v * self.v.abs();
+            if let (Some(vt), true) = (target_vt, self.v < 0.0) {
+                az = az.max(G + (-vt - self.v) / veh.inflate_s.max(0.05));
+            }
+            let (ae, an) = if target_vt.is_some() {
+                (-(vair[0]) / veh.inflate_s.max(0.05), -(vair[1]) / veh.inflate_s.max(0.05))
+            } else {
+                (-k * vmag * vair[0], -k * vmag * vair[1])
+            };
+            acc = [ae, an, az - G];
+            self.f = az;
+        } else {
+            // boost and coast: the planner's equations (thrust on the body axis, drag on the air-relative velocity,
+            // normal force and restoring/damping moments turning the axis into the relative wind)
+            let vh = if vmag > 0.5 { [vair[0] / vmag, vair[1] / vmag, vair[2] / vmag] } else { u };
+            let drag = qd * area * veh.cd;
+            let du = dot3(u, vh);
+            let nperp = [u[0] - du * vh[0], u[1] - du * vh[1], u[2] - du * vh[2]];
+            let sin_a = norm3(nperp);
+            let lim = 15.0_f64.to_radians().sin();
+            let ks = if sin_a > lim { (lim / sin_a).min(1.0) } else { 1.0 };
+            let mut fsum = [0.0; 3];
+            for i in 0..3 {
+                fsum[i] = (thrust * u[i] - drag * vh[i] + qd * area * veh.cn_alpha_per_rad * nperp[i] * ks) / mass;
+                acc[i] = fsum[i] - if i == 2 { G } else { 0.0 };
+            }
+            self.f = dot3(fsum, u);
+            let inertia = mass * veh.length_m * veh.length_m / 12.0 * veh.pitch_inertia_factor;
+            let k = qd * area * veh.cn_alpha_per_rad * veh.static_margin_cal * veh.diameter_m;
+            let c_damp = 2.0 * veh.pitch_damping_ratio * (k.max(0.0) * inertia).sqrt();
+            let ax = cross3(u, vh);
+            for i in 0..3 {
+                self.omega[i] += (k * ax[i] - c_damp * self.omega[i]) / inertia.max(1e-6) * dt;
+            }
+            // no roll: keep only the rate about axes perpendicular to the body
+            let par = dot3(self.omega, u);
+            for i in 0..3 {
+                self.omega[i] -= par * u[i];
+            }
+            let turn = cross3(self.omega, u);
+            let mut nu = [u[0] + turn[0] * dt, u[1] + turn[1] * dt, u[2] + turn[2] * dt];
+            let n = norm3(nu).max(1e-9);
+            for x in nu.iter_mut() {
+                *x /= n;
+            }
+            self.axis = nu;
         }
-        let a = thrust / mass + drag - G;
-        self.f = thrust / mass + drag;
-        self.v += a * dt;
+        self.ve += acc[0] * dt;
+        self.vn += acc[1] * dt;
+        self.v += acc[2] * dt;
+        self.east += self.ve * dt;
+        self.north += self.vn * dt;
         self.h += self.v * dt;
-        if self.h < 0.0 && self.phase == Phase::Boost {
-            // thrust below weight right at ignition: still on the rail
-            self.h = 0.0;
-            self.v = self.v.max(0.0);
-        }
-        // horizontal: the vehicle drifts with the wind once off the pad (weathercocking not modelled)
-        let gust = c.gust_mps * (0.7 * (0.37 * t).sin() + 0.3 * (1.3 * t).sin());
-        let (speed, from) = c.wind_at(self.h.max(0.0));
-        let w = (speed + gust).max(0.0);
-        let to = (from + 180.0).to_radians();
-        self.east += w * to.sin() * dt;
-        self.north += w * to.cos() * dt;
         self.apogee = self.apogee.max(self.h);
         if self.phase == Phase::Coast && self.v < 0.0 {
             self.phase = Phase::Descent;
@@ -278,6 +447,8 @@ impl Flight {
         if self.h <= 0.0 && matches!(self.phase, Phase::Coast | Phase::Descent) {
             self.h = 0.0;
             self.v = 0.0;
+            self.ve = 0.0;
+            self.vn = 0.0;
             self.f = G;
             self.phase = Phase::Landed;
         }
@@ -838,9 +1009,11 @@ impl Plant {
             let v = &cfg.vehicle;
             let lat = v.launch_lat + self.flight.north / 111_320.0;
             let lon = v.launch_lon + self.flight.east / (111_320.0 * v.launch_lat.to_radians().cos());
-            let course = self.flight.east.atan2(self.flight.north).to_degrees().rem_euclid(360.0);
+            // ground speed and course over ground from the flight model's horizontal velocity
+            let ground = self.flight.ve.hypot(self.flight.vn);
+            let course = if ground > 0.1 { self.flight.ve.atan2(self.flight.vn) } else { self.flight.east.atan2(self.flight.north) }.to_degrees().rem_euclid(360.0);
             let fix = !self.faults.gps_no_fix as u8;
-            self.send(&mut out, &cfg.gps_node, "gps", format!("{lat:.7},{lon:.7},{:.1},{:.2},{course:.1},{fix},12", v.pad_msl_m + self.flight.h, self.conditions.wind_mps.min(30.0) * (self.flight.phase != Phase::Pad && self.flight.phase != Phase::Landed) as u8 as f64));
+            self.send(&mut out, &cfg.gps_node, "gps", format!("{lat:.7},{lon:.7},{:.1},{:.2},{course:.1},{fix},12", v.pad_msl_m + self.flight.h, ground.min(500.0)));
         }
         // AB current sense (ADC1: N2O solenoid, N2 solenoid, igniter): energized loads draw current, an open
         // igniter circuit draws none (the AB's commanded-vs-sensed check sees it)
@@ -1050,6 +1223,9 @@ impl Plant {
             "flight": {"phase": self.flight.phase, "altitude_m": round1(self.flight.h), "velocity_m_s": round1(self.flight.v),
                        "apogee_m": round1(self.flight.apogee), "accel_m_s2": round3(self.flight.f),
                        "drift_east_m": round1(self.flight.east), "drift_north_m": round1(self.flight.north),
+                       "on_rail": self.flight.rail_s.is_some() && self.flight.phase != Phase::Pad,
+                       "rail_exit_m_s": self.flight.rail_exit_mps.map(round1),
+                       "pitch_deg": round1(self.flight.pitch_deg()), "heading_deg": round1(self.flight.heading_deg()),
                        "mass_kg": round3(self.vehicle_mass()),
                        "drogue_at_s": self.flight.drogue_at.map(|t| round3(t - self.flight.t_launch)),
                        "main_at_s": self.flight.main_at.map(|t| round3(t - self.flight.t_launch)),
@@ -1389,5 +1565,55 @@ mod tests {
         assert!(plant.flight.apogee > 1500.0 && plant.flight.apogee < 3000.0, "apogee {}", plant.flight.apogee);
         assert_eq!(plant.flight.phase, Phase::Landed);
         assert!(plant.flight.east.abs() + plant.flight.north.abs() > 50.0, "wind drift");
+    }
+
+    #[test]
+    fn the_vehicle_leaves_the_rail_along_the_launcher_and_weathercocks_into_the_wind() {
+        // calm, 5 degrees towards 60 degrees: the flight heads along the rail's azimuth
+        let tilted = VehicleParams::default();
+        let still = Conditions { wind_mps: 0.0, gust_mps: 0.0, ..Conditions::default() };
+        let mut calm = Flight { phase: Phase::Boost, ..Flight::default() };
+        let mut t = 0.0;
+        while calm.phase == Phase::Boost || calm.phase == Phase::Coast {
+            calm.step(t, 0.001, if t < 3.0 { 4000.0 } else { 0.0 }, if t < 3.0 { 40.0 - t } else { 37.0 }, false, false, &tilted, &still);
+            if calm.rail_s.is_some() {
+                assert_eq!(calm.axis, Flight::rail_dir(&tilted), "on the rail the axis is the launcher's");
+            }
+            t += 0.001;
+        }
+        let exit = calm.rail_exit_mps.expect("left the rail");
+        assert!(exit > 15.0 && exit < 60.0, "rail exit {exit}");
+        let bearing = calm.east.atan2(calm.north).to_degrees();
+        assert!((bearing - 60.0).abs() < 2.0, "calm bearing {bearing}");
+        // a vertical rail in a 9 m/s wind from the west (blowing east): the ascent turns into the wind (upwind,
+        // west), and the descent drifts back downwind
+        let veh = VehicleParams { rail_tilt_deg: 0.0, ..VehicleParams::default() };
+        let c = Conditions { wind_mps: 9.0, wind_from_deg: 270.0, gust_mps: 0.0, ..Conditions::default() };
+        let mut f = Flight { phase: Phase::Boost, ..Flight::default() };
+        let (mut t, mut at_apogee) = (0.0, None);
+        let mut max_pitch: f64 = 0.0;
+        while f.phase != Phase::Landed && t < 900.0 {
+            let thrust = if t < 3.0 { 4000.0 } else { 0.0 };
+            f.step(t, 0.001, thrust, if t < 3.0 { 40.0 - t } else { 37.0 }, at_apogee.is_some(), at_apogee.is_some() && f.h < 450.0, &veh, &c);
+            if f.phase != Phase::Descent && at_apogee.is_none() {
+                max_pitch = max_pitch.max(f.pitch_deg());
+            }
+            if f.phase == Phase::Descent && at_apogee.is_none() {
+                at_apogee = Some((f.east, f.north, f.heading_deg()));
+            }
+            t += 0.001;
+        }
+        let (e_apo, n_apo, heading) = at_apogee.expect("apogee");
+        assert!(e_apo < -20.0 && n_apo.abs() < 0.05 * e_apo.abs() + 1.0, "upwind at apogee: {e_apo} {n_apo}");
+        assert!((heading - 270.0).abs() < 1.0 && max_pitch > 3.0, "weathercocked: heading {heading} pitch {max_pitch}");
+        assert!(f.east > e_apo + 100.0, "descent drifts downwind: {} from {e_apo}", f.east);
+        // a burn that never clears the rail settles back on the pad
+        let mut weak = Flight { phase: Phase::Boost, ..Flight::default() };
+        for i in 0..5000 {
+            let t = f64::from(i) * 0.001;
+            weak.step(t, 0.001, if t < 1.0 { 300.0 } else { 0.0 }, 40.0, false, false, &veh, &c);
+        }
+        assert_eq!(weak.phase, Phase::Landed);
+        assert!(weak.rail_exit_mps.is_none() && weak.h == 0.0);
     }
 }

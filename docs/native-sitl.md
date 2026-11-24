@@ -363,6 +363,9 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
   the node's mapped TIM2 page) and delivers sensor codes (MSG_ADC: VB `adc3`, DAQ `mcp3564r`, FC `flightsens`), input
   pins (`pin:<index>`) and CAN link changes. `--mode test_fire` keeps the rocket on the stand; `--mode hitl|testing`
   lights the motor without an igniter.
+* Flight: the launcher (vehicle.json `launch`: rail length, tilt, azimuth, friction), then the apogee planner's
+  pitch/yaw dynamics (CNa, static margin, pitch inertia, damping ratio from vehicle.json): the vehicle weathercocks
+  into the wind off the rail; `status.json` `flight` carries `rail_exit_m_s`, `pitch_deg` and `heading_deg`.
 * Motor: GroundStation26's hybrid motor model, the one the apogee planner flies (`src/bay/hybrid_motor.rs` and
   `src/bay/model/`, byte-identical copies of GS `backend/src/apogee_planner/hybrid.rs` and `model/`; reference
   `tools/flight_profile/hybrid_motor.py`, spec `docs/hybrid-motor-model.md`). At ignition it takes the run tank's
