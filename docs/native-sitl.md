@@ -392,5 +392,12 @@ starts the bay itself and connects to it like hardware (GroundStation26 `docs/fi
   STARTs only at boot or inside 100 us busy-wait slices.
 * `control` (`DIR/control.json`, polled every 200 ms of wall time): plant inputs, conditions, calibration masses and
   faults; `status` (`DIR/status.json`, every virtual second): pace, nodes, resets, firmware revisions, plant.
+  `faults.can_cut` (`{"actuator": "fdcan2"}`) takes a board off its CAN bus (powered down, unplugged, bus-off): it
+  neither sends nor receives until the entry is removed, while its peers keep its discovery route until it expires
+  (SEDSnet: 30 s). The station does not offer it; write it into `control.json` directly.
+* CAN trace: `gs_bay.py --can-trace` (or `FIRMWARE_SIM_CAN_TRACE=1` in the station's environment) writes every frame
+  to `diagnostics/native-can-trace.txt`; `scripts/decode-native-can-trace.py` reassembles link v2 fragments and
+  decodes SEDSnet 7 canonical headers (type, source, timestamp, reliable header, payload), e.g. the FLIGHT_STATE
+  writes the gateway relays and the fill boards' receipts.
 * `sim_flight_sensors.c` accepts live barometer pressure and body-Z specific force through the "flightsens" device
   (the weather trim set must be selected at boot with `SIM_BARO_PA`, which the launcher sets to the pad pressure).

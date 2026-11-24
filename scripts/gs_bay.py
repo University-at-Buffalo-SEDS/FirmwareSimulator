@@ -16,10 +16,11 @@ wall rate from where it stood. --station-clock wall keeps the station on its own
 
 <out>/control.json (written by the station, optional): {"plant": {"qd_connected": bool, "nitrogen_bottle_open": bool,
 "nitrous_bottle_open": bool}, "faults": {"stuck_valves": {"<valve>": "open"|"closed"}, "dead_tank_pt": bool,
-"dead_chamber_pt": bool, "radio_drop": bool}}. <out>/status.json (written once per virtual second): pace, nodes,
+"dead_chamber_pt": bool, "radio_drop": bool, "can_cut": {"<node>": "<CAN peripheral>"}}}. <out>/status.json (written once per virtual second): pace, nodes,
 resets, firmware revisions and the plant (tank, valves, supply, umbilical, flight). Board logs: <out>/diagnostics.
 SIGTERM stops the bay; board flash/SD state lives in a scratch directory that is removed on exit (each start is a
-fresh power-on with blank or factory flash).
+fresh power-on with blank or factory flash). --can-trace (or FIRMWARE_SIM_CAN_TRACE=1 for a bay the station starts)
+writes every CAN frame to <out>/diagnostics/native-can-trace.txt (scripts/decode-native-can-trace.py).
 """
 from __future__ import annotations
 
@@ -267,6 +268,9 @@ def main() -> int:
                         "wall: the station keeps its wall clock and the bay drops lag beyond 20 ms")
     p.add_argument("--simclock", type=Path, help="simclock library for the station (default: the manifest's, else built "
                                                  "from the engine's sources into the run directory)")
+    p.add_argument("--can-trace", action="store_true", default=os.environ.get("FIRMWARE_SIM_CAN_TRACE") == "1",
+                   help="write every CAN frame to diagnostics/native-can-trace.txt (scripts/decode-native-can-trace.py); "
+                        "also FIRMWARE_SIM_CAN_TRACE=1, for a bay the station starts")
     a = p.parse_args()
     die_with_parent()
 
@@ -357,7 +361,7 @@ def main() -> int:
     topo = topology(nodes)
     (config / "topology.json").write_text(json.dumps(topo, indent=1))
     native = {"nodes": native_nodes, "pace": a.pace, "quantum_us": 1000, "max_skip_us": 20000, "scratch": str(scratch),
-              "diagnostics": str(diag), "stimulus": [], "probes": [], "uart_gates": [], "seed": a.seed, "can_trace": False,
+              "diagnostics": str(diag), "stimulus": [], "probes": [], "uart_gates": [], "seed": a.seed, "can_trace": a.can_trace,
               "external_station": str(out / "endpoints.json"), "control": str(out / "control.json"),
               "status": str(out / "status.json"), "plant": plant, "firmware": firmware}
     clock_page = None

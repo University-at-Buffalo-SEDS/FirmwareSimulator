@@ -491,6 +491,10 @@ pub struct Faults {
     pub gps_no_fix: bool,
     /// The igniter circuit is open: no current when the AB energizes it.
     pub igniter_open: bool,
+    /// Boards cut off their CAN bus (node -> CAN peripheral): a board powered
+    /// down, unplugged or bus-off. It neither sends nor receives until the
+    /// entry is removed; its peers keep its discovery route until that expires.
+    pub can_cut: BTreeMap<String, String>,
 }
 
 pub struct Plant {
@@ -521,6 +525,7 @@ pub struct Plant {
     sent: BTreeMap<String, String>,
     umbilical_attached: bool,
     radio_cut_sent: bool,
+    can_cut_sent: BTreeMap<String, String>,
     /// DAC channel -> (patched target, attenuation); P10 swapped-inputs fault.
     pub patch: [Option<(String, f64)>; 2],
     pub p10_swapped: bool,
@@ -560,6 +565,7 @@ impl Plant {
             sent: BTreeMap::new(),
             umbilical_attached: true,
             radio_cut_sent: false,
+            can_cut_sent: BTreeMap::new(),
             patch: [None, None],
             p10_swapped: false,
             dac_starts: [None, None],
@@ -817,6 +823,24 @@ impl Plant {
             self.radio_cut_sent = self.faults.radio_drop;
             out.push(Output::RadioCut(self.faults.radio_drop));
         }
+        if self.faults.can_cut != self.can_cut_sent {
+            let (want, sent) = (self.faults.can_cut.clone(), self.can_cut_sent.clone());
+            for (node, peripheral) in &want {
+                if sent.get(node) != Some(peripheral) {
+                    out.push(Output::CanLink { node: node.clone(), peripheral: peripheral.clone(), connected: false });
+                    self.event(t, format!("{node} cut off its CAN bus ({peripheral})"));
+                }
+            }
+            for (node, peripheral) in &sent {
+                // A separated umbilical stays separated.
+                let separated = !self.umbilical_attached && cfg.umbilical == (node.clone(), peripheral.clone());
+                if want.get(node) != Some(peripheral) && !separated {
+                    out.push(Output::CanLink { node: node.clone(), peripheral: peripheral.clone(), connected: true });
+                    self.event(t, format!("{node} back on its CAN bus ({peripheral})"));
+                }
+            }
+            self.can_cut_sent = want;
+        }
         out
     }
 
@@ -877,6 +901,11 @@ impl Plant {
         self.faults.fc_sd_missing = fb("fc_sd_missing");
         self.faults.gps_no_fix = fb("gps_no_fix");
         self.faults.igniter_open = fb("igniter_open");
+        self.faults.can_cut = faults
+            .get("can_cut")
+            .and_then(Value::as_object)
+            .map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
+            .unwrap_or_default();
         self.kg1000.faults.supply_dip = fb("kg1000_supply_dip");
         self.kg1000.faults.open_lead = fb("kg1000_open_lead");
         self.kg50.faults.open_lead = fb("kg50_open_lead");
@@ -1065,6 +1094,27 @@ mod tests {
         let out = plant.step(510_000_000, &io);
         assert_eq!(code_of(&out, 1), Some(mcp_code(0.600)));
         assert!(patch_pins("sar1", 1.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_can_cut_fault_takes_a_board_off_its_bus_and_back() {
+        let mut plant = Plant::new(PlantConfig { test_stand: true, ..PlantConfig::default() });
+        let io = io();
+        let links = |out: Vec<Output>| -> Vec<(String, bool)> {
+            out.into_iter()
+                .filter_map(|o| match o {
+                    Output::CanLink { node, peripheral, connected } => Some((format!("{node}:{peripheral}"), connected)),
+                    _ => None,
+                })
+                .collect()
+        };
+        plant.step(10_000_000, &io);
+        plant.apply_control(&json!({"faults": {"can_cut": {"actuator": "fdcan2"}}}));
+        assert_eq!(links(plant.step(20_000_000, &io)), vec![("actuator:fdcan2".to_string(), false)]);
+        assert!(links(plant.step(30_000_000, &io)).is_empty(), "reported once");
+        plant.apply_control(&json!({"faults": {}}));
+        assert_eq!(links(plant.step(40_000_000, &io)), vec![("actuator:fdcan2".to_string(), true)]);
+        assert!(links(plant.step(50_000_000, &io)).is_empty());
     }
 
     #[test]
