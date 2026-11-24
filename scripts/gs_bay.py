@@ -6,6 +6,12 @@ Unlike scripts/native_engine.py (a scenario harness that owns the station and it
 bay: the bay runs at real time (pace 1) so the station's wall clock is the common time base, the station's radio is a
 PTY and its fill-box link the modelled Pico-Fi on a loopback discovery port, both written to <out>/endpoints.json.
 
+The station follows the bay's virtual clock (--station-clock follow, the default when the simclock library can be
+had): the bay publishes its clock page (native/simclock) and endpoints.json names the page, its epoch and the library,
+which the station preloads. A bay slowed by host load then slows the station with it, so the boards' time stamps never
+look stale or ahead to the station. When the bay stops, the page is released and the station's clock runs on at the
+wall rate from where it stood. --station-clock wall keeps the station on its own wall clock.
+
   python3 scripts/gs_bay.py --manifest <cache>/manifest.json --out DIR [--plant PLANT.json] [--nodes a,b,...]
 
 <out>/control.json (written by the station, optional): {"plant": {"qd_connected": bool, "nitrogen_bottle_open": bool,
@@ -200,6 +206,45 @@ def host_can_run(exe: Path) -> str | None:
     return None
 
 
+PAGE_RELEASED_HORIZON = (1 << 63) - 1  # simclock: no horizon, the station's clock runs freely at the rate
+
+
+def build_simclock(engine_root: Path, out: Path) -> Path | None:
+    """The simclock library from the engine's sources (native/simclock/simclock.c), built with the host gcc."""
+    src = engine_root / "native" / "simclock" / "simclock.c"
+    if not src.exists() or not shutil.which("gcc"):
+        return None
+    lib = out / "simclock.so"
+    tmp = lib.with_name(f"{lib.name}.{os.getpid()}")
+    r = subprocess.run(["gcc", "-O2", "-shared", "-fPIC", "-o", str(tmp), str(src), "-ldl", "-lpthread"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(f"simclock build failed: {r.stderr}\n")
+        return None
+    os.replace(tmp, lib)
+    return lib
+
+
+def release_station_clock(page: Path) -> bool:
+    """Free a station that follows the bay's clock once the bay has stopped (or crashed): its clock runs on at the
+    wall rate from the last virtual time instead of freezing. Same seqlock as native.rs StationClock::publish."""
+    import mmap, struct, time as _t
+    try:
+        with page.open("r+b") as f:
+            m = mmap.mmap(f.fileno(), 4096)
+            try:
+                seq, virt = struct.unpack_from("<QQ", m, 0)
+                seq += 1 if seq % 2 == 0 else 0  # odd: writing
+                struct.pack_into("<Q", m, 0, seq)
+                struct.pack_into("<QQQQ", m, 8, virt, PAGE_RELEASED_HORIZON, _t.monotonic_ns(), 1000)
+                struct.pack_into("<Q", m, 0, seq + 1)
+            finally:
+                m.close()
+        return True
+    except (OSError, ValueError, struct.error):
+        return False
+
+
 def std_pressure(h_msl: float) -> float:
     return 101325.0 * (1 - 2.25577e-5 * h_msl) ** 5.25588
 
@@ -217,6 +262,11 @@ def main() -> int:
     p.add_argument("--pace", type=float, default=1.0, help="virtual s per wall s; the station needs 1")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--coordinator", type=Path, help="firmware-sim binary (default: the manifest's)")
+    p.add_argument("--station-clock", choices=("follow", "wall"), default=os.environ.get("FIRMWARE_SIM_STATION_CLOCK", "follow"),
+                   help="follow: the station preloads simclock and runs on the bay's virtual clock (default); "
+                        "wall: the station keeps its wall clock and the bay drops lag beyond 20 ms")
+    p.add_argument("--simclock", type=Path, help="simclock library for the station (default: the manifest's, else built "
+                                                 "from the engine's sources into the run directory)")
     a = p.parse_args()
     die_with_parent()
 
@@ -310,11 +360,23 @@ def main() -> int:
               "diagnostics": str(diag), "stimulus": [], "probes": [], "uart_gates": [], "seed": a.seed, "can_trace": False,
               "external_station": str(out / "endpoints.json"), "control": str(out / "control.json"),
               "status": str(out / "status.json"), "plant": plant, "firmware": firmware}
+    clock_page = None
+    if a.station_clock == "follow":
+        lib = a.simclock or (Path(manifest["simclock"]) if manifest.get("simclock") else None)
+        if not (lib and lib.exists()):
+            lib = build_simclock(HERE.parent, out)
+        if lib:
+            clock_page = scratch / "station-clock.page"
+            native["station_clock"] = str(clock_page)
+            native["station_clock_library"] = str(lib.resolve())
+        else:
+            sys.stderr.write("simclock unavailable: the station keeps its wall clock\n")
     (config / "native.json").write_text(json.dumps(native, indent=1))
     coordinator = a.coordinator or Path(manifest["coordinator"])
     cmd = [str(coordinator), "native-bay", "--topology", str(config / "topology.json"), "--native", str(config / "native.json")]
-    # the station leads network time from its own wall clock: a bay that fell behind must not race to catch up (its
-    # boards' clocks would run ahead of the station's), so lag beyond 20 ms is dropped (src/bay/native.rs)
+    # a bay that fell behind never races to catch up: lag beyond 20 ms is dropped (src/bay/native.rs). On its wall
+    # clock the station leads network time, and a racing bay would run the boards' clocks ahead of it; on the bay's
+    # clock it follows any rate, and dropping the lag spares the host the catch-up burst.
     env = {**os.environ, "FIRMWARE_SIM_NODE_NICE": os.environ.get("FIRMWARE_SIM_NODE_NICE", "10"),
            "FIRMWARE_SIM_PACE_MAX_CATCHUP_MS": os.environ.get("FIRMWARE_SIM_PACE_MAX_CATCHUP_MS", "20")}
     import threading
@@ -336,6 +398,10 @@ def main() -> int:
             stop.set()
             if child.poll() is None:
                 child.kill()
+                child.wait()
+            if clock_page is not None:
+                release_station_clock(clock_page)
+            # the page stays mapped by a station still running; unlinking keeps its mapping valid
             shutil.rmtree(scratch, ignore_errors=True)
     return code
 

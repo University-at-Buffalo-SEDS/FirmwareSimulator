@@ -91,6 +91,10 @@ pub struct NativeConfig {
     /// Shared page the host station's clocks follow (native/simclock): the station runs on the bay's virtual time.
     #[serde(default)]
     pub station_clock: Option<PathBuf>,
+    /// The simclock library a station-managed bay's station preloads to follow `station_clock`; published with the
+    /// page and its epoch in the endpoints file (scripts/gs_bay.py).
+    #[serde(default)]
+    pub station_clock_library: Option<PathBuf>,
     /// Station-managed bay: the topology's host nodes are not started here. The station runs on its own (wall)
     /// clock and connects to the endpoints written to this file ({"<host>": {"<serial env>": "<pty path or port>"}}),
     /// so the bay must run at pace 1.
@@ -527,6 +531,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut idle_cap_state: (u32, u32, u32) = (0, 0, 0);
     let mut idle_culprits: BTreeMap<String, u64> = BTreeMap::new();
     let mut hosts = Vec::new();
+    let station_epoch_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     if let Some(path) = &cfg.external_station {
         let mut endpoints = serde_json::Map::new();
         for host in &topology.host_nodes {
@@ -538,7 +543,14 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
             }
             endpoints.insert(host.name.clone(), serde_json::Value::Object(links));
         }
-        let doc = serde_json::json!({"pid": std::process::id(), "hosts": endpoints});
+        let mut doc = serde_json::json!({"pid": std::process::id(), "hosts": endpoints});
+        // A station that follows the bay's clock (simclock) reads REALTIME as this epoch plus virtual time, so the
+        // epoch is the wall clock at virtual 0: the station's dates stay near real ones and fall behind only by the
+        // time the bay slipped under host load.
+        if let Some(page) = &cfg.station_clock {
+            doc["station_clock"] = serde_json::json!({"page": page.display().to_string(), "epoch_ms": station_epoch_ms,
+                "library": cfg.station_clock_library.as_ref().map(|l| l.display().to_string())});
+        }
         atomic_write(path, &serde_json::to_string_pretty(&doc)?);
     } else {
         for host in &topology.host_nodes {
@@ -683,7 +695,9 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                 // faster than the station's for seconds, and the boards would lead the station's network time (no
                 // real oscillator does that). Beyond `max_catchup` the lag is dropped instead: virtual time then never
                 // runs faster than the pace, and a board that fell behind is merely stepped forward by its time sync.
-                let slip = if station_clock.is_none() { pace_slip(lag, max_catchup) } else { Duration::ZERO };
+                // A station on the bay's clock (simclock) follows any rate, so dropping lag only spares the host the
+                // catch-up burst; scenario runs leave FIRMWARE_SIM_PACE_MAX_CATCHUP_MS unset (no slip).
+                let slip = pace_slip(lag, max_catchup);
                 if !slip.is_zero() {
                     slipped += slip;
                     slip_events += 1;
@@ -1159,7 +1173,10 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
                     "pace_target": cfg.pace, "pace_actual": if paced > 0.0 { (t as f64 / 1e9) / paced } else { 0.0 },
                     "max_lag_ms": max_lag_ms, "slipped_ms": slipped.as_millis() as u64, "slip_events": slip_events, "nodes": nodes, "resets": resets, "can_frames": can_frames,
                     "firmware": cfg.firmware, "plant": plant.as_ref().map(|p| p.status()),
-                    "updated_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                    // on the station's clock: the bay's virtual time when the station follows it, else the wall
+                    "updated_unix_ms": if station_clock.is_some() && cfg.external_station.is_some() { station_epoch_ms + t / 1_000_000 } else {
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0) },
+                    "station_clock": if station_clock.is_some() { "bay" } else { "wall" },
                 });
                 atomic_write(path, &serde_json::to_string_pretty(&status)?);
             }
