@@ -13,6 +13,14 @@
 //! nitrous/nitrogen only reach the tank while the AB valve is open AND the QD is connected AND that bottle is open
 //! (and not empty) AND the supply is above the tank.
 //!
+//! QD retract (auxiliary fill drive): the AB powers the QD actuator from its backup-valve output (BACKUP_VALVE_EN PD2,
+//! the P4 solenoid-driver channel) for a fixed 45 s (`fill_motion.h` FILL_DURATION_MS), deliberately longer than the
+//! mechanism needs. The actuator's own limit switch cuts it off at the end of travel (`qd_travel_s`, 20-30 s on the
+//! hardware, 25 s here) and the QD disconnects there. The AB has no input from that switch: it reports the
+//! retraction complete when its 45 s end, whether or not the switch tripped (`qd_switch_never_trips` fault: the
+//! mechanism jams short of the switch and the QD stays connected). The legacy stepper drive (20 000 000 pulses at
+//! 30 us, 600 s, through a 100:1 gearbox) is not modelled mechanically: it does not move the QD here.
+//!
 //! Ignition: the igniter must have fired (unless `require_igniter` is off: HITL fires no igniter) and the pilot must
 //! open with liquid in the tank. The pilot actuates the main oxidiser valve, assumed to stay open to burnout once the
 //! motor lights. The burn is GroundStation26's hybrid motor model (hybrid_motor.rs, unless `motor.model` is "isp"),
@@ -64,6 +72,20 @@ pub struct Valves {
     pub vent: bool,
     pub dump: bool,
     pub pilot: bool,
+}
+
+/// The QD actuator (auxiliary fill drive): powered travel toward its limit switch.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QdActuator {
+    /// Powered travel so far (s); the limit switch trips at `qd_travel_s`.
+    pub travel_s: f64,
+    pub limit_switch: bool,
+    pub powered: bool,
+    /// When the current powered run started, and how long the AB powered the last one (s).
+    pub powered_since: Option<f64>,
+    pub last_run_s: Option<f64>,
+    /// How long the run that tripped the limit switch had been powered when it tripped (s).
+    pub tripped_after_s: Option<f64>,
 }
 
 /// Operator inputs outside the boards' control.
@@ -394,6 +416,10 @@ pub struct PlantConfig {
     pub nitrogen_valve: PinRef,
     pub nitrous_valve: PinRef,
     pub igniter: PinRef,
+    /// The AB output that powers the QD actuator in the auxiliary fill drive.
+    pub qd_actuator: PinRef,
+    /// Powered travel from connected to the actuator's limit switch (s).
+    pub qd_travel_s: f64,
     pub pilot_valve: PinRef,
     pub drogue_pyro: PinRef,
     pub main_pyro: PinRef,
@@ -434,6 +460,10 @@ impl Default for PlantConfig {
             nitrogen_valve: pin("actuator", 1, 3),
             nitrous_valve: pin("actuator", 1, 4),
             igniter: pin("actuator", 1, 7),
+            // ActuatorBoard26 Backup_Valve_EN PD2 (the auxiliary fill drive's output); the mechanism reaches its limit
+            // switch in 20-30 s on the hardware
+            qd_actuator: pin("actuator", 3, 2),
+            qd_travel_s: 25.0,
             // ValveBoard26 main.h: Solenoid PB11; servo_driver.h: NO servo TIM2 CH2, dump servo TIM2 CH1, open near
             // 0 degrees (~530 us), closed near 90 degrees (~1200 us) on the 500-2500 us / 270 degree mapping
             pilot_valve: pin("valve", 1, 11),
@@ -491,6 +521,8 @@ pub struct Faults {
     pub gps_no_fix: bool,
     /// The igniter circuit is open: no current when the AB energizes it.
     pub igniter_open: bool,
+    /// The QD actuator jams short of its limit switch: it never trips and the QD stays connected.
+    pub qd_switch_never_trips: bool,
     /// Boards cut off their CAN bus (node -> CAN peripheral): a board powered
     /// down, unplugged or bus-off. It neither sends nor receives until the
     /// entry is removed; its peers keep its discovery route until that expires.
@@ -509,6 +541,10 @@ pub struct Plant {
     pub kg1000: LoadCell,
     /// Calibration masses placed on each cell (kg): (KG50, KG1000).
     pub masses: (f64, f64),
+    pub qd: QdActuator,
+    /// The last operator `plant.qd_connected` applied: only a change re-mates or disconnects the QD, so a control
+    /// file rewritten for another section does not undo a retraction.
+    qd_control: Option<bool>,
     pub thrust: f64,
     /// Chamber pressure above ambient (Pa): what the DAQ's chamber PT reads.
     chamber_pa: f64,
@@ -552,6 +588,8 @@ impl Plant {
             faults: Faults::default(),
             conditions,
             masses: (0.0, 0.0),
+            qd: QdActuator::default(),
+            qd_control: None,
             thrust: 0.0,
             chamber_pa: 0.0,
             hybrid: None,
@@ -653,6 +691,7 @@ impl Plant {
             self.valves = v;
         }
         let mut out = Vec::new();
+        self.step_qd(t, dt, Self::active(o, &cfg.qd_actuator));
         if Self::active(o, &cfg.igniter) && !self.igniter_fired {
             self.igniter_fired = true;
             self.event(t, "igniter energized");
@@ -844,6 +883,35 @@ impl Plant {
         out
     }
 
+    /// The QD actuator: powered by the AB output it travels toward its limit switch, which cuts it off and leaves the
+    /// QD disconnected. The AB keeps its output on until its own timer ends; the switch, not the AB, stops the motion.
+    fn step_qd(&mut self, t: f64, dt: f64, commanded: bool) {
+        let at_limit = self.qd.limit_switch;
+        let powered = commanded && !at_limit;
+        if commanded != self.qd.powered_since.is_some() {
+            if commanded {
+                self.qd.powered_since = Some(t);
+                self.event(t, format!("QD actuator powered (AB output on, {:.1} of {:.1} s travel done)", self.qd.travel_s, self.cfg.qd_travel_s));
+            } else if let Some(since) = self.qd.powered_since.take() {
+                self.qd.last_run_s = Some(t - since);
+                self.event(t, format!("QD actuator output off after {:.1} s (limit switch {})", t - since, if at_limit { "tripped" } else { "not reached" }));
+            }
+        }
+        self.qd.powered = powered;
+        if !powered || self.faults.qd_switch_never_trips || !self.umbilical_attached {
+            return;
+        }
+        self.qd.travel_s = (self.qd.travel_s + dt).min(self.cfg.qd_travel_s);
+        if self.qd.travel_s >= self.cfg.qd_travel_s {
+            self.qd.limit_switch = true;
+            self.qd.powered = false;
+            self.supply.qd_connected = false;
+            let run = self.qd.powered_since.map(|since| t - since).unwrap_or(0.0);
+            self.qd.tripped_after_s = Some(run);
+            self.event(t, format!("QD retracted: limit switch tripped after {run:.1} s powered (the AB output stays on until its own timer ends)"));
+        }
+    }
+
     fn send(&mut self, out: &mut Vec<Output>, node: &str, device: &str, text: String) {
         let key = format!("{node}/{device}");
         if self.sent.get(&key) != Some(&text) {
@@ -858,10 +926,20 @@ impl Plant {
         let b = |v: &Value, k: &str| v.get(k).and_then(Value::as_bool);
         let f = |v: &Value, k: &str| v.get(k).and_then(Value::as_f64);
         let plant = section("plant");
-        if let Some(x) = b(&plant, "qd_connected") {
+        if let Some(x) = b(&plant, "qd_connected").filter(|x| self.qd_control != Some(*x)) {
+            self.qd_control = Some(x);
             if self.umbilical_attached {
                 self.supply.qd_connected = x;
+                // the operator re-mates the QD: the actuator is back at the start of its travel
+                if x {
+                    self.qd.travel_s = 0.0;
+                    self.qd.limit_switch = false;
+                    self.qd.tripped_after_s = None;
+                }
             }
+        }
+        if let Some(x) = f(&plant, "qd_travel_s") {
+            self.cfg.qd_travel_s = x.clamp(1.0, 300.0);
         }
         if let Some(x) = b(&plant, "nitrogen_bottle_open") {
             self.supply.nitrogen_bottle_open = x;
@@ -901,6 +979,7 @@ impl Plant {
         self.faults.fc_sd_missing = fb("fc_sd_missing");
         self.faults.gps_no_fix = fb("gps_no_fix");
         self.faults.igniter_open = fb("igniter_open");
+        self.faults.qd_switch_never_trips = fb("qd_switch_never_trips");
         self.faults.can_cut = faults
             .get("can_cut")
             .and_then(Value::as_object)
@@ -961,6 +1040,9 @@ impl Plant {
                     "patch": {"dac1": self.patch[0].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1})),
                               "dac2": self.patch[1].as_ref().map(|p| json!({"target": p.0, "attenuation": p.1}))},
                     "p10_inputs_swapped": self.p10_swapped, "targets": PATCH_TARGETS},
+            "qd": {"actuator_powered": self.qd.powered, "output_on": self.qd.powered_since.is_some(),
+                   "travel_s": round1(self.qd.travel_s), "travel_needed_s": self.cfg.qd_travel_s,
+                   "limit_switch": self.qd.limit_switch, "limit_switch_after_s": self.qd.tripped_after_s.map(round1), "last_output_on_s": self.qd.last_run_s.map(round1)},
             "umbilical_attached": self.umbilical_attached,
             "igniter_fired": self.igniter_fired,
             "test_stand": self.cfg.test_stand,
@@ -976,7 +1058,8 @@ impl Plant {
                        "dead_tank_pt": self.faults.dead_tank_pt, "dead_chamber_pt": self.faults.dead_chamber_pt,
                        "radio_drop": self.faults.radio_drop, "fc_sd_missing": self.faults.fc_sd_missing, "kg1000_supply_dip": self.kg1000.faults.supply_dip,
                        "kg1000_open_lead": self.kg1000.faults.open_lead, "kg50_open_lead": self.kg50.faults.open_lead,
-                       "kg50_bypass": self.kg50.faults.bypass, "kg1000_bypass": self.kg1000.faults.bypass},
+                       "kg50_bypass": self.kg50.faults.bypass, "kg1000_bypass": self.kg1000.faults.bypass,
+                       "qd_switch_never_trips": self.faults.qd_switch_never_trips},
             "events": self.events.iter().map(|(t, e)| json!({"t_s": round3(*t), "event": e})).collect::<Vec<_>>(),
         })
     }
@@ -1048,6 +1131,63 @@ mod tests {
         plant.apply_control(&json!({"faults": {"dead_tank_pt": true}}));
         let out = plant.step(40_010_000_000, &io);
         assert!(out.contains(&Output::Adc { node: "valve".into(), device: "adc3".into(), text: "fault=1".into() }));
+    }
+
+    /// The AB's auxiliary drive holds Backup_Valve_EN PD2 for 45 s; the actuator's limit switch ends the motion at
+    /// `qd_travel_s` (25 s) and the QD disconnects there, while the output stays on to the AB's 45 s.
+    #[test]
+    fn qd_actuator_stops_at_its_limit_switch_before_the_ab_output_ends() {
+        let mut plant = Plant::new(PlantConfig::default());
+        plant.apply_control(&json!({"plant": {"qd_connected": true}}));
+        let mut io = io();
+        run(&mut plant, &io, 0, 1000);
+        io.0.insert(("actuator".into(), 3, 2), 1); // AB Backup_Valve_EN PD2: the QD actuator powered
+        run(&mut plant, &io, 1010, 25_900);
+        assert!(plant.supply.qd_connected && !plant.qd.limit_switch, "24.9 s: still travelling ({:?})", plant.qd);
+        run(&mut plant, &io, 25_910, 26_100);
+        assert!(plant.qd.limit_switch && !plant.supply.qd_connected && !plant.qd.powered, "25 s: limit switch ({:?})", plant.qd);
+        // an unrelated control rewrite (the same qd_connected) does not undo the retraction
+        plant.apply_control(&json!({"plant": {"qd_connected": true}, "faults": {"dead_chamber_pt": true}}));
+        run(&mut plant, &io, 26_110, 46_000);
+        assert!(!plant.supply.qd_connected, "still retracted while the AB output stays on");
+        io.0.insert(("actuator".into(), 3, 2), 0); // the AB's 45 s FILL_DURATION_MS ends
+        run(&mut plant, &io, 46_010, 47_000);
+        let st = plant.status();
+        assert_eq!(st["qd"]["last_output_on_s"], json!(45.0), "{st}");
+        assert_eq!(st["qd"]["limit_switch"], json!(true));
+        assert_eq!(st["qd"]["limit_switch_after_s"], json!(25.0));
+        assert_eq!(st["supply"]["qd_connected"], json!(false));
+        // nitrogen no longer reaches the tank with the valve open
+        io.0.insert(("actuator".into(), 1, 3), 1);
+        run(&mut plant, &io, 47_010, 52_000);
+        assert_eq!(plant.fluids.gauge_psi(), 0.0);
+        // the operator re-mates the QD: the actuator starts its travel again
+        plant.apply_control(&json!({"plant": {"qd_connected": false}}));
+        plant.apply_control(&json!({"plant": {"qd_connected": true}}));
+        assert!(plant.supply.qd_connected && !plant.qd.limit_switch && plant.qd.travel_s == 0.0);
+        // a configured travel time
+        plant.apply_control(&json!({"plant": {"qd_connected": true, "qd_travel_s": 20.0}}));
+        io.0.insert(("actuator".into(), 3, 2), 1);
+        run(&mut plant, &io, 52_010, 72_100);
+        assert!(plant.qd.limit_switch && !plant.supply.qd_connected);
+    }
+
+    /// The actuator jams short of its limit switch: the QD stays connected through the AB's whole 45 s output (the AB
+    /// has no input from the switch and still ends its retraction on its timer).
+    #[test]
+    fn qd_switch_never_trips_leaves_the_qd_connected() {
+        let mut plant = Plant::new(PlantConfig::default());
+        plant.apply_control(&json!({"plant": {"qd_connected": true}, "faults": {"qd_switch_never_trips": true}}));
+        let mut io = io();
+        io.0.insert(("actuator".into(), 3, 2), 1);
+        run(&mut plant, &io, 0, 45_000);
+        io.0.insert(("actuator".into(), 3, 2), 0);
+        run(&mut plant, &io, 45_010, 46_000);
+        let st = plant.status();
+        assert_eq!(st["qd"]["limit_switch"], json!(false), "{st}");
+        assert_eq!(st["supply"]["qd_connected"], json!(true));
+        assert_eq!(st["faults"]["qd_switch_never_trips"], json!(true));
+        assert!(plant.events.iter().any(|(_, e)| e.contains("limit switch not reached")), "{:?}", plant.events);
     }
 
     #[test]
