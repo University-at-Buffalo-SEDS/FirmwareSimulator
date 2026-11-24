@@ -1,15 +1,16 @@
-//! Bench reproduction: the Actuator Board's network clock stayed uptime-based.
+//! Bench regression: the Actuator Board's network clock stayed uptime-based.
 //!
 //! The real SDK routers are linked GS(source) - GB(consumer) - AB(consumer)
 //! with one virtual clock. Each consumer starts from an uptime-based anchor,
 //! as an announce from a source without real time (an RF board without a GPS
 //! fix) leaves it. The GS then announces UTC and serves requests for a minute.
-//! The gateway, one hop from the GS, is stepped to UTC by a verified exchange;
-//! the board behind it never completes that exchange and keeps its anchor,
-//! slewing at 5%. Board firmware therefore judges recovery freshness with a
-//! station clock and restarts timesync when the two disagree by over 60 s.
-//! If an SDK change lets relayed consumers complete the exchange, the second
-//! assertion fails and this reproduction should be inverted.
+//! Before SEDSnet 5.0 only the gateway, one hop from the GS, reached UTC; the
+//! board behind it kept its uptime anchor, slewing at 5%. SEDSnet 5.0
+//! synchronizes hop by hop through relays and steps unanchored clocks onto
+//! UTC from the first anchored announce, and 6.0 steps large corrections with
+//! a time-base epoch, so the relayed board now reaches UTC as well. Board
+//! firmware keeps its station-clock freshness check and 60 s timesync restart
+//! as a backstop.
 use sedsnet::router::{Router, RouterConfig, RouterSideId, RouterSideOptions};
 use sedsnet::timesync::{PartialNetworkTime, TimeSyncConfig, TimeSyncRole};
 use std::sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}};
@@ -48,7 +49,7 @@ fn link(a: &Arc<Router>, b: &Arc<Router>, names: (&str, &str), reliable: bool) {
 }
 
 #[test]
-fn relayed_board_keeps_an_uptime_anchor_that_the_gateway_corrects() {
+fn relayed_board_leaves_its_uptime_anchor_for_the_gs_utc() {
     let clock = Arc::new(AtomicU64::new(1_000));
     let gs = node("GS", TimeSyncRole::Source, 50, &clock);
     let gb = node("GB", TimeSyncRole::Consumer, 100, &clock);
@@ -76,8 +77,7 @@ fn relayed_board_keeps_an_uptime_anchor_that_the_gateway_corrects() {
     }
     let offset = |router: &Router| router.network_time_ms().unwrap() as i64 - (UTC + now - 10) as i64;
     assert!(offset(&gb).abs() < 1_000, "gateway offset {}", offset(&gb));
-    let board = ab.network_time_ms().unwrap();
-    assert!(board < 1_000_000_000, "relayed board was corrected: {board}");
+    assert!(offset(&ab).abs() < 1_000, "relayed board offset {}", offset(&ab));
 }
 
 /// RFBoard26's timesync configuration: a priority-1 Source only with GPS UTC
@@ -91,7 +91,9 @@ fn configure_rf(rf: &Router, gps_utc: Option<u64>) {
         announce_interval_ms: 2_000,
         request_interval_ms: 2_000,
         consumer_promotion_enabled: true,
-        max_slew_ppm: 50_000,
+        // seds_router_configure_timesync leaves slew and step policy at the
+        // SDK defaults, exactly as the firmware's C call does.
+        ..TimeSyncConfig::default()
     }));
     if let Some(utc) = gps_utc {
         rf.set_local_network_time(PartialNetworkTime::from_unix_ms(utc));
@@ -149,14 +151,17 @@ fn rf_network(clock: &Arc<AtomicU64>, rf_gps: impl Fn(u64) -> Option<u64>, rf_so
 }
 
 /// The former RF firmware announced its uptime at priority 1 before a GPS
-/// fix. The relayed board anchors to it and, slewing at 5%, is still far from
-/// UTC long after the GS arrives.
+/// fix. Before SEDSnet 5.0 the relayed board anchored to it and, slewing at
+/// 5%, stayed far from UTC long after the GS arrived. Anchored UTC now
+/// outranks an uptime announce regardless of priority, so even that firmware
+/// can no longer hold the relayed board off the GS UTC.
 #[test]
-fn rf_source_without_a_fix_becomes_the_relayed_board_uptime_anchor() {
+fn rf_source_without_a_fix_no_longer_anchors_the_relayed_board() {
     let clock = Arc::new(AtomicU64::new(1_000));
     let (ab, _) = rf_network(&clock, |_| None, true);
-    let board = ab.network_time_ms().unwrap();
-    assert!(board < 1_000_000_000, "relayed board left the RF uptime anchor: {board}");
+    let now = clock.load(Ordering::SeqCst);
+    let offset = ab.network_time_ms().unwrap() as i64 - (UTC + now) as i64;
+    assert!(offset.abs() < 1_000, "relayed board offset behind an RF uptime source {offset}");
 }
 
 /// RFBoard26 now stays a consumer until GPS has UTC, so the relayed board's

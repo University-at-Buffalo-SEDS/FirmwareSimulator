@@ -6,5 +6,5 @@ publish = false
 
 [workspace]
 
-[dependencies]
+[dev-dependencies]
 sedsnet = { package = "SEDSnet", path = "../../../SEDSnet", default-features = false, features = ["std", "timesync", "discovery"] }

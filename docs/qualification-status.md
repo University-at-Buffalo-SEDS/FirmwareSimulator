@@ -1748,8 +1748,10 @@ Its all-current Linux linked run must still pass before a longer soak.
 
 The hardware-fill profile now requires sustained radio control rounds at every
 ten-second sample boundary, including after discovery timeouts. Each round
-alternates underglow and sends a non-actuating FC EvaluationRelax command,
-requiring actual transmissions and destination receipts within 500 ms. Missing
+alternates underglow and sends a non-actuating FC ValidateMeasms command
+(it re-sets the default-on Measm_Reports option; the EvaluationRelax command
+used before is retired), requiring actual transmissions and destination
+receipts within 500 ms. Missing
 late rounds fail the run. The transport remains native Pi Ethernet UDP discovery
 and framed TCP to the one gateway-side Pico-Fi at 1 Mbaud; the AV-bay radio UART
 remains 115,200 baud. There is no second Pico or I2C hop in this qualification.
