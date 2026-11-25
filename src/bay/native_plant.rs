@@ -16,8 +16,8 @@
 //!
 //! QD retract (auxiliary fill drive): the AB powers the QD actuator from its backup-valve output (BACKUP_VALVE_EN PD2,
 //! the P4 solenoid-driver channel) for a fixed 25 s (`fill_motion.h` FILL_DURATION_MS). The actuator's own limit
-//! switch cuts it off at the end of travel, just before the 25 s (`qd_travel_s`, 23 s here; travel was once quoted as
-//! 20-30 s, and an actuator that needs more than 25 s stops short of its switch) and the QD disconnects there. The AB
+//! switch cuts it off at the end of travel (`qd_travel_s`, 23 s here, an assumption inside the 25 s; travel was once
+//! quoted as 20-30 s, and an actuator that needs more than 25 s stops short of its switch) and the QD disconnects there. The AB
 //! has no input from that switch: it reports the retraction complete when its 25 s end, whether or not the switch
 //! tripped, and the operator checks the QD by eye (`qd_switch_never_trips` fault: the
 //! mechanism jams short of the switch and the QD stays connected). The legacy stepper drive (20 000 000 pulses at
@@ -777,7 +777,7 @@ impl Default for PlantConfig {
             nitrous_valve: pin("actuator", 1, 4),
             igniter: pin("actuator", 1, 7),
             // ActuatorBoard26 Backup_Valve_EN PD2 (the auxiliary fill drive's output, on for 25 s); the mechanism
-            // reaches its limit switch shortly before the 25 s end
+            // is assumed to reach its limit switch inside that
             qd_actuator: pin("actuator", 3, 2),
             qd_travel_s: 23.0,
             // ValveBoard26 main.h: Solenoid PB11; servo_driver.h: NO servo TIM2 CH2, dump servo TIM2 CH1, open near
