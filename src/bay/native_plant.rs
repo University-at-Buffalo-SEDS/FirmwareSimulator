@@ -15,10 +15,11 @@
 //! (and not empty) AND the supply is above the tank.
 //!
 //! QD retract (auxiliary fill drive): the AB powers the QD actuator from its backup-valve output (BACKUP_VALVE_EN PD2,
-//! the P4 solenoid-driver channel) for a fixed 45 s (`fill_motion.h` FILL_DURATION_MS), deliberately longer than the
-//! mechanism needs. The actuator's own limit switch cuts it off at the end of travel (`qd_travel_s`, 20-30 s on the
-//! hardware, 25 s here) and the QD disconnects there. The AB has no input from that switch: it reports the
-//! retraction complete when its 45 s end, whether or not the switch tripped (`qd_switch_never_trips` fault: the
+//! the P4 solenoid-driver channel) for a fixed 25 s (`fill_motion.h` FILL_DURATION_MS). The actuator's own limit
+//! switch cuts it off at the end of travel, just before the 25 s (`qd_travel_s`, 23 s here; travel was once quoted as
+//! 20-30 s, and an actuator that needs more than 25 s stops short of its switch) and the QD disconnects there. The AB
+//! has no input from that switch: it reports the retraction complete when its 25 s end, whether or not the switch
+//! tripped, and the operator checks the QD by eye (`qd_switch_never_trips` fault: the
 //! mechanism jams short of the switch and the QD stays connected). The legacy stepper drive (20 000 000 pulses at
 //! 30 us, 600 s, through a 100:1 gearbox) is not modelled mechanically: it does not move the QD here.
 //!
@@ -649,6 +650,8 @@ impl Default for BatteryConfig {
     }
 }
 /// The three packs the boards monitor (sizes, resistances and the gateway's share of the AB loads are assumptions;
+/// li_ion at 4.2 V per cell full: the 4S GB and VB packs are 16.8 V at full charge, under the station's 16.85 V
+/// maximum, and the 2S PB pack 8.4 V;
 /// the idle draws are the Nov 2026 Pi recordings: PB 4.05-4.37 A, GB 0.41-1.54 A, VB -0.14-0.55 A).
 pub fn default_batteries() -> Vec<BatteryConfig> {
     vec![
@@ -773,10 +776,10 @@ impl Default for PlantConfig {
             nitrogen_valve: pin("actuator", 1, 3),
             nitrous_valve: pin("actuator", 1, 4),
             igniter: pin("actuator", 1, 7),
-            // ActuatorBoard26 Backup_Valve_EN PD2 (the auxiliary fill drive's output); the mechanism reaches its limit
-            // switch in 20-30 s on the hardware
+            // ActuatorBoard26 Backup_Valve_EN PD2 (the auxiliary fill drive's output, on for 25 s); the mechanism
+            // reaches its limit switch shortly before the 25 s end
             qd_actuator: pin("actuator", 3, 2),
-            qd_travel_s: 25.0,
+            qd_travel_s: 23.0,
             // ValveBoard26 main.h: Solenoid PB11; servo_driver.h: NO servo TIM2 CH2, dump servo TIM2 CH1, open near
             // 0 degrees (~530 us), closed near 90 degrees (~1200 us) on the 500-2500 us / 270 degree mapping
             pilot_valve: pin("valve", 1, 11),
@@ -1508,8 +1511,8 @@ mod tests {
         assert!(out.contains(&Output::Adc { node: "valve".into(), device: "adc3".into(), text: "fault=1".into() }));
     }
 
-    /// The AB's auxiliary drive holds Backup_Valve_EN PD2 for 45 s; the actuator's limit switch ends the motion at
-    /// `qd_travel_s` (25 s) and the QD disconnects there, while the output stays on to the AB's 45 s.
+    /// The AB's auxiliary drive holds Backup_Valve_EN PD2 for 25 s; the actuator's limit switch ends the motion at
+    /// `qd_travel_s` (23 s, shortly before) and the QD disconnects there, while the output stays on to the AB's 25 s.
     #[test]
     fn qd_actuator_stops_at_its_limit_switch_before_the_ab_output_ends() {
         let mut plant = Plant::new(PlantConfig::default());
@@ -1517,25 +1520,26 @@ mod tests {
         let mut io = io();
         run(&mut plant, &io, 0, 1000);
         io.0.insert(("actuator".into(), 3, 2), 1); // AB Backup_Valve_EN PD2: the QD actuator powered
-        run(&mut plant, &io, 1010, 25_900);
-        assert!(plant.supply.qd_connected && !plant.qd.limit_switch, "24.9 s: still travelling ({:?})", plant.qd);
-        run(&mut plant, &io, 25_910, 26_100);
-        assert!(plant.qd.limit_switch && !plant.supply.qd_connected && !plant.qd.powered, "25 s: limit switch ({:?})", plant.qd);
+        run(&mut plant, &io, 1010, 23_900);
+        assert!(plant.supply.qd_connected && !plant.qd.limit_switch, "22.9 s: still travelling ({:?})", plant.qd);
+        run(&mut plant, &io, 23_910, 24_100);
+        assert!(plant.qd.limit_switch && !plant.supply.qd_connected && !plant.qd.powered, "23 s: limit switch ({:?})", plant.qd);
         // an unrelated control rewrite (the same qd_connected) does not undo the retraction
         plant.apply_control(&json!({"plant": {"qd_connected": true}, "faults": {"dead_chamber_pt": true}}));
-        run(&mut plant, &io, 26_110, 46_000);
+        run(&mut plant, &io, 24_110, 26_000);
         assert!(!plant.supply.qd_connected, "still retracted while the AB output stays on");
-        io.0.insert(("actuator".into(), 3, 2), 0); // the AB's 45 s FILL_DURATION_MS ends
-        run(&mut plant, &io, 46_010, 47_000);
+        io.0.insert(("actuator".into(), 3, 2), 0); // the AB's 25 s FILL_DURATION_MS ends
+        run(&mut plant, &io, 26_010, 27_000);
         let st = plant.status();
-        assert_eq!(st["qd"]["last_output_on_s"], json!(45.0), "{st}");
+        assert_eq!(st["qd"]["last_output_on_s"], json!(25.0), "{st}");
         assert_eq!(st["qd"]["limit_switch"], json!(true));
-        assert_eq!(st["qd"]["limit_switch_after_s"], json!(25.0));
+        assert_eq!(st["qd"]["limit_switch_after_s"], json!(23.0));
         assert_eq!(st["supply"]["qd_connected"], json!(false));
         // nitrogen no longer reaches the tank with the valve open
         io.0.insert(("actuator".into(), 1, 3), 1);
-        run(&mut plant, &io, 47_010, 52_000);
+        run(&mut plant, &io, 27_010, 32_000);
         assert_eq!(plant.fluids.gauge_psi(), 0.0);
+        io.0.insert(("actuator".into(), 1, 3), 0);
         // the operator re-mates the QD: the actuator starts its travel again
         plant.apply_control(&json!({"plant": {"qd_connected": false}}));
         plant.apply_control(&json!({"plant": {"qd_connected": true}}));
@@ -1543,11 +1547,25 @@ mod tests {
         // a configured travel time
         plant.apply_control(&json!({"plant": {"qd_connected": true, "qd_travel_s": 20.0}}));
         io.0.insert(("actuator".into(), 3, 2), 1);
-        run(&mut plant, &io, 52_010, 72_100);
+        run(&mut plant, &io, 32_010, 52_100);
         assert!(plant.qd.limit_switch && !plant.supply.qd_connected);
+        io.0.insert(("actuator".into(), 3, 2), 0);
+        run(&mut plant, &io, 52_110, 53_000);
+        // the risk of the 25 s drive: an actuator that needs 30 s (the top of the once-quoted 20-30 s) is cut off
+        // short of its switch and the QD stays connected; only the operator's visual check catches it
+        plant.apply_control(&json!({"plant": {"qd_connected": false}}));
+        plant.apply_control(&json!({"plant": {"qd_connected": true, "qd_travel_s": 30.0}}));
+        io.0.insert(("actuator".into(), 3, 2), 1);
+        run(&mut plant, &io, 53_010, 78_000);
+        io.0.insert(("actuator".into(), 3, 2), 0);
+        run(&mut plant, &io, 78_010, 79_000);
+        let st = plant.status();
+        assert_eq!(st["qd"]["last_output_on_s"], json!(25.0), "{st}");
+        assert_eq!(st["qd"]["limit_switch"], json!(false), "{st}");
+        assert!(plant.supply.qd_connected && plant.qd.travel_s < 30.0, "{:?}", plant.qd);
     }
 
-    /// The actuator jams short of its limit switch: the QD stays connected through the AB's whole 45 s output (the AB
+    /// The actuator jams short of its limit switch: the QD stays connected through the AB's whole 25 s output (the AB
     /// has no input from the switch and still ends its retraction on its timer).
     #[test]
     fn qd_switch_never_trips_leaves_the_qd_connected() {
@@ -1555,9 +1573,9 @@ mod tests {
         plant.apply_control(&json!({"plant": {"qd_connected": true}, "faults": {"qd_switch_never_trips": true}}));
         let mut io = io();
         io.0.insert(("actuator".into(), 3, 2), 1);
-        run(&mut plant, &io, 0, 45_000);
+        run(&mut plant, &io, 0, 25_000);
         io.0.insert(("actuator".into(), 3, 2), 0);
-        run(&mut plant, &io, 45_010, 46_000);
+        run(&mut plant, &io, 25_010, 26_000);
         let st = plant.status();
         assert_eq!(st["qd"]["limit_switch"], json!(false), "{st}");
         assert_eq!(st["supply"]["qd_connected"], json!(true));
@@ -1865,6 +1883,17 @@ mod tests {
         // a sagging pack pulls the 12 V regulator out of regulation
         let (v, _) = ltc_codes(vb, 12.2, 0.25);
         assert!((se(v[0]) * 4.0 - 11.6).abs() < 0.002);
+        // fully charged packs (4.2 V per cell) read at their full voltage: 4S 16.8 V, inside the station's 16.85 V
+        // battery maximum (GroundStation26 layouts), and 2S 8.4 V
+        for (b, cells, full) in [(gb, 4, 16.8), (vb, 4, 16.8), (pb, 2, 8.4)] {
+            assert_eq!(b.pack.cells, cells);
+            let ocv = phys::cell_ocv(&b.pack.chemistry, 1.0) * f64::from(b.pack.cells);
+            assert!((ocv - full).abs() < 1e-9, "{ocv}");
+        }
+        let (v, _) = ltc_codes(vb, 16.8, 0.0);
+        assert!((se(v[1]) * 5.7 - 16.8).abs() < 0.002 && se(v[1]) * 5.7 <= 16.85);
+        let (v, _) = ltc_codes(gb, 16.8, 0.0);
+        assert!((se(v[0]) * 10.1 - 0.07 - 16.8).abs() < 0.005 && se(v[0]) * 10.1 - 0.07 <= 16.85);
     }
 
     #[test]

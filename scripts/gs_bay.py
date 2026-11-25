@@ -17,8 +17,8 @@ wall rate from where it stood. --station-clock wall keeps the station on its own
 <out>/control.json (written by the station, optional): {"plant": {"qd_connected": bool, "nitrogen_bottle_open": bool,
 "nitrous_bottle_open": bool, "qd_travel_s": s}, "faults": {"stuck_valves": {"<valve>": "open"|"closed"}, "dead_tank_pt": bool,
 "dead_chamber_pt": bool, "radio_drop": bool, "qd_switch_never_trips": bool, "can_cut": {"<node>": "<CAN peripheral>"}}}.
-qd_travel_s: the QD actuator's powered travel to its limit switch (default 25 s; the AB's auxiliary drive powers it
-for 45 s). <out>/status.json (written once per virtual second): pace, nodes,
+qd_travel_s: the QD actuator's powered travel to its limit switch (default 23 s; the AB's auxiliary drive powers it
+for 25 s). <out>/status.json (written once per virtual second): pace, nodes,
 resets, firmware revisions and the plant (tank, valves, supply, QD actuator, umbilical, flight). Board logs: <out>/diagnostics.
 SIGTERM stops the bay; board flash/SD state lives in a scratch directory that is removed on exit (each start is a
 fresh power-on with blank or factory flash). --can-trace (or FIRMWARE_SIM_CAN_TRACE=1 for a bay the station starts)
