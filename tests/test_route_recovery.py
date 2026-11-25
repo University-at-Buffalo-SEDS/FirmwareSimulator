@@ -1,3 +1,5 @@
+import contextlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -86,9 +88,12 @@ class RouteRecoveryTests(unittest.TestCase):
         import subprocess
         failed=subprocess.CalledProcessError(7,["simulation"])
         for result in [{"passed":True},{"passed":False}]:
-            with mock.patch.object(recovery,"audit_policy_evidence",return_value=result):
+            # the audit's operator-facing lines are captured so a passing test run prints no FAIL line
+            with mock.patch.object(recovery,"audit_policy_evidence",return_value=result), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
                 self.assertIs(recovery.policy_validation_failure("unused",failed),failed)
                 self.assertEqual(recovery.policy_validation_failure("unused",None) is None,result["passed"])
+            self.assertEqual("FAIL: policy per-ID500ms ALL-owner audit" in out.getvalue(),not result["passed"])
         with mock.patch.object(recovery,"audit_policy_evidence",side_effect=OSError("trace unreadable")):
             self.assertIs(recovery.policy_validation_failure("unused",failed),failed)
             self.assertIsInstance(recovery.policy_validation_failure("unused",None),OSError)
