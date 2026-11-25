@@ -387,20 +387,50 @@ static void adc_fill(adcs_t *a, uint32_t from, uint32_t to)
         if (a->wide) ((uint32_t *)a->buf)[i] = v; else ((uint16_t *)a->buf)[i] = (uint16_t)v;
     }
 }
+/* The DMA channel registers a firmware may read back around an ADC DMA transfer (classic G4 DMA: CCR, CNDTR, CMAR):
+ * HAL_DMA_Start_IT points CMAR at the buffer, loads CNDTR and sets EN; the counter reads half the length at the half
+ * transfer and 0 at the end of a normal-mode transfer (a circular one reloads), EN stays set until an abort. The
+ * ActuatorBoard26 safety ADC publishes a sample only from a completed transfer with CNDTR 0 into its own CMAR and
+ * otherwise faults its igniter sense ("safety ADC failed to start" every 10 s in the sim before). */
+#if defined(DMA_CCR_EN) && defined(DMA_CNDTR_NDT)
+#define ADC_DMA_REGS 1
+static void adc_dma_regs(adcs_t *a, int start, uint32_t remaining)
+{
+    DMA_HandleTypeDef *d = a->h->DMA_Handle;
+    if (!d || !d->Instance) return;
+    if (start) {
+        d->Instance->CCR &= ~DMA_CCR_EN;
+        d->Instance->CMAR = (uint32_t)(uintptr_t)a->buf;
+        d->Instance->CPAR = (uint32_t)(uintptr_t)&a->h->Instance->DR;
+    }
+    d->Instance->CNDTR = remaining;
+    if (start) d->Instance->CCR |= DMA_CCR_EN;
+}
+#endif
 static void adc_dma_isr(void *arg, uintptr_t half)
 {
     adcs_t *a = arg;
     if (!a->running) return;
     uint64_t period = (uint64_t)sim_env_long("SIM_ADC_DMA_PERIOD_US", 1000) * 1000u;
-    if (half) { adc_fill(a, 0, a->len / 2); HAL_ADC_ConvHalfCpltCallback(a->h); sim_schedule(sim_now_ns() + period / 2, -1, adc_dma_isr, a, 0); }
-    else {
-        adc_fill(a, a->len / 2, a->len); HAL_ADC_ConvCpltCallback(a->h);
-        int circular = a->h->DMA_Handle &&
+    int circular = a->h->DMA_Handle &&
 #if defined(DMA_LINKEDLIST_CIRCULAR)
-            a->h->DMA_Handle->Mode == DMA_LINKEDLIST_CIRCULAR;
+        a->h->DMA_Handle->Mode == DMA_LINKEDLIST_CIRCULAR;
 #else
-            a->h->DMA_Handle->Init.Mode == DMA_CIRCULAR;
+        a->h->DMA_Handle->Init.Mode == DMA_CIRCULAR;
 #endif
+    if (half) {
+        adc_fill(a, 0, a->len / 2);
+#ifdef ADC_DMA_REGS
+        adc_dma_regs(a, 0, a->len - a->len / 2);
+#endif
+        HAL_ADC_ConvHalfCpltCallback(a->h); sim_schedule(sim_now_ns() + period / 2, -1, adc_dma_isr, a, 0);
+    }
+    else {
+        adc_fill(a, a->len / 2, a->len);
+#ifdef ADC_DMA_REGS
+        adc_dma_regs(a, 0, circular ? a->len : 0);
+#endif
+        HAL_ADC_ConvCpltCallback(a->h);
         if (circular || a->h->Init.ContinuousConvMode == ENABLE) sim_schedule(sim_now_ns() + period / 2, -1, adc_dma_isr, a, 1);
         else { a->running = 0; a->h->State = HAL_ADC_STATE_READY; }
     }
@@ -415,12 +445,22 @@ HAL_StatusTypeDef HAL_ADC_Start_DMA(ADC_HandleTypeDef *h, SIM_ADC_BUF_CONST uint
     if (h->DMA_Handle && h->DMA_Handle->Init.DestDataWidth == DMA_DEST_DATAWIDTH_WORD) a->wide = 1;
 #endif
     h->State = HAL_ADC_STATE_REG_BUSY;
+#ifdef ADC_DMA_REGS
+    adc_dma_regs(a, 1, len);
+#endif
     sim_cancel(adc_dma_isr, a);
     uint64_t period = (uint64_t)sim_env_long("SIM_ADC_DMA_PERIOD_US", 1000) * 1000u;
     sim_schedule(sim_now_ns() + period / 2, -1, adc_dma_isr, a, len >= 2 ? 1 : 0);
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_ADC_Stop_DMA(ADC_HandleTypeDef *h) { adcs_t *a = adc_of(h); a->running = 0; sim_cancel(adc_dma_isr, a); h->State = HAL_ADC_STATE_READY; return HAL_OK; }
+HAL_StatusTypeDef HAL_ADC_Stop_DMA(ADC_HandleTypeDef *h)
+{
+    adcs_t *a = adc_of(h); a->running = 0; sim_cancel(adc_dma_isr, a); h->State = HAL_ADC_STATE_READY;
+#ifdef ADC_DMA_REGS
+    if (h->DMA_Handle && h->DMA_Handle->Instance) h->DMA_Handle->Instance->CCR &= ~DMA_CCR_EN;  /* HAL_DMA_Abort */
+#endif
+    return HAL_OK;
+}
 #endif
 
 /* ---------------------------------------------------------------- DAC */
