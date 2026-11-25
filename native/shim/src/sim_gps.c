@@ -1,5 +1,7 @@
 /* u-blox NEO-M9N on SPI (RF board, NMEA over SPI as RFBoard26 neom9n.c reads it): idle 0xFF, a GGA + RMC pair once
- * per second of virtual time with UTC from the host clock (the station-managed bay runs at real time), and an
+ * per second of virtual time with UTC = SIM_UTC_EPOCH_MS (the wall clock at the bay's virtual 0, the epoch the station
+ * on the bay's clock uses too) plus the bay's virtual time, so a bay slipping under host load keeps the GPS time on
+ * the station's scale (the host clock without it: a GPS that ran ahead became the boards' network time), and an
  * UBX ACK-ACK for every UBX frame written (CFG-VALSET from neom9n_config.c). Configured by "gps <bus>" in
  * SIM_DEVICES; the position comes from the plant (SIM_MSG_ADC device "gps": "lat,lon,alt_msl,speed_mps,course_deg,
  * fix,sats"); before that the module reports no fix. */
@@ -42,7 +44,15 @@ static void coord(char *buf, size_t n, double deg, int lat)
 }
 static void sentences(void)
 {
-    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    struct timespec ts;
+    static long long epoch_ms = -1;
+    if (epoch_ms < 0) { const char *e = getenv("SIM_UTC_EPOCH_MS"); epoch_ms = e && *e ? atoll(e) : 0; }
+    if (epoch_ms > 0) {
+        uint64_t utc_ns = (uint64_t)epoch_ms * 1000000ull + sim_local_to_global(sim_now_ns());
+        ts.tv_sec = (time_t)(utc_ns / 1000000000ull); ts.tv_nsec = (long)(utc_ns % 1000000000ull);
+    } else {
+        clock_gettime(CLOCK_REALTIME, &ts);
+    }
     time_t secs = ts.tv_sec; struct tm u; gmtime_r(&secs, &u);
     char hms[16], dmy[8], la[24], lo[24], body[140];
     snprintf(hms, sizeof hms, "%02d%02d%02d.%02ld", u.tm_hour, u.tm_min, u.tm_sec, ts.tv_nsec / 10000000L);

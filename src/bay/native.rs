@@ -290,6 +290,16 @@ fn read_msg(sock: &mut UnixStream) -> std::io::Result<(u16, Vec<u8>)> {
     Ok((ty, body))
 }
 
+/// The wall clock at virtual time 0 (unix ms), taken once per bay: the station on the bay's clock (simclock) reads
+/// UTC as this plus virtual time, and so does every board's GPS (`SIM_UTC_EPOCH_MS`, native/shim sim_gps.c), so a
+/// bay that slips under host load keeps the GPS and the station on one time scale.
+fn utc_epoch_ms() -> u64 {
+    static EPOCH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    })
+}
+
 fn spawn_node(name: &str, n: &NativeNode, cfg: &NativeConfig, t_global: u64, cause: u8, boots: u32) -> Result<Proc> {
     let (parent, child_sock) = UnixStream::pair()?;
     let state = cfg.scratch.join(format!("{name}-state"));
@@ -309,6 +319,7 @@ fn spawn_node(name: &str, n: &NativeNode, cfg: &NativeConfig, t_global: u64, cau
         .env("SIM_FLASH_SIZE", n.flash_size.to_string())
         .env("SIM_DRIFT_PPM", n.drift_ppm.to_string())
         .env("SIM_SEED", (cfg.seed.wrapping_mul(1000) + boots as u64).to_string())
+        .env("SIM_UTC_EPOCH_MS", utc_epoch_ms().to_string())
         .envs(&n.env)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
@@ -531,7 +542,7 @@ pub fn run_native(topology_path: &Path, config_path: &Path) -> Result<()> {
     let mut idle_cap_state: (u32, u32, u32) = (0, 0, 0);
     let mut idle_culprits: BTreeMap<String, u64> = BTreeMap::new();
     let mut hosts = Vec::new();
-    let station_epoch_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let station_epoch_ms = utc_epoch_ms();
     if let Some(path) = &cfg.external_station {
         let mut endpoints = serde_json::Map::new();
         for host in &topology.host_nodes {
